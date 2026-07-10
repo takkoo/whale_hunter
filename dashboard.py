@@ -1225,7 +1225,7 @@ if choice == "🔐 로그인/가입":
             new_name = st.text_input("실명 (또는 호출명)")
             new_id = st.text_input("희망 관제 ID")
             new_phone = st.text_input("비상 연락처 (전화번호)", placeholder="010-XXXX-XXXX")
-            new_pw = st.text_input("보안 패스워드 설정", type="password", help="간편하게 5자 이상 문자, 숫자, [!, #, &]를 사용해 입력하세요!")
+            new_pw = st.text_input("비밀번호 설정", type="password", help="간편하게 5자 이상 문자, 숫자, [!, #, &]를 사용해 입력하세요!")
             
             submit_register = st.form_submit_button("권한 신청서 제출", use_container_width=True)
         
@@ -1263,9 +1263,6 @@ if choice == "🔐 로그인/가입":
 # ------------------------------------------------------------------
 # 3. ⚡ 멀티플렉서(화면 스위칭) 회로 가동
 
- 
-
-# 3. ⚡ 멀티플렉서(화면 스위칭) 회로 가동
 if choice == "🏠 홈화면":
 
     # ------------------------------------------------------------------
@@ -1433,39 +1430,16 @@ if choice == "🏠 홈화면":
     # 2. 당일 데이터 엔진 (오늘만) -> 세션 델타 기반 실시간 압축 엔진! (1분 OOM 프리징 완벽 해결)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         today = datetime.now().date()
-        cache_key = f"today_{today}_{asset_type}_{market_type}_{show_closing_auction}"
         
-        def build_query():
-            # 중복 제거를 위해 id 컬럼 추가
-            query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
-            query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
-            return query.eq("date", today.strftime('%Y-%m-%d'))
+        # 중복 제거를 위해 id 컬럼 추가
+        query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
+        query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
+        query = query.eq("date", today.strftime('%Y-%m-%d'))
             
-        if st.session_state.get('today_cache_key') != cache_key or 'today_df' not in st.session_state:
-            # 🚀 [서버 뻗음 방지] 첫 접속이나 필터 변경 시 전체 스캔을 하되, Streamlit 타임아웃(30초)을 막기 위해 최대 15,000건(거의 당일 전체)까지만 가져옵니다.
-            df = _fetch_from_supabase(build_query(), 15000)
-            st.session_state['today_df'] = df
-            st.session_state['today_cache_key'] = cache_key
-            st.session_state['today_last_time'] = df['time'].max() if not df.empty else "00:00:00"
-            return df
-        else:
-            # 이미 로드된 상태 -> '마지막으로 가져온 시간' 이후의 새 데이터만 델타(Delta)로 가져옴! (네트워크 시간 0.1초 컷)
-            last_time = st.session_state['today_last_time']
-            new_query = build_query().gte("time", last_time) # 같은 시간대 데이터 유실 방지를 위해 gte 사용
-            new_df = _fetch_from_supabase(new_query, 5000)
-            
-            if not new_df.empty:
-                # 새 데이터를 기존 데이터프레임과 병합 후 고유 id 기준으로 중복 제거
-                combined_df = pd.concat([new_df, st.session_state['today_df']], ignore_index=True)
-                combined_df.drop_duplicates(subset=['id'], keep='first', inplace=True)
-                
-                # 시간순 정렬 (최신이 위로)
-                combined_df = combined_df.sort_values(by=['date', 'time'], ascending=[False, False]).reset_index(drop=True)
-                
-                st.session_state['today_df'] = combined_df
-                st.session_state['today_last_time'] = combined_df['time'].max()
-                
-            return st.session_state['today_df']
+        # 🚀 [서버 뻗음 방지] 첫 접속이나 갱신 시, 최신 5000건을 깔끔하게 가져옵니다. (델타 병합 시 발생하는 무한루프 및 뻗음 방지)
+        df = _fetch_from_supabase(query, 5000)
+        st.session_state['today_df'] = df
+        return df
 
     # 3. 검색 엔진 (검색어 전용) -> 캐시 1분
     @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
@@ -4055,7 +4029,7 @@ if choice == "🏠 홈화면":
                         use_container_width=False,
                         on_select="rerun",
                         selection_mode="single-row",
-                        key=f"whale_log_board_{search_keyword}_{len(df)}_{st.session_state.get('realtime_mount_id', 0)}"
+                        key="whale_log_board_main"
                     )
                     
                     # 🎯 "더 보기" 버튼: 검색어가 없을 때, 가져온 데이터가 limit 이상이라면(더 있을 가능성이 높다면) 표출
