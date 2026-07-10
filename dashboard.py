@@ -1389,6 +1389,14 @@ if choice == "🏠 홈화면":
         if not df.empty:
             df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='mixed')
             df['date_parsed'] = pd.to_datetime(df['date'], format='mixed').dt.date
+            
+            # 🔥 PyArrow 충돌(Oh no) 방지용 엄격한 타입 캐스팅 🔥
+            for col in ['id', 'price', 'volume', 'amount_krw']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            for col in ['code', 'name', 'side', 'asset_type', 'market_type']:
+                if col in df.columns:
+                    df[col] = df[col].astype(str)
         else:
             df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime', 'date_parsed'])
         return df
@@ -3218,7 +3226,7 @@ if choice == "🏠 홈화면":
                                 
                         try:
                             supabase.table("brag_board").insert({
-                                "author": st.session_state['current_user'],
+                                "author": st.session_state.get('current_user', 'Guest'),
                                 "title": st.session_state["brag_title_input"].strip(),
                                 "content": st.session_state["brag_text_input"].strip(),
                                 "image_base64": base64_str
