@@ -1413,18 +1413,22 @@ if choice == "🏠 홈화면":
         target_start = datetime.now().date() - timedelta(days=35)
         yesterday = datetime.now().date() - timedelta(days=1)
         
-        query = supabase.table("whale_log").select("*")
+        # OOM(Out of Memory) 방지를 위해 꼭 필요한 컬럼만 명시적으로 가져옵니다!
+        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         query = query.gte("date", target_start.strftime('%Y-%m-%d')).lte("date", yesterday.strftime('%Y-%m-%d'))
-        return _fetch_from_supabase(query, 500000)
+        
+        # 최대 15만 건으로 제한하여 Streamlit Cloud 서버가 뻗지 않도록 방어합니다. (기존 50만 건은 1GB RAM 초과 위험)
+        return _fetch_from_supabase(query, 150000)
 
     # 2. 당일 데이터 엔진 (오늘만) -> 캐시 1분
     @st.cache_data(ttl=60, show_spinner=False)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         today = datetime.now().date()
         
-        query = supabase.table("whale_log").select("*")
+        # OOM 방지를 위해 필요한 컬럼만 추출
+        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         query = query.eq("date", today.strftime('%Y-%m-%d'))
@@ -1433,7 +1437,8 @@ if choice == "🏠 홈화면":
     # 3. 검색 엔진 (검색어 전용) -> 캐시 1분
     @st.cache_data(ttl=60, show_spinner=False)
     def load_search_data(search_kw, exact=False, start_date=None, limit=None, asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        query = supabase.table("whale_log").select("*")
+        # OOM 방지를 위해 필요한 컬럼만 추출
+        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         if exact:
