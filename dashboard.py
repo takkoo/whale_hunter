@@ -2371,8 +2371,9 @@ if choice == "🏠 홈화면":
                 start_dt = w1_monday + timedelta(weeks=week_num - 1)
                 end_dt = start_dt + timedelta(days=4)
                 
-            today_kr = datetime.now().date()
-            if end_dt.date() > today_kr: end_dt = datetime.now()
+            now_kst = datetime.utcnow() + timedelta(hours=9)
+            today_kr = now_kst.date()
+            if end_dt.date() > today_kr: end_dt = now_kst
             
             is_currently_cached = False
             cached_data_pre = []
@@ -2384,8 +2385,7 @@ if choice == "🏠 홈화면":
                         cache_dt_kr = datetime.fromisoformat(check_combo.data[0]['updated_at'].replace('Z', '+00:00')) + timedelta(hours=9)
                         if cache_dt_kr.date() == today_kr:
                             market_close_time = datetime.combine(today_kr, datetime.strptime("15:30", "%H:%M").time())
-                            now_kr = datetime.now()
-                            if cache_dt_kr < market_close_time and now_kr >= market_close_time:
+                            if cache_dt_kr < market_close_time and now_kst >= market_close_time:
                                 is_currently_cached = False
                             else:
                                 is_currently_cached = True
@@ -2438,11 +2438,11 @@ if choice == "🏠 홈화면":
             if search_ret or st.session_state.get('force_show_graph', False):
                 st.session_state['force_show_graph'] = False
                 
-                if start_dt.date() > datetime.now().date():
+                if start_dt.date() > (datetime.utcnow() + timedelta(hours=9)).date():
                     st.warning("선택하신 기간은 아직 도래하지 않았습니다.")
                 else:
-                    if end_dt.date() > datetime.now().date():
-                        end_dt = datetime.now()
+                    if end_dt.date() > (datetime.utcnow() + timedelta(hours=9)).date():
+                        end_dt = datetime.utcnow() + timedelta(hours=9)
                         
                     str_start = start_dt.strftime('%Y-%m-%d')
                     str_end = end_dt.strftime('%Y-%m-%d')
@@ -2547,7 +2547,7 @@ if choice == "🏠 홈화면":
                                     # DB에 캐시 저장 (조건에 맞는 기존 캐시 삭제 후 인서트하여 중복 키 에러 방지)
                                     try:
                                         supabase.table('return_rate_cache').delete().eq('period_month', pure_month).eq('period_week', sel_week).eq('min_amount', min_krw).execute()
-                                        supabase.table('return_rate_cache').insert(cache_records).execute()
+                                        supabase.table('return_rate_cache').upsert(cache_records).execute()
                                         
                                         st.session_state['force_show_graph'] = True
                                         st.rerun()
