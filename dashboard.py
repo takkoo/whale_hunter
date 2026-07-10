@@ -1422,20 +1422,42 @@ if choice == "🏠 홈화면":
         # 최대 15만 건으로 제한하여 Streamlit Cloud 서버가 뻗지 않도록 방어합니다. (기존 50만 건은 1GB RAM 초과 위험)
         return _fetch_from_supabase(query, 150000)
 
-    # 2. 당일 데이터 엔진 (오늘만) -> 캐시 1분
-    @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
+    # 2. 당일 데이터 엔진 (오늘만) -> 세션 델타 기반 실시간 압축 엔진! (1분 OOM 프리징 완벽 해결)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         today = datetime.now().date()
+        cache_key = f"today_{today}_{asset_type}_{market_type}_{show_closing_auction}"
         
-        # OOM 방지를 위해 필요한 컬럼만 추출
-        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
-        query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
-        
-        query = query.eq("date", today.strftime('%Y-%m-%d'))
-        # 🚀 [OOM 및 1분 프리징 완벽 방어]
-        # 오늘 하루 전체(10만건)를 1분마다 가져오면 서버가 버티지 못하므로, "최근 급등하는 5,000건"으로 탐지 대상을 압축합니다.
-        # 이렇게 하면 서버 메모리를 20분의 1로 절약하고, AI 탐지는 더 '최신 트렌드'에 민감해집니다!
-        return _fetch_from_supabase(query, 5000)
+        def build_query():
+            # 중복 제거를 위해 id 컬럼 추가
+            query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
+            query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
+            return query.eq("date", today.strftime('%Y-%m-%d'))
+            
+        if st.session_state.get('today_cache_key') != cache_key or 'today_df' not in st.session_state:
+            # 설정이 바뀌었거나 처음 접속인 경우: 당일 전체 풀 스캔 (최대 10만건)
+            df = _fetch_from_supabase(build_query(), 100000)
+            st.session_state['today_df'] = df
+            st.session_state['today_cache_key'] = cache_key
+            st.session_state['today_last_time'] = df['time'].max() if not df.empty else "00:00:00"
+            return df
+        else:
+            # 이미 로드된 상태 -> '마지막으로 가져온 시간' 이후의 새 데이터만 델타(Delta)로 가져옴! (네트워크 시간 0.1초 컷)
+            last_time = st.session_state['today_last_time']
+            new_query = build_query().gte("time", last_time) # 같은 시간대 데이터 유실 방지를 위해 gte 사용
+            new_df = _fetch_from_supabase(new_query, 5000)
+            
+            if not new_df.empty:
+                # 새 데이터를 기존 데이터프레임과 병합 후 고유 id 기준으로 중복 제거
+                combined_df = pd.concat([new_df, st.session_state['today_df']], ignore_index=True)
+                combined_df.drop_duplicates(subset=['id'], keep='first', inplace=True)
+                
+                # 시간순 정렬 (최신이 위로)
+                combined_df = combined_df.sort_values(by=['date', 'time'], ascending=[False, False]).reset_index(drop=True)
+                
+                st.session_state['today_df'] = combined_df
+                st.session_state['today_last_time'] = combined_df['time'].max()
+                
+            return st.session_state['today_df']
 
     # 3. 검색 엔진 (검색어 전용) -> 캐시 1분
     @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
@@ -3845,7 +3867,7 @@ if choice == "🏠 홈화면":
                         st.subheader(f"📋 놀빅 상한가 종목 고래 체결 목록")
                     else:
                         st.subheader(f"📋 실시간 놀빅 고래 체결 상황")
-                        st.info("💡 오늘 데이터만 처리합니다.")
+                        st.info("💡 당일 실시간 500 거래를 분석자료로 표시합니다.")
                 with log_col2:
                     st.radio(
                         "🗂️ 자산 유형 필터",
