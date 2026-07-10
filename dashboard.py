@@ -1497,7 +1497,7 @@ if choice == "🏠 홈화면":
     if 'search_input_val' not in st.session_state:
         st.session_state['search_input_val'] = ""
     if 'log_fetch_limit' not in st.session_state:
-        st.session_state['log_fetch_limit'] = 2000
+        st.session_state['log_fetch_limit'] = 500
 
     search_hdr_col, clear_btn_col = st.sidebar.columns([2, 1])
     with search_hdr_col:
@@ -1957,7 +1957,7 @@ if choice == "🏠 홈화면":
         if st.button("실시간", key="btn_list_view", use_container_width=True):
             st.session_state['pending_search'] = ""
             st.session_state['scrn_select_radio'] = "체결 로그"
-            st.session_state['log_fetch_limit'] = 2000 # 더보기 초기화
+            st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
             st.session_state['upper_limit_filter'] = False
             import time
             st.session_state['realtime_mount_id'] = time.time()
@@ -1969,7 +1969,7 @@ if choice == "🏠 홈화면":
             if st.button("상한가", key="btn_top10_blue", use_container_width=True):
                 st.session_state['pending_search'] = ""
                 st.session_state['scrn_select_radio'] = "체결 로그"
-                st.session_state['log_fetch_limit'] = 2000
+                st.session_state['log_fetch_limit'] = 500
                 st.session_state['upper_limit_filter'] = True
                 import time
                 st.session_state['realtime_mount_id'] = time.time()
@@ -3648,6 +3648,12 @@ if choice == "🏠 홈화면":
                         
                         top_3 = sorted_g.head(3).sort_values(by='time')
                         
+                        # 🔥 PyArrow 직렬화 충돌 방지: 화면에 그리지 않는 날짜 객체 컬럼 제거 🔥
+                        if 'datetime' in target_whale_df.columns:
+                            target_whale_df.drop(columns=['datetime'], inplace=True)
+                        if 'date_parsed' in target_whale_df.columns:
+                            target_whale_df.drop(columns=['date_parsed'], inplace=True)
+                        
                         lines = [
                             f"<b>{side}고래 총 {total_count}건 포착 ({total_amt/100000000:,.1f}억)</b>",
                             "----------------------------------------"
@@ -3983,6 +3989,12 @@ if choice == "🏠 홈화면":
                         lambda r: r['amount_krw'] / 1_000_000 if r['side'] == '매도' else 0, axis=1
                     )
 
+                    # 🔥 PyArrow 에러 방지용: 화면에 그리지 않는 날짜 객체 컬럼 제거 🔥
+                    if 'datetime' in display_df.columns:
+                        display_df.drop(columns=['datetime'], inplace=True)
+                    if 'date_parsed' in display_df.columns:
+                        display_df.drop(columns=['date_parsed'], inplace=True)
+
                     # 🎨 [피드백 3] 동시호가 틱 시간표시 붉은 백라이트 + 핵고래 색상 통합 칩셋
                     def style_rows(row):
                         styles = [''] * len(row)
@@ -4055,8 +4067,8 @@ if choice == "🏠 홈화면":
                         
                         col_btn, col_space = st.columns([3.5, 6.5])
                         with col_btn:
-                            if st.button("⬇️ 다음 20페이지(2,000건) 더 가져오기...", use_container_width=True):
-                                st.session_state['log_fetch_limit'] += 2000
+                            if st.button("⬇️ 다음 500건 더 가져오기...", use_container_width=True):
+                                st.session_state['log_fetch_limit'] += 500
                                 st.rerun()
 
                     # ✅ 테이블 행 선택 이벤트 감지
