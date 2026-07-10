@@ -2033,7 +2033,9 @@ if choice == "🏠 홈화면":
             today_df = load_today_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
             
             # 당일 데이터만 필요한 경우 과거 데이터를 부를 필요가 없음
-            if global_period == "당일 데이터만":
+            # 🚀 [치명적 OOM 방어 2단계] "실시간" 화면은 1분마다 새로고침 되므로, 여기서 1달치 데이터를 캐시에서 꺼내면 무조건 서버가 터집니다!
+            # 따라서 "실시간" 탭에서는 무조건 당일 데이터(today_df)만 사용하도록 강제합니다.
+            if global_period == "당일 데이터만" or scrn_select == "실시간":
                 df = today_df
             else:
                 historical_df = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
