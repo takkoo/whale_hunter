@@ -3360,6 +3360,12 @@ if choice == "🏠 홈화면":
                                         st.success("숨김 처리되었습니다.")
                                         st.rerun()
                                 idx += 1
+                                with cols[idx]:
+                                    if st.button("🗑️ 삭제", key=f"del_admin_{post['id']}", use_container_width=True):
+                                        supabase.table("brag_board").delete().eq("id", post['id']).execute()
+                                        st.success("게시글이 삭제되었습니다.")
+                                        st.rerun()
+                                idx += 1
                             else:
                                 with cols[idx]:
                                     if st.button("👀 숨김 해제", key=f"unhide_{post['id']}", use_container_width=True):
