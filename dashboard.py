@@ -26,7 +26,13 @@ from streamlit_paste_button import paste_image_button
 # ------------------------------------------------------------------
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# 🚀 [메모리 누수 방어] Streamlit의 캐싱을 통해 커넥션 풀(Connection Pool)이 매 1분마다 무한히 생성되는 것을 막습니다!
+@st.cache_resource(show_spinner=False)
+def init_supabase_client():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = init_supabase_client()
 
 # ------------------------------------------------------------------
 # 🎯 [가상 데이터 쾌속 입력 팝업 로직] 상선고 히트맵 셀 클릭 연동
@@ -1366,9 +1372,8 @@ if choice == "🏠 홈화면":
         )
 
     # Streamlit Secrets를 통해 안전하게 키를 불러옵니다.
-    SUPABASE_URL = st.secrets["supabase"]["url"]
-    SUPABASE_KEY = st.secrets["supabase"]["key"]
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    # (상단에서 이미 init_supabase_client()로 캐싱 처리됨)
+    # supabase = init_supabase_client()
 
     # ==========================================
     # 🚨 혁신적인 Two-Track 데이터 로딩 엔진 (캐시 분리)
