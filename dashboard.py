@@ -1496,6 +1496,7 @@ if choice == "🏠 홈화면":
         # 검색어 비우기 버튼 (클릭 시 session_state 초기화 후 rerun)
         if st.button("🗑", key="clear_search_btn", help="검색어 비우기", use_container_width=True):
             st.session_state['search_input_val'] = ""
+            st.session_state['ignore_next_selection'] = True
             st.rerun()
     
     # CSS 스타일링을 컬럼 외부로 빼서 레이아웃(세로 높이)이 틀어지는 현상을 방지합니다.
@@ -1948,6 +1949,7 @@ if choice == "🏠 홈화면":
             st.session_state['scrn_select_radio'] = "체결 로그"
             st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
             st.session_state['upper_limit_filter'] = False
+            st.session_state['ignore_next_selection'] = True
             import time
             st.session_state['realtime_mount_id'] = time.time()
             st.rerun()
@@ -1960,6 +1962,7 @@ if choice == "🏠 홈화면":
                 st.session_state['scrn_select_radio'] = "체결 로그"
                 st.session_state['log_fetch_limit'] = 500
                 st.session_state['upper_limit_filter'] = True
+                st.session_state['ignore_next_selection'] = True
                 import time
                 st.session_state['realtime_mount_id'] = time.time()
                 st.rerun()
@@ -4066,25 +4069,36 @@ if choice == "🏠 홈화면":
                         with col_btn:
                             if st.button("⬇️ 다음 500건 더 가져오기...", use_container_width=True):
                                 st.session_state['log_fetch_limit'] += 500
+                                st.session_state['ignore_next_selection'] = True
                                 st.rerun()
 
                     # ✅ 테이블 행 선택 이벤트 감지
-                    if event and "selection" in event and event["selection"]["rows"]:
-                        selected_idx = event["selection"]["rows"][0]
-                        # 💡 [IndexError 방지] 데이터 변경(필터/리로드) 시 이전 선택 인덱스가 남아있어 Out of bounds 발생하는 버그 방어
-                        if selected_idx < len(display_df):
-                            raw_selected_stock = display_df.iloc[selected_idx]['name']
-                            ss = raw_selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
-                            selected_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
-                            
-                            needs_rerun = False
-                            if st.session_state.get('search_input_val') != selected_stock:
-                                st.session_state['pending_search'] = selected_stock
-                                st.session_state['last_search_keyword'] = selected_stock
-                                needs_rerun = True
-                                
-                            if needs_rerun:
-                                st.rerun()
+                    if event and "selection" in event:
+                        rows = event["selection"]["rows"]
+                        if rows:
+                            # 💡 [Ghost Selection 버그 방어] 버튼 클릭으로 인한 데이터 길이 변경 시 발생하는 가짜 선택 이벤트 무시
+                            if st.session_state.get('ignore_next_selection', False):
+                                st.session_state['ignore_next_selection'] = False
+                            else:
+                                selected_idx = rows[0]
+                                # 💡 [IndexError 방지] 데이터 변경(필터/리로드) 시 이전 선택 인덱스가 남아있어 Out of bounds 발생하는 버그 방어
+                                if selected_idx < len(display_df):
+                                    raw_selected_stock = display_df.iloc[selected_idx]['name']
+                                    ss = raw_selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
+                                    selected_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
+                                    
+                                    needs_rerun = False
+                                    if st.session_state.get('search_input_val') != selected_stock:
+                                        st.session_state['pending_search'] = selected_stock
+                                        st.session_state['last_search_keyword'] = selected_stock
+                                        needs_rerun = True
+                                        
+                                    if needs_rerun:
+                                        st.rerun()
+                        else:
+                            # 선택이 해제되거나 비어있을 때 플래그 리셋 (정상 렌더링 확인)
+                            if st.session_state.get('ignore_next_selection', False):
+                                st.session_state['ignore_next_selection'] = False
             else:
                 st.info("포착된 고래 거래가 없습니다.")
 
