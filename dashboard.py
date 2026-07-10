@@ -3952,8 +3952,11 @@ if choice == "🏠 홈화면":
             if len(filtered_df) > 0:
                     # 🔌 [신호 복제 및 전처리 행렬 탄생]
                     # 🚀 [치명적 OOM 방지] 1개월치(15만건)를 표에 모두 그리면 Pandas Styler가 즉시 메모리를 폭파시킵니다!
-                    # 표에는 최신 500건만 보여주도록 강력한 브레이크를 겁니다. (집계 차트는 전체 데이터를 사용하므로 문제 없음)
-                    display_df = filtered_df.head(500).copy()
+                    # 지정된 fetch_limit 만큼만 렌더링하도록 브레이크를 겁니다.
+                    if fetch_limit is not None:
+                        display_df = filtered_df.head(fetch_limit).copy()
+                    else:
+                        display_df = filtered_df.copy()
                     
                     # 🚀 [상한가 직관성 패치] 찐 상한가 당일 체결 로그에만 로켓 뱃지 부여!
                     if show_only_upper_limit:
@@ -4068,18 +4071,20 @@ if choice == "🏠 홈화면":
                     # ✅ 테이블 행 선택 이벤트 감지
                     if event and "selection" in event and event["selection"]["rows"]:
                         selected_idx = event["selection"]["rows"][0]
-                        raw_selected_stock = display_df.iloc[selected_idx]['name']
-                        ss = raw_selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
-                        selected_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
-                        
-                        needs_rerun = False
-                        if st.session_state.get('search_input_val') != selected_stock:
-                            st.session_state['pending_search'] = selected_stock
-                            st.session_state['last_search_keyword'] = selected_stock
-                            needs_rerun = True
+                        # 💡 [IndexError 방지] 데이터 변경(필터/리로드) 시 이전 선택 인덱스가 남아있어 Out of bounds 발생하는 버그 방어
+                        if selected_idx < len(display_df):
+                            raw_selected_stock = display_df.iloc[selected_idx]['name']
+                            ss = raw_selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
+                            selected_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
                             
-                        if needs_rerun:
-                            st.rerun()
+                            needs_rerun = False
+                            if st.session_state.get('search_input_val') != selected_stock:
+                                st.session_state['pending_search'] = selected_stock
+                                st.session_state['last_search_keyword'] = selected_stock
+                                needs_rerun = True
+                                
+                            if needs_rerun:
+                                st.rerun()
             else:
                 st.info("포착된 고래 거래가 없습니다.")
 
