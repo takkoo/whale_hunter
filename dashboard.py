@@ -2033,9 +2033,9 @@ if choice == "🏠 홈화면":
             today_df = load_today_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
             
             # 당일 데이터만 필요한 경우 과거 데이터를 부를 필요가 없음
-            # 🚀 [치명적 OOM 방어 2단계] "실시간" 화면은 1분마다 새로고침 되므로, 여기서 1달치 데이터를 캐시에서 꺼내면 무조건 서버가 터집니다!
-            # 따라서 "실시간" 탭에서는 무조건 당일 데이터(today_df)만 사용하도록 강제합니다.
-            if global_period == "당일 데이터만" or scrn_select == "실시간":
+            # 🚀 [치명적 OOM 방어 2단계] "체결 로그(실시간)" 화면은 1분마다 새로고침 되므로, 여기서 1달치 데이터를 캐시에서 꺼내면 무조건 서버가 터집니다!
+            # 따라서 "체결 로그" 탭에서는 무조건 당일 데이터(today_df)만 사용하도록 강제합니다.
+            if global_period == "당일 데이터만" or scrn_select == "체결 로그":
                 df = today_df
             else:
                 historical_df = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
@@ -3842,6 +3842,7 @@ if choice == "🏠 홈화면":
                         st.subheader(f"📋 놀빅 상한가 종목 고래 체결 목록")
                     else:
                         st.subheader(f"📋 실시간 놀빅 고래 체결 상황")
+                        st.info("💡 **서버 보호 가동**: 1분마다 화면이 갱신되는 실시간 모드 특성상, 서버 폭파 방지를 위해 좌측 사이드바 기간 선택과 무관하게 무조건 **'당일(오늘) 데이터'**만 분석 및 렌더링합니다.")
                 with log_col2:
                     st.radio(
                         "🗂️ 자산 유형 필터",
