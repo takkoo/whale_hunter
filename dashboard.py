@@ -58,10 +58,7 @@ def mock_data_dialog(stock, date_str):
     with col_cancel:
         if st.button("❌ 취소 (닫기)", use_container_width=True):
             st.session_state.pop('show_mock_dialog', None)
-            if "sangseongo_click_detector" in st.session_state:
-                st.session_state["sangseongo_click_detector"] = ""
-            if "last_mock_clicked" in st.session_state:
-                st.session_state["last_mock_clicked"] = ""
+            # st_click_detector의 특성상 last_mock_clicked를 비우면 새로고침 시 무한 팝업 현상이 발생하므로 비우지 않습니다.
             st.rerun()
             
     with col_save:
@@ -116,8 +113,6 @@ def mock_data_dialog(stock, date_str):
                 supabase.table("system_settings").insert(track_data).execute()
                 
                 st.session_state.pop('show_mock_dialog', None)
-                st.session_state["sangseongo_click_detector"] = ""
-                st.session_state["last_mock_clicked"] = ""
                 st.success("✅ 가상 데이터가 성공적으로 입력되었습니다! 화면을 갱신합니다.")
                 st.rerun()
             except Exception as e:
@@ -2343,19 +2338,60 @@ if choice == "🏠 홈화면":
             with ret_col4:
                 sel_filter = st.selectbox("🎯 종목 필터", ["순수 개별종목 (우선주/ETF 제외)", "전체 종목 포함"], key="ret_filter")
                 
-            # 금액 파싱 (버튼 렌더링 전에 상태 확인을 위해 위치 이동)
+            # 금액 파싱
             if "천만원" in sel_amt:
                 min_krw = int(sel_amt.split("천만원")[0]) * 10000000
             else:
                 min_krw = int(sel_amt.split("억")[0]) * 100000000
+
+            # -------------------------------------------------------------
+            # [캐시 유효성 판단 공통 로직] (버튼 UI와 실제 조회 로직에서 동일하게 사용)
+            # -------------------------------------------------------------
+            yyyy = int(pure_month[:4])
+            mm = int(pure_month[6:8])
+            
+            first_day = datetime(yyyy, mm, 1)
+            if mm == 12: last_day = datetime(yyyy + 1, 1, 1) - timedelta(days=1)
+            else: last_day = datetime(yyyy, mm + 1, 1) - timedelta(days=1)
+            
+            if sel_week == "월 전체":
+                start_dt = first_day
+                end_dt = last_day
+            else:
+                week_num = int(sel_week[0])
+                first_weekday = first_day.weekday()
+                if first_weekday <= 4: w1_monday = first_day - timedelta(days=first_weekday)
+                else: w1_monday = first_day + timedelta(days=(7 - first_weekday))
+                start_dt = w1_monday + timedelta(weeks=week_num - 1)
+                end_dt = start_dt + timedelta(days=4)
                 
-            # 현재 선택된 조합이 캐시되어 있는지 정확히 확인 (1건만 빠르게 조회)
+            today_kr = datetime.now().date()
+            if end_dt.date() > today_kr: end_dt = datetime.now()
+            
             is_currently_cached = False
+            cached_data_pre = []
             try:
-                check_combo = supabase.table('return_rate_cache').select('period_month').eq('period_month', pure_month).eq('period_week', sel_week).eq('min_amount', min_krw).limit(1).execute()
-                is_currently_cached = len(check_combo.data) > 0
+                check_combo = supabase.table('return_rate_cache').select('*').eq('period_month', pure_month).eq('period_week', sel_week).eq('min_amount', min_krw).execute()
+                if check_combo.data:
+                    # 만료 검사
+                    if start_dt.date() <= today_kr <= end_dt.date():
+                        cache_dt_kr = datetime.fromisoformat(check_combo.data[0]['updated_at'].replace('Z', '+00:00')) + timedelta(hours=9)
+                        if cache_dt_kr.date() == today_kr:
+                            market_close_time = datetime.combine(today_kr, datetime.strptime("15:30", "%H:%M").time())
+                            now_kr = datetime.now()
+                            if cache_dt_kr < market_close_time and now_kr >= market_close_time:
+                                is_currently_cached = False
+                            else:
+                                is_currently_cached = True
+                                cached_data_pre = check_combo.data
+                        else:
+                            is_currently_cached = False
+                    else:
+                        is_currently_cached = True
+                        cached_data_pre = check_combo.data
             except Exception:
                 pass
+            # -------------------------------------------------------------
                 
             with ret_col_btn:
                 if is_currently_cached:
@@ -2395,32 +2431,7 @@ if choice == "🏠 홈화면":
             
             if search_ret or st.session_state.get('force_show_graph', False):
                 st.session_state['force_show_graph'] = False
-                yyyy = int(pure_month[:4])
-                mm = int(pure_month[6:8])
                 
-                first_day = datetime(yyyy, mm, 1)
-                if mm == 12:
-                    last_day = datetime(yyyy + 1, 1, 1) - timedelta(days=1)
-                else:
-                    last_day = datetime(yyyy, mm + 1, 1) - timedelta(days=1)
-                
-                if sel_week == "월 전체":
-                    start_dt = first_day
-                    end_dt = last_day
-                else:
-                    week_num = int(sel_week[0])
-                    first_weekday = first_day.weekday()
-                    if first_weekday <= 4:
-                        w1_monday = first_day - timedelta(days=first_weekday)
-                    else:
-                        w1_monday = first_day + timedelta(days=(7 - first_weekday))
-                        
-                    target_monday = w1_monday + timedelta(weeks=week_num - 1)
-                    target_friday = target_monday + timedelta(days=4)
-                    
-                    start_dt = target_monday
-                    end_dt = target_friday
-                    
                 if start_dt.date() > datetime.now().date():
                     st.warning("선택하신 기간은 아직 도래하지 않았습니다.")
                 else:
@@ -2432,44 +2443,9 @@ if choice == "🏠 홈화면":
                     
                     st.markdown(f"<div style='background-color: rgba(23, 42, 69, 0.7); color: #64d2ff; padding: 8px 15px; border-radius: 5px; font-size: 13px; margin-bottom: 5px;'><span style='margin-right: 5px;'>🔎</span> 조회 기간: {str_start} ~ {str_end} | 기준금액: {sel_amt}</div>", unsafe_allow_html=True)
                     
-                    # 캐시 조회 로직
-                    use_cache = False
-                    cached_data = []
-                    now_utc = datetime.utcnow()
-                    
-                    try:
-                        check_cache = supabase.table('return_rate_cache').select('*').eq('period_month', pure_month).eq('period_week', sel_week).eq('min_amount', min_krw).execute()
-                        if check_cache.data:
-                            # 만료 검사 로직
-                            # 오늘 날짜가 기간에 포함되는가? (start_dt <= today <= end_dt)
-                            today_kr = datetime.now().date()
-                            if start_dt.date() <= today_kr <= end_dt.date():
-                                # 현재 기간 중.
-                                # 업데이트 날짜가 오늘인가?
-                                cache_time_str = check_cache.data[0]['updated_at'] # e.g. "2026-07-05T14:00:00+00:00"
-                                # 파싱
-                                cache_dt = datetime.fromisoformat(cache_time_str.replace('Z', '+00:00'))
-                                # 한국 시간으로 변환
-                                cache_dt_kr = cache_dt + timedelta(hours=9)
-                                
-                                if cache_dt_kr.date() == today_kr:
-                                    # 오늘 캐시됨.
-                                    # 장중(15:30 이전)에 캐시되었고, 지금은 장마감(15:30 이후)이라면 무효화!
-                                    market_close_time = datetime.combine(today_kr, datetime.strptime("15:30", "%H:%M").time())
-                                    now_kr = datetime.now()
-                                    if cache_dt_kr < market_close_time and now_kr >= market_close_time:
-                                        use_cache = False
-                                    else:
-                                        use_cache = True
-                                        cached_data = check_cache.data
-                                else:
-                                    use_cache = False # 어제 캐시된 것이면 다시 계산
-                            else:
-                                # 이미 지나간 기간 -> 영구 캐시 사용
-                                use_cache = True
-                                cached_data = check_cache.data
-                    except Exception as e:
-                        pass
+                    # 이미 위에서 검증한 공통 로직 결과 재사용
+                    use_cache = is_currently_cached
+                    cached_data = cached_data_pre
                     
                     res_df = pd.DataFrame()
                     
