@@ -3903,7 +3903,9 @@ if choice == "🏠 홈화면":
 
             if len(filtered_df) > 0:
                     # 🔌 [신호 복제 및 전처리 행렬 탄생]
-                    display_df = filtered_df.copy()
+                    # 🚀 [치명적 OOM 방지] 1개월치(15만건)를 표에 모두 그리면 Pandas Styler가 즉시 메모리를 폭파시킵니다!
+                    # 표에는 최신 500건만 보여주도록 강력한 브레이크를 겁니다. (집계 차트는 전체 데이터를 사용하므로 문제 없음)
+                    display_df = filtered_df.head(500).copy()
                     
                     # 🚀 [상한가 직관성 패치] 찐 상한가 당일 체결 로그에만 로켓 뱃지 부여!
                     if show_only_upper_limit:
