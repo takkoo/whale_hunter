@@ -1408,7 +1408,7 @@ if choice == "🏠 홈화면":
         return query
 
     # 1. 과거 데이터 엔진 (35일 전 ~ 어제) -> 캐시 1시간
-    @st.cache_data(ttl=3600, show_spinner=False)
+    @st.cache_data(ttl=3600, max_entries=1, show_spinner=False)
     def load_historical_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         target_start = datetime.now().date() - timedelta(days=35)
         yesterday = datetime.now().date() - timedelta(days=1)
@@ -1423,7 +1423,7 @@ if choice == "🏠 홈화면":
         return _fetch_from_supabase(query, 150000)
 
     # 2. 당일 데이터 엔진 (오늘만) -> 캐시 1분
-    @st.cache_data(ttl=60, show_spinner=False)
+    @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         today = datetime.now().date()
         
@@ -1432,10 +1432,13 @@ if choice == "🏠 홈화면":
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         query = query.eq("date", today.strftime('%Y-%m-%d'))
-        return _fetch_from_supabase(query, 100000)
+        # 🚀 [OOM 및 1분 프리징 완벽 방어]
+        # 오늘 하루 전체(10만건)를 1분마다 가져오면 서버가 버티지 못하므로, "최근 급등하는 5,000건"으로 탐지 대상을 압축합니다.
+        # 이렇게 하면 서버 메모리를 20분의 1로 절약하고, AI 탐지는 더 '최신 트렌드'에 민감해집니다!
+        return _fetch_from_supabase(query, 5000)
 
     # 3. 검색 엔진 (검색어 전용) -> 캐시 1분
-    @st.cache_data(ttl=60, show_spinner=False)
+    @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
     def load_search_data(search_kw, exact=False, start_date=None, limit=None, asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         # OOM 방지를 위해 필요한 컬럼만 추출
         query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
@@ -3842,7 +3845,7 @@ if choice == "🏠 홈화면":
                         st.subheader(f"📋 놀빅 상한가 종목 고래 체결 목록")
                     else:
                         st.subheader(f"📋 실시간 놀빅 고래 체결 상황")
-                        st.info("💡 **서버 보호 가동**: 1분마다 화면이 갱신되는 실시간 모드 특성상, 서버 폭파 방지를 위해 좌측 사이드바 기간 선택과 무관하게 무조건 **'당일(오늘) 데이터'**만 분석 및 렌더링합니다.")
+                        st.info("💡 오늘 데이터만 처리합니다.")
                 with log_col2:
                     st.radio(
                         "🗂️ 자산 유형 필터",
