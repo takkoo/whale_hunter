@@ -1,0 +1,9 @@
+streamlit
+pandas
+plotly
+supabase
+streamlit-autorefresh
+finance-datareader
+lxml
+streamlit-paste-button
+st-click-detector
