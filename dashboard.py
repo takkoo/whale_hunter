@@ -1434,8 +1434,8 @@ if choice == "🏠 홈화면":
             return query.eq("date", today.strftime('%Y-%m-%d'))
             
         if st.session_state.get('today_cache_key') != cache_key or 'today_df' not in st.session_state:
-            # 설정이 바뀌었거나 처음 접속인 경우: 당일 전체 풀 스캔 (최대 10만건)
-            df = _fetch_from_supabase(build_query(), 100000)
+            # 🚀 [서버 뻗음 방지] 첫 접속이나 필터 변경 시 전체 스캔을 하되, Streamlit 타임아웃(30초)을 막기 위해 최대 15,000건(거의 당일 전체)까지만 가져옵니다.
+            df = _fetch_from_supabase(build_query(), 15000)
             st.session_state['today_df'] = df
             st.session_state['today_cache_key'] = cache_key
             st.session_state['today_last_time'] = df['time'].max() if not df.empty else "00:00:00"
