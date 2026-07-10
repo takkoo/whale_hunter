@@ -3169,18 +3169,25 @@ if choice == "🏠 홈화면":
                 brag_title = st.text_input("제목", key="brag_title_input")
                 brag_text = st.text_area("자랑하고 싶은 내용", key="brag_text_input", height=100)
                 
-                col1, col2 = st.columns([1, 1])
-                with col1:
+                class DummyPasteResult:
+                    image_data = None
+                paste_result = DummyPasteResult()
+                
+                if st.session_state.get('user_role') == 'admin':
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        brag_image_file = st.file_uploader("📂 인증샷 첨부 (파일 선택)", type=["png", "jpg", "jpeg"])
+                    with col2:
+                        st.write("또는 캡처 후 아래 버튼을 누르세요")
+                        paste_result = paste_image_button(
+                            label="📋 클립보드 붙여넣기",
+                            text_color="#ffffff",
+                            background_color="#FF69B4",
+                            hover_background_color="#FF1493",
+                            key=f"paste_image_btn_{st.session_state.get('brag_mount_id', 0)}"
+                        )
+                else:
                     brag_image_file = st.file_uploader("📂 인증샷 첨부 (파일 선택)", type=["png", "jpg", "jpeg"])
-                with col2:
-                    st.write("또는 캡처 후 아래 버튼을 누르세요")
-                    paste_result = paste_image_button(
-                        label="📋 클립보드 붙여넣기",
-                        text_color="#ffffff",
-                        background_color="#FF69B4",
-                        hover_background_color="#FF1493",
-                        key=f"paste_image_btn_{st.session_state.get('brag_mount_id', 0)}"
-                    )
                     
                 if paste_result.image_data is not None:
                     st.session_state["pasted_image"] = paste_result.image_data
