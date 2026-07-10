@@ -800,7 +800,7 @@ def calculate_backtest_yield(chart_df):
     
     # 1. 일별 순매수 및 종가(마지막 체결가) 추출
     daily_stats = []
-    for date, group in chart_df.groupby('date_parsed'):
+    for date, group in chart_df.groupby('date'):
         buy_sum = group[group['side'] == '매수']['amount_krw'].sum()
         sell_sum = group[group['side'] == '매도']['amount_krw'].sum()
         net_buy = buy_sum - sell_sum
