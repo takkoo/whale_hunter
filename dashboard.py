@@ -3137,10 +3137,9 @@ if choice == "🏠 홈화면":
                 st.session_state["show_brag_form"] = False
 
             # 🚨 [신규 튜닝]: expander 대신 명시적인 버튼을 사용하여 사용자 혼동 방지
-            btn_label = "닫기 ❌" if st.session_state["show_brag_form"] else "📝 자랑글 쓰기 (여기를 클릭하세요!)"
-            btn_type = "secondary" if st.session_state["show_brag_form"] else "primary"
+            btn_label = "닫기 ❌" if st.session_state["show_brag_form"] else "📝 자랑글 쓰기"
             
-            if st.button(btn_label, use_container_width=True, type=btn_type):
+            if st.button(btn_label, use_container_width=False):
                 st.session_state["show_brag_form"] = not st.session_state["show_brag_form"]
                 st.rerun()
 
@@ -3175,7 +3174,8 @@ if choice == "🏠 홈화면":
                         label="📋 클립보드 붙여넣기",
                         text_color="#ffffff",
                         background_color="#FF69B4",
-                        hover_background_color="#FF1493"
+                        hover_background_color="#FF1493",
+                        key="paste_image_btn"
                     )
                     
                 if paste_result.image_data is not None:
