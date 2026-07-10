@@ -2109,7 +2109,7 @@ if choice == "🏠 홈화면":
     else:
         # 메인 차트용 데이터 필터링
         if not df.empty:
-            main_df = df[df['date_parsed'] >= start_date]
+            main_df = df[df['date'] >= start_date.strftime('%Y-%m-%d')]
         else:
             main_df = pd.DataFrame()
 
@@ -2491,7 +2491,7 @@ if choice == "🏠 홈화면":
                             if is_admin:
                                 st.warning("수집된 데이터가 없습니다.")
                         else:
-                            df_period = df_all[(df_all['date_parsed'] >= start_dt.date()) & (df_all['date_parsed'] <= end_dt.date())]
+                            df_period = df_all[(df_all['date'] >= start_dt.strftime('%Y-%m-%d')) & (df_all['date'] <= end_dt.strftime('%Y-%m-%d'))]
                             df_buy = df_period[(df_period['side'] == '매수') & (df_period['amount_krw'] >= min_krw)]
                             
                             unique_stocks = df_buy[['code', 'name']].drop_duplicates(subset=['code'])
