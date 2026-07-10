@@ -3133,8 +3133,20 @@ if choice == "🏠 홈화면":
                 st.session_state["brag_title_input"] = ""
                 st.session_state["brag_clear_trigger"] = False
 
-            with st.expander("📝 자랑글 쓰기 (클릭)", expanded=False):
-                st.html("""
+            if "show_brag_form" not in st.session_state:
+                st.session_state["show_brag_form"] = False
+
+            # 🚨 [신규 튜닝]: expander 대신 명시적인 버튼을 사용하여 사용자 혼동 방지
+            btn_label = "닫기 ❌" if st.session_state["show_brag_form"] else "📝 자랑글 쓰기 (여기를 클릭하세요!)"
+            btn_type = "secondary" if st.session_state["show_brag_form"] else "primary"
+            
+            if st.button(btn_label, use_container_width=True, type=btn_type):
+                st.session_state["show_brag_form"] = not st.session_state["show_brag_form"]
+                st.rerun()
+
+            if st.session_state["show_brag_form"]:
+                with st.container(border=True):
+                    st.html("""
                 <style>
                     /* 입력창 배경을 살짝 밝게 하고, 눈에 띄는 테두리 추가 */
                     div[data-baseweb="input"] > div,
@@ -3207,12 +3219,13 @@ if choice == "🏠 홈화면":
                             
                             st.session_state["brag_clear_trigger"] = True
                             st.session_state.pop("pasted_image", None)
+                            st.session_state["show_brag_form"] = False # 글 등록 성공 시 폼 닫기
                             st.success("글이 등록되었습니다!")
                             st.rerun()
                         except Exception as e:
                             st.error(f"등록 실패: {e}")
-
-            st.divider()
+            
+            st.markdown("<br>", unsafe_allow_html=True) # divider 대신 약간의 여백만 부여
             
             def cb_toggle_like(post_id, current_likes, liked_users, current_user, has_liked):
                 new_likes = current_likes
