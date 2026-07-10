@@ -1497,7 +1497,7 @@ if choice == "🏠 홈화면":
     if 'search_input_val' not in st.session_state:
         st.session_state['search_input_val'] = ""
     if 'log_fetch_limit' not in st.session_state:
-        st.session_state['log_fetch_limit'] = 2000
+        st.session_state['log_fetch_limit'] = 500
 
     search_hdr_col, clear_btn_col = st.sidebar.columns([2, 1])
     with search_hdr_col:
@@ -1957,7 +1957,7 @@ if choice == "🏠 홈화면":
         if st.button("실시간", key="btn_list_view", use_container_width=True):
             st.session_state['pending_search'] = ""
             st.session_state['scrn_select_radio'] = "체결 로그"
-            st.session_state['log_fetch_limit'] = 2000 # 더보기 초기화
+            st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
             st.session_state['upper_limit_filter'] = False
             import time
             st.session_state['realtime_mount_id'] = time.time()
@@ -1969,7 +1969,7 @@ if choice == "🏠 홈화면":
             if st.button("상한가", key="btn_top10_blue", use_container_width=True):
                 st.session_state['pending_search'] = ""
                 st.session_state['scrn_select_radio'] = "체결 로그"
-                st.session_state['log_fetch_limit'] = 2000
+                st.session_state['log_fetch_limit'] = 500
                 st.session_state['upper_limit_filter'] = True
                 import time
                 st.session_state['realtime_mount_id'] = time.time()
@@ -4055,8 +4055,8 @@ if choice == "🏠 홈화면":
                         
                         col_btn, col_space = st.columns([3.5, 6.5])
                         with col_btn:
-                            if st.button("⬇️ 다음 20페이지(2,000건) 더 가져오기...", use_container_width=True):
-                                st.session_state['log_fetch_limit'] += 2000
+                            if st.button("⬇️ 다음 500건 더 가져오기...", use_container_width=True):
+                                st.session_state['log_fetch_limit'] += 500
                                 st.rerun()
 
                     # ✅ 테이블 행 선택 이벤트 감지
