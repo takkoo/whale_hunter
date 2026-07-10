@@ -1,0 +1,7 @@
+[theme]
+# 🟢 로컬 PC와 클라우드 배포 웹 전체의 외각 하우징을 다크 모드로 강제 전환
+base = "dark"
+primaryColor = "#ff4b4b"
+backgroundColor = "#11111b"          # 👈 우리 차트 배경색과 일치하는 칠흑색
+secondaryBackgroundColor = "#1c1c26" # 👈 왼쪽 사이드바를 고급스러운 다크 그레이로 도색
+textColor = "#ffffff"
