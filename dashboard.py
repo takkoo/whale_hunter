@@ -1951,6 +1951,8 @@ if choice == "🏠 홈화면":
             st.session_state['scrn_select_radio'] = "체결 로그"
             st.session_state['log_fetch_limit'] = 2000 # 더보기 초기화
             st.session_state['upper_limit_filter'] = False
+            import time
+            st.session_state['realtime_mount_id'] = time.time()
             st.rerun()
     if st.session_state.get('authenticated', False):
         with btn_col2:
@@ -1961,6 +1963,8 @@ if choice == "🏠 홈화면":
                 st.session_state['scrn_select_radio'] = "체결 로그"
                 st.session_state['log_fetch_limit'] = 2000
                 st.session_state['upper_limit_filter'] = True
+                import time
+                st.session_state['realtime_mount_id'] = time.time()
                 st.rerun()
         with btn_col3:
             cls_return = "btn-style-purple-active" if is_return_active else "btn-style-purple"
@@ -3141,6 +3145,9 @@ if choice == "🏠 홈화면":
             
             if st.button(btn_label, use_container_width=False):
                 st.session_state["show_brag_form"] = not st.session_state["show_brag_form"]
+                if st.session_state["show_brag_form"]:
+                    import time
+                    st.session_state["brag_mount_id"] = time.time()
                 st.rerun()
 
             if st.session_state["show_brag_form"]:
@@ -3175,7 +3182,7 @@ if choice == "🏠 홈화면":
                         text_color="#ffffff",
                         background_color="#FF69B4",
                         hover_background_color="#FF1493",
-                        key="paste_image_btn"
+                        key=f"paste_image_btn_{st.session_state.get('brag_mount_id', 0)}"
                     )
                     
                 if paste_result.image_data is not None:
@@ -4025,7 +4032,7 @@ if choice == "🏠 홈화면":
                         use_container_width=False,
                         on_select="rerun",
                         selection_mode="single-row",
-                        key=f"whale_log_board_{search_keyword}_{len(df)}"
+                        key=f"whale_log_board_{search_keyword}_{len(df)}_{st.session_state.get('realtime_mount_id', 0)}"
                     )
                     
                     # 🎯 "더 보기" 버튼: 검색어가 없을 때, 가져온 데이터가 limit 이상이라면(더 있을 가능성이 높다면) 표출
