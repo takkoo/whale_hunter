@@ -800,7 +800,7 @@ def calculate_backtest_yield(chart_df):
     
     # 1. 일별 순매수 및 종가(마지막 체결가) 추출
     daily_stats = []
-    for date, group in chart_df.groupby('date_parsed'):
+    for date, group in chart_df.groupby('date'):
         buy_sum = group[group['side'] == '매수']['amount_krw'].sum()
         sell_sum = group[group['side'] == '매도']['amount_krw'].sum()
         net_buy = buy_sum - sell_sum
@@ -1429,15 +1429,31 @@ if choice == "🏠 홈화면":
 
     # 2. 당일 데이터 엔진 (오늘만) -> 세션 델타 기반 실시간 압축 엔진! (1분 OOM 프리징 완벽 해결)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        today = datetime.now().date()
+        # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 (클라우드 UTC와 로컬 PC의 시간차이 및 새벽 시간 데이터 없음 이슈 해결)
+        kst = datetime.utcnow() + timedelta(hours=9)
+        today_str = kst.strftime('%Y-%m-%d')
         
         # 중복 제거를 위해 id 컬럼 추가
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
-        query = query.eq("date", today.strftime('%Y-%m-%d'))
+        query = query.eq("date", today_str)
             
         # 🚀 [서버 뻗음 방지] 첫 접속이나 갱신 시, 최신 5000건을 깔끔하게 가져옵니다. (델타 병합 시 발생하는 무한루프 및 뻗음 방지)
         df = _fetch_from_supabase(query, 5000)
+        
+        # 💡 만약 오늘(KST 기준) 데이터가 아직 한 건도 없다면 (새벽 시간이거나 주말/휴일인 경우)
+        if df.empty:
+            # 가장 최근 7일 중 데이터가 존재하는 '마지막 날짜'를 찾아서 대체 로드!
+            # (클라우드는 UTC라 우연히 어제 날짜로 작동했지만, 로컬 PC는 KST라 비어있었던 것)
+            fallback_query = supabase.table("whale_log").select("date").order("date", desc=True).limit(1)
+            fallback_res = fallback_query.execute()
+            if fallback_res.data and len(fallback_res.data) > 0:
+                latest_date_str = fallback_res.data[0]['date']
+                query_fallback = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
+                query_fallback = _apply_common_filters(query_fallback, asset_type, market_type, show_closing_auction)
+                query_fallback = query_fallback.eq("date", latest_date_str)
+                df = _fetch_from_supabase(query_fallback, 5000)
+
         st.session_state['today_df'] = df
         return df
 
@@ -3153,18 +3169,25 @@ if choice == "🏠 홈화면":
                 brag_title = st.text_input("제목", key="brag_title_input")
                 brag_text = st.text_area("자랑하고 싶은 내용", key="brag_text_input", height=100)
                 
-                col1, col2 = st.columns([1, 1])
-                with col1:
+                class DummyPasteResult:
+                    image_data = None
+                paste_result = DummyPasteResult()
+                
+                if st.session_state.get('user_role') == 'admin':
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        brag_image_file = st.file_uploader("📂 인증샷 첨부 (파일 선택)", type=["png", "jpg", "jpeg"])
+                    with col2:
+                        st.write("또는 캡처 후 아래 버튼을 누르세요")
+                        paste_result = paste_image_button(
+                            label="📋 클립보드 붙여넣기",
+                            text_color="#ffffff",
+                            background_color="#FF69B4",
+                            hover_background_color="#FF1493",
+                            key=f"paste_image_btn_{st.session_state.get('brag_mount_id', 0)}"
+                        )
+                else:
                     brag_image_file = st.file_uploader("📂 인증샷 첨부 (파일 선택)", type=["png", "jpg", "jpeg"])
-                with col2:
-                    st.write("또는 캡처 후 아래 버튼을 누르세요")
-                    paste_result = paste_image_button(
-                        label="📋 클립보드 붙여넣기",
-                        text_color="#ffffff",
-                        background_color="#FF69B4",
-                        hover_background_color="#FF1493",
-                        key=f"paste_image_btn_{st.session_state.get('brag_mount_id', 0)}"
-                    )
                     
                 if paste_result.image_data is not None:
                     st.session_state["pasted_image"] = paste_result.image_data
@@ -3929,8 +3952,11 @@ if choice == "🏠 홈화면":
             if len(filtered_df) > 0:
                     # 🔌 [신호 복제 및 전처리 행렬 탄생]
                     # 🚀 [치명적 OOM 방지] 1개월치(15만건)를 표에 모두 그리면 Pandas Styler가 즉시 메모리를 폭파시킵니다!
-                    # 표에는 최신 500건만 보여주도록 강력한 브레이크를 겁니다. (집계 차트는 전체 데이터를 사용하므로 문제 없음)
-                    display_df = filtered_df.head(500).copy()
+                    # 지정된 fetch_limit 만큼만 렌더링하도록 브레이크를 겁니다.
+                    if fetch_limit is not None:
+                        display_df = filtered_df.head(fetch_limit).copy()
+                    else:
+                        display_df = filtered_df.copy()
                     
                     # 🚀 [상한가 직관성 패치] 찐 상한가 당일 체결 로그에만 로켓 뱃지 부여!
                     if show_only_upper_limit:
@@ -4045,18 +4071,20 @@ if choice == "🏠 홈화면":
                     # ✅ 테이블 행 선택 이벤트 감지
                     if event and "selection" in event and event["selection"]["rows"]:
                         selected_idx = event["selection"]["rows"][0]
-                        raw_selected_stock = display_df.iloc[selected_idx]['name']
-                        ss = raw_selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
-                        selected_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
-                        
-                        needs_rerun = False
-                        if st.session_state.get('search_input_val') != selected_stock:
-                            st.session_state['pending_search'] = selected_stock
-                            st.session_state['last_search_keyword'] = selected_stock
-                            needs_rerun = True
+                        # 💡 [IndexError 방지] 데이터 변경(필터/리로드) 시 이전 선택 인덱스가 남아있어 Out of bounds 발생하는 버그 방어
+                        if selected_idx < len(display_df):
+                            raw_selected_stock = display_df.iloc[selected_idx]['name']
+                            ss = raw_selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
+                            selected_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
                             
-                        if needs_rerun:
-                            st.rerun()
+                            needs_rerun = False
+                            if st.session_state.get('search_input_val') != selected_stock:
+                                st.session_state['pending_search'] = selected_stock
+                                st.session_state['last_search_keyword'] = selected_stock
+                                needs_rerun = True
+                                
+                            if needs_rerun:
+                                st.rerun()
             else:
                 st.info("포착된 고래 거래가 없습니다.")
 
