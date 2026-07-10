@@ -1,4 +1,5 @@
 import streamlit as st
+st.set_page_config(page_title="know-lbig radar", page_icon="🐳", layout="wide")
 import pandas as pd
 pd.set_option("styler.render.max_elements", 10000000)  # 대용량 데이터프레임 스타일링 렌더링 허용 (Styler 제한 해제)
 import plotly.express as px
@@ -173,8 +174,8 @@ def fetch_kis_daily_volume(stock_code, start_date):
         return df.reset_index()
     except Exception as e:
         return pd.DataFrame()
-
-st.set_page_config(page_title="놀빅 로그인", page_icon="🐳", layout="wide")
+# ------------------------------------------------------------------
+# (set_page_config는 최상단으로 이동됨)
 
 if 'show_mock_dialog' in st.session_state:
     data = st.session_state['show_mock_dialog']
@@ -1277,8 +1278,6 @@ if choice == "🏠 홈화면":
     # ------------------------------------------------------------------
 
     # 디지털 시계 및 대시보드 본체 시작.
-
-    st.set_page_config(page_title="know-lbig radar", page_icon="🐳", layout="wide")
 
     # ⏱️ 60초(60000ms)마다 화면 전체를 자동으로 새로고침 (초지능형 조건식 가동)
     scrn_select = st.session_state.get('scrn_select_radio', '체결 로그')
