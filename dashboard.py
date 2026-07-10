@@ -1429,15 +1429,31 @@ if choice == "🏠 홈화면":
 
     # 2. 당일 데이터 엔진 (오늘만) -> 세션 델타 기반 실시간 압축 엔진! (1분 OOM 프리징 완벽 해결)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        today = datetime.now().date()
+        # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 (클라우드 UTC와 로컬 PC의 시간차이 및 새벽 시간 데이터 없음 이슈 해결)
+        kst = datetime.utcnow() + timedelta(hours=9)
+        today_str = kst.strftime('%Y-%m-%d')
         
         # 중복 제거를 위해 id 컬럼 추가
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
-        query = query.eq("date", today.strftime('%Y-%m-%d'))
+        query = query.eq("date", today_str)
             
         # 🚀 [서버 뻗음 방지] 첫 접속이나 갱신 시, 최신 5000건을 깔끔하게 가져옵니다. (델타 병합 시 발생하는 무한루프 및 뻗음 방지)
         df = _fetch_from_supabase(query, 5000)
+        
+        # 💡 만약 오늘(KST 기준) 데이터가 아직 한 건도 없다면 (새벽 시간이거나 주말/휴일인 경우)
+        if df.empty:
+            # 가장 최근 7일 중 데이터가 존재하는 '마지막 날짜'를 찾아서 대체 로드!
+            # (클라우드는 UTC라 우연히 어제 날짜로 작동했지만, 로컬 PC는 KST라 비어있었던 것)
+            fallback_query = supabase.table("whale_log").select("date").order("date", desc=True).limit(1)
+            fallback_res = fallback_query.execute()
+            if fallback_res.data and len(fallback_res.data) > 0:
+                latest_date_str = fallback_res.data[0]['date']
+                query_fallback = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
+                query_fallback = _apply_common_filters(query_fallback, asset_type, market_type, show_closing_auction)
+                query_fallback = query_fallback.eq("date", latest_date_str)
+                df = _fetch_from_supabase(query_fallback, 5000)
+
         st.session_state['today_df'] = df
         return df
 
