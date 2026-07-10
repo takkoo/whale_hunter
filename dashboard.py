@@ -3648,6 +3648,12 @@ if choice == "🏠 홈화면":
                         
                         top_3 = sorted_g.head(3).sort_values(by='time')
                         
+                        # 🔥 PyArrow 직렬화 충돌 방지: 화면에 그리지 않는 날짜 객체 컬럼 제거 🔥
+                        if 'datetime' in target_whale_df.columns:
+                            target_whale_df.drop(columns=['datetime'], inplace=True)
+                        if 'date_parsed' in target_whale_df.columns:
+                            target_whale_df.drop(columns=['date_parsed'], inplace=True)
+                        
                         lines = [
                             f"<b>{side}고래 총 {total_count}건 포착 ({total_amt/100000000:,.1f}억)</b>",
                             "----------------------------------------"
@@ -3982,6 +3988,12 @@ if choice == "🏠 홈화면":
                     display_df['sell_amount'] = display_df.apply(
                         lambda r: r['amount_krw'] / 1_000_000 if r['side'] == '매도' else 0, axis=1
                     )
+
+                    # 🔥 PyArrow 에러 방지용: 화면에 그리지 않는 날짜 객체 컬럼 제거 🔥
+                    if 'datetime' in display_df.columns:
+                        display_df.drop(columns=['datetime'], inplace=True)
+                    if 'date_parsed' in display_df.columns:
+                        display_df.drop(columns=['date_parsed'], inplace=True)
 
                     # 🎨 [피드백 3] 동시호가 틱 시간표시 붉은 백라이트 + 핵고래 색상 통합 칩셋
                     def style_rows(row):
