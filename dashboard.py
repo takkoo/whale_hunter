@@ -1414,7 +1414,7 @@ if choice == "🏠 홈화면":
         yesterday = datetime.now().date() - timedelta(days=1)
         
         # OOM(Out of Memory) 방지를 위해 꼭 필요한 컬럼만 명시적으로 가져옵니다!
-        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price")
+        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         query = query.gte("date", target_start.strftime('%Y-%m-%d')).lte("date", yesterday.strftime('%Y-%m-%d'))
@@ -1428,7 +1428,7 @@ if choice == "🏠 홈화면":
         today = datetime.now().date()
         
         # OOM 방지를 위해 필요한 컬럼만 추출
-        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price")
+        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         query = query.eq("date", today.strftime('%Y-%m-%d'))
@@ -1438,7 +1438,7 @@ if choice == "🏠 홈화면":
     @st.cache_data(ttl=60, show_spinner=False)
     def load_search_data(search_kw, exact=False, start_date=None, limit=None, asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         # OOM 방지를 위해 필요한 컬럼만 추출
-        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price")
+        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         if exact:
