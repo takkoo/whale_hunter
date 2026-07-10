@@ -2494,8 +2494,10 @@ if choice == "🏠 홈화면":
                             df_period = df_all[(df_all['date'] >= start_dt.strftime('%Y-%m-%d')) & (df_all['date'] <= end_dt.strftime('%Y-%m-%d'))]
                             df_buy = df_period[(df_period['side'] == '매수') & (df_period['amount_krw'] >= min_krw)]
                             
-                            unique_stocks = df_buy[['code', 'name']].drop_duplicates(subset=['code'])
-                            
+                            # 🚀 타임아웃/OOM 방어: 전체 종목을 조회하면 API 차단 및 Streamlit 제한시간(60초)에 걸려 뻗으므로,
+                            # 해당 기간 누적 매수금액 기준 상위 200개 종목만 엄선하여 수익율을 계산합니다. (TOP 20 추출에는 200개면 충분함)
+                            top_codes = df_buy.groupby(['code', 'name'])['amount_krw'].sum().reset_index().sort_values('amount_krw', ascending=False).head(200)
+                            unique_stocks = top_codes[['code', 'name']]
                             results = []
                             total_stocks = len(unique_stocks)
                             if total_stocks == 0:
