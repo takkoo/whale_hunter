@@ -1389,6 +1389,8 @@ if choice == "🏠 홈화면":
         if not df.empty:
             df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='mixed')
             df['date_parsed'] = pd.to_datetime(df['date'], format='mixed').dt.date
+        else:
+            df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime', 'date_parsed'])
         return df
 
     def _apply_common_filters(query, asset_type, market_type, show_closing_auction):
@@ -2050,7 +2052,7 @@ if choice == "🏠 홈화면":
 
     # 지능형 펌프 가동! (검색어 조건과 선택된 기간에 맞춰서 데이터를 퍼옵니다)
     if fetch_limit == 0 or scrn_select in ["수익율 자랑", "상선고 화면"]:
-        df = pd.DataFrame()
+        df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime', 'date_parsed'])
     else:
         if not search_keyword.strip():
             # 🎯 [Two-Track 캐시 최적화] 검색어가 없으면 기간에 따라 과거 엔진과 오늘 엔진을 적절히 조립!
@@ -2106,7 +2108,7 @@ if choice == "🏠 홈화면":
         if not df.empty:
             main_df = df[df['date'] >= start_date.strftime('%Y-%m-%d')]
         else:
-            main_df = pd.DataFrame()
+            main_df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime', 'date_parsed'])
 
         # UI용 변수 (df가 비어있어도 TOP 10 화면 등에서 사용됨)
         if market_type == "KOSPI 🏢":
@@ -2890,7 +2892,7 @@ if choice == "🏠 홈화면":
 
             if do_radar:
                 st.session_state['radar_active'] = True
-                st.session_state.pop("last_mock_clicked", None)
+                # last_mock_clicked 초기화 삭제 (새로고침/재가동 시 무한 팝업 버그 방지)
 
             if st.session_state.get('radar_active'):
                 with st.spinner("🚀 상한가 선행 고래 데이터를 분석 중입니다..."):
