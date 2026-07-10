@@ -1414,8 +1414,8 @@ if choice == "🏠 홈화면":
         target_start = datetime.now().date() - timedelta(days=35)
         yesterday = datetime.now().date() - timedelta(days=1)
         
-        # OOM(Out of Memory) 방지를 위해 꼭 필요한 컬럼만 명시적으로 가져옵니다!
-        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
+        # OOM(Out of Memory) 방지를 위해 꼭 필요한 컬럼만 명시적으로 가져옵니다! (단, 스키마 일치를 위해 id 포함)
+        query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         query = query.gte("date", target_start.strftime('%Y-%m-%d')).lte("date", yesterday.strftime('%Y-%m-%d'))
@@ -1463,8 +1463,8 @@ if choice == "🏠 홈화면":
     # 3. 검색 엔진 (검색어 전용) -> 캐시 1분
     @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
     def load_search_data(search_kw, exact=False, start_date=None, limit=None, asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        # OOM 방지를 위해 필요한 컬럼만 추출
-        query = supabase.table("whale_log").select("date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
+        # OOM 방지를 위해 필요한 컬럼만 추출 (단, 스키마 일치를 위해 id 포함)
+        query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         
         if exact:
@@ -4024,7 +4024,8 @@ if choice == "🏠 홈화면":
                         height=620,       
                         use_container_width=False,
                         on_select="rerun",
-                        selection_mode="single-row"
+                        selection_mode="single-row",
+                        key=f"whale_log_board_{search_keyword}_{len(df)}"
                     )
                     
                     # 🎯 "더 보기" 버튼: 검색어가 없을 때, 가져온 데이터가 limit 이상이라면(더 있을 가능성이 높다면) 표출
