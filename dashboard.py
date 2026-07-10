@@ -870,8 +870,8 @@ def get_hot_signals(df):
         return []
         
     # 오늘 날짜(가장 최근 날짜)만 필터링
-    latest_date = df['date_parsed'].max()
-    today_df = df[df['date_parsed'] == latest_date]
+    latest_date = df['datetime'].dt.floor('D').max()
+    today_df = df[df['datetime'].dt.floor('D') == latest_date]
     if today_df.empty:
         return []
         
@@ -1388,7 +1388,6 @@ if choice == "🏠 홈화면":
         df = pd.DataFrame(all_data)
         if not df.empty:
             df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='mixed')
-            df['date_parsed'] = pd.to_datetime(df['date'], format='mixed').dt.date
             
             # 🔥 PyArrow 충돌(Oh no) 방지용 엄격한 타입 캐스팅 🔥
             for col in ['id', 'price', 'volume', 'amount_krw']:
@@ -1398,7 +1397,7 @@ if choice == "🏠 홈화면":
                 if col in df.columns:
                     df[col] = df[col].astype(str)
         else:
-            df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime', 'date_parsed'])
+            df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime'])
         return df
 
     def _apply_common_filters(query, asset_type, market_type, show_closing_auction):
@@ -3989,11 +3988,9 @@ if choice == "🏠 홈화면":
                         lambda r: r['amount_krw'] / 1_000_000 if r['side'] == '매도' else 0, axis=1
                     )
 
-                    # 🔥 PyArrow 에러 방지용: 화면에 그리지 않는 날짜 객체 컬럼 제거 🔥
+                    # 🔥 PyArrow 에러 방지용: 화면에 그리지 않는 날짜 컬럼 제거 🔥
                     if 'datetime' in display_df.columns:
                         display_df.drop(columns=['datetime'], inplace=True)
-                    if 'date_parsed' in display_df.columns:
-                        display_df.drop(columns=['date_parsed'], inplace=True)
 
                     # 🎨 [피드백 3] 동시호가 틱 시간표시 붉은 백라이트 + 핵고래 색상 통합 칩셋
                     def style_rows(row):
