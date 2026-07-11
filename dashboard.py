@@ -3120,10 +3120,18 @@ if choice == "🏠 홈화면":
                                         amt_str = f"{amt / 100_000_000:.1f}억"
                                         
                                     amt_억 = amt / 100_000_000
+                                    
+                                    if d in u_dates:
+                                        # 상한가 날(빨간 배경)에서는 글씨를 더 찐하게(테두리 강조) 처리
+                                        text_style = "color: #FFD700; font-size: 10.5px; font-weight: 900; line-height: 1; letter-spacing: -0.5px; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 2px 2px 2px #000;"
+                                    else:
+                                        # 일반 날짜
+                                        text_style = "color: #FFA500; font-size: 10.5px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;"
+                                        
                                     inner_html += f"""
                                     <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2;" title="{amt_억:.1f}억 (Lv.{level})">
                                         <div style="width: 25%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
-                                        <div style="position: absolute; bottom: 1px; left: 26%; color: #FFA500; font-size: 10.5px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;">{amt_str}</div>
+                                        <div style="position: absolute; bottom: 1px; left: 26%; {text_style}">{amt_str}</div>
                                     </div>
                                     """
                                     
