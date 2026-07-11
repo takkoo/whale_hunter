@@ -1183,6 +1183,9 @@ def draw_whale_bar_chart(target_code, target_name, df):
 # ------------------------------------------------------------------
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
+if 'guest_id' not in st.session_state:
+    import uuid
+    st.session_state['guest_id'] = f"guest_{uuid.uuid4().hex[:8]}"
 
 menu = ["🏠 홈화면"]
 if st.session_state['authenticated']:
@@ -3417,18 +3420,14 @@ if choice == "🏠 홈화면":
                         
                         likes = post.get('likes_count') or 0
                         liked_users = post.get('liked_users') or []
-                        curr_user = st.session_state.get('current_user', '')
+                        curr_user = st.session_state.get('current_user', st.session_state.get('guest_id', 'Guest'))
                         is_auth = st.session_state.get('authenticated', False)
-                        has_liked = is_auth and (curr_user in liked_users)
+                        has_liked = (curr_user in liked_users)
                         
                         like_btn_text = f"❤️ {likes}" if has_liked else f"🤍 {likes}"
                         
                         with cols[0]:
-                            if is_auth:
-                                st.button(like_btn_text, key=f"like_{post['id']}", use_container_width=True, on_click=cb_toggle_like, args=(post['id'], likes, liked_users, curr_user, has_liked))
-                            else:
-                                if st.button(like_btn_text, key=f"like_{post['id']}", use_container_width=True):
-                                    st.warning("🚫 정회원만 이용할 수 있습니다.")
+                            st.button(like_btn_text, key=f"like_{post['id']}", use_container_width=True, on_click=cb_toggle_like, args=(post['id'], likes, liked_users, curr_user, has_liked))
                                 
                         idx = 1
                         if is_auth and curr_user == post.get('author', ''):
