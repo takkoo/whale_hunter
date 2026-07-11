@@ -242,6 +242,32 @@ def is_market_open_now():
         
     return True
 
+def get_latest_market_open_date(base_date=None):
+    if base_date is None:
+        target = datetime.now()
+    else:
+        # datetime 객체가 아니라 date 객체면 변환
+        if not hasattr(base_date, 'time'):
+            target = datetime.combine(base_date, datetime.min.time())
+        else:
+            target = base_date
+            
+    # 오전 9시 전이면 아직 오늘 장이 안 열렸으므로 전날로 기준을 옮김 (평일이더라도)
+    if target.time() < datetime.strptime("09:00", "%H:%M").time():
+        target -= timedelta(days=1)
+        
+    holidays = get_market_holidays()
+    
+    while True:
+        if target.weekday() >= 5: # 5: 토, 6: 일
+            target -= timedelta(days=1)
+            continue
+        if target.strftime('%Y-%m-%d') in holidays:
+            target -= timedelta(days=1)
+            continue
+        break
+    return target.date()
+
 def render_profile_edit_panel(user_data, current_id, db_phone):
     st.subheader("📝 관제사 자격 정보 정비")
     st.write("---")
@@ -1022,7 +1048,7 @@ def draw_whale_bar_chart(target_code, target_name, df):
     # =========================================================================
     # 🚨 [신규 튜닝]: 오늘 기준 과거 30일 치 '빈 달력 뼈대' 만들기
     # =========================================================================
-    today = datetime.now().date()
+    today = get_latest_market_open_date()
     # 최근 30일 날짜 리스트 생성
     date_list = [today - timedelta(days=x) for x in range(30)]
     
@@ -1415,8 +1441,9 @@ if choice == "🏠 홈화면":
     # 1. 과거 데이터 엔진 (35일 전 ~ 어제) -> 캐시 1시간
     @st.cache_data(ttl=3600, max_entries=1, show_spinner=False)
     def load_historical_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        target_start = datetime.now().date() - timedelta(days=35)
-        yesterday = datetime.now().date() - timedelta(days=1)
+        latest_date = get_latest_market_open_date()
+        target_start = latest_date - timedelta(days=35)
+        yesterday = latest_date - timedelta(days=1)
         
         # OOM(Out of Memory) 방지를 위해 꼭 필요한 컬럼만 명시적으로 가져옵니다! (단, 스키마 일치를 위해 id 포함)
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
@@ -1429,9 +1456,9 @@ if choice == "🏠 홈화면":
 
     # 2. 당일 데이터 엔진 (오늘만) -> 세션 델타 기반 실시간 압축 엔진! (1분 OOM 프리징 완벽 해결)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 (클라우드 UTC와 로컬 PC의 시간차이 및 새벽 시간 데이터 없음 이슈 해결)
-        kst = datetime.utcnow() + timedelta(hours=9)
-        today_str = kst.strftime('%Y-%m-%d')
+        # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 후 가장 최근 영업일로 매핑
+        kst_date = (datetime.utcnow() + timedelta(hours=9)).date()
+        today_str = get_latest_market_open_date(kst_date).strftime('%Y-%m-%d')
         
         # 중복 제거를 위해 id 컬럼 추가
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
@@ -2051,7 +2078,7 @@ if choice == "🏠 홈화면":
     )
     
     # 날짜 연산을 위한 기준점 설정
-    today = datetime.now().date()
+    today = get_latest_market_open_date()
     if global_period == "당일 데이터만":
         start_date = today
     elif global_period == "최근 1주일 누적":
@@ -2982,12 +3009,13 @@ if choice == "🏠 홈화면":
                         start_dt = target_monday
                         end_dt = target_friday
                         
-                    if start_dt.date() > datetime.now().date():
+                    latest_date = get_latest_market_open_date()
+                    if start_dt.date() > latest_date:
                         st.warning("선택하신 기간은 아직 도래하지 않았습니다.")
                         st.stop()
                         
-                    if end_dt.date() > datetime.now().date():
-                        end_dt = datetime.now()
+                    if end_dt.date() > latest_date:
+                        end_dt = datetime.combine(latest_date, datetime.max.time())
                         
                     str_start = start_dt.strftime('%Y-%m-%d')
                     str_end = end_dt.strftime('%Y-%m-%d')
