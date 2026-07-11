@@ -1961,14 +1961,15 @@ if choice == "🏠 홈화면":
         cls_list = "btn-style-darkblue-sm-active" if is_list_active else "btn-style-darkblue-sm"
         st.markdown(f'<div class="{cls_list}"></div>', unsafe_allow_html=True)
         if st.button("실시간", key="btn_list_view", use_container_width=True):
-            st.session_state['pending_search'] = ""
-            st.session_state['scrn_select_radio'] = "체결 로그"
-            st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
-            st.session_state['upper_limit_filter'] = False
-            st.session_state['ignore_next_selection'] = True
-            import time
-            st.session_state['realtime_mount_id'] = time.time()
-            st.rerun()
+            if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != False:
+                st.session_state['pending_search'] = ""
+                st.session_state['scrn_select_radio'] = "체결 로그"
+                st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
+                st.session_state['upper_limit_filter'] = False
+                st.session_state['ignore_next_selection'] = True
+                import time
+                st.session_state['realtime_mount_id'] = time.time()
+                st.rerun()
     with btn_col2:
         cls_upper = "btn-style-blue-active" if is_upper_active else "btn-style-blue"
         st.markdown(f'<div class="{cls_upper}"></div>', unsafe_allow_html=True)
@@ -1979,14 +1980,15 @@ if choice == "🏠 홈화면":
                 time.sleep(1.5)
                 guest_msg.empty()
             else:
-                st.session_state['pending_search'] = ""
-                st.session_state['scrn_select_radio'] = "체결 로그"
-                st.session_state['log_fetch_limit'] = 500
-                st.session_state['upper_limit_filter'] = True
-                st.session_state['ignore_next_selection'] = True
-                import time
-                st.session_state['realtime_mount_id'] = time.time()
-                st.rerun()
+                if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != True:
+                    st.session_state['pending_search'] = ""
+                    st.session_state['scrn_select_radio'] = "체결 로그"
+                    st.session_state['log_fetch_limit'] = 500
+                    st.session_state['upper_limit_filter'] = True
+                    st.session_state['ignore_next_selection'] = True
+                    import time
+                    st.session_state['realtime_mount_id'] = time.time()
+                    st.rerun()
     with btn_col3:
         cls_return = "btn-style-purple-active" if is_return_active else "btn-style-purple"
         st.markdown(f'<div class="{cls_return}"></div>', unsafe_allow_html=True)
@@ -1997,8 +1999,9 @@ if choice == "🏠 홈화면":
                 time.sleep(1.5)
                 guest_msg.empty()
             else:
-                st.session_state['scrn_select_radio'] = "수익율 화면"
-                st.rerun()
+                if st.session_state.get('scrn_select_radio') != "수익율 화면":
+                    st.session_state['scrn_select_radio'] = "수익율 화면"
+                    st.rerun()
     with btn_col4:
         cls_top10 = "btn-style-red-active" if is_top10_active else "btn-style-red"
         st.markdown(f'<div class="{cls_top10}"></div>', unsafe_allow_html=True)
@@ -2009,8 +2012,9 @@ if choice == "🏠 홈화면":
                 time.sleep(1.5)
                 guest_msg.empty()
             else:
-                st.session_state['scrn_select_radio'] = "TOP 10 화면"
-                st.rerun()
+                if st.session_state.get('scrn_select_radio') != "TOP 10 화면":
+                    st.session_state['scrn_select_radio'] = "TOP 10 화면"
+                    st.rerun()
 
     is_radar_active = (current_scrn == "상선고 화면")
     if st.session_state.get('is_admin', False):
@@ -2019,14 +2023,16 @@ if choice == "🏠 홈화면":
             cls_radar = "btn-style-orange-active" if is_radar_active else "btn-style-orange"
             st.markdown(f'<div class="{cls_radar}"></div>', unsafe_allow_html=True)
             if st.button("상선고", key="btn_radar_orange", use_container_width=True):
-                st.session_state['scrn_select_radio'] = "상선고 화면"
-                st.rerun()
+                if st.session_state.get('scrn_select_radio') != "상선고 화면":
+                    st.session_state['scrn_select_radio'] = "상선고 화면"
+                    st.rerun()
         with btn_col6:
             cls_res1 = "btn-style-gray-active" if scrn_select == "기간 누적 폭주" else "btn-style-gray"
             st.markdown(f'<div class="{cls_res1}"></div>', unsafe_allow_html=True)
             if st.button("기폭주", key="btn_res1", use_container_width=True):
-                st.session_state['scrn_select_radio'] = "기간 누적 폭주"
-                st.rerun()
+                if st.session_state.get('scrn_select_radio') != "기간 누적 폭주":
+                    st.session_state['scrn_select_radio'] = "기간 누적 폭주"
+                    st.rerun()
         with btn_col7:
             st.markdown(f'<div class="btn-style-gray"></div>', unsafe_allow_html=True)
             if st.button("예비2", key="btn_res2", use_container_width=True): pass
