@@ -1917,7 +1917,7 @@ if choice == "🏠 홈화면":
         raw_search_keyword = st.text_input("종목명 검색", label_visibility="collapsed", placeholder="입력 후 엔터", key="search_input_val")
         if raw_search_keyword:
             if not st.session_state.get('authenticated', False):
-                guest_msg.error("🚫 정회원부터 검색할 수 있습니다.")
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
                 import time
                 time.sleep(1.5)
                 guest_msg.empty()
@@ -1940,7 +1940,7 @@ if choice == "🏠 홈화면":
         st.markdown('<div class="btn-style-darkblue"></div>', unsafe_allow_html=True)
         if st.button("🔍 엔터", use_container_width=True):
             if not st.session_state.get('authenticated', False):
-                guest_msg.error("🚫 정회원부터 검색할 수 있습니다.")
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
                 import time
                 time.sleep(1.5)
                 guest_msg.empty()
@@ -1974,7 +1974,7 @@ if choice == "🏠 홈화면":
         st.markdown(f'<div class="{cls_upper}"></div>', unsafe_allow_html=True)
         if st.button("상한가", key="btn_top10_blue", use_container_width=True):
             if not st.session_state.get('authenticated', False):
-                guest_msg.error("🚫 정회원부터 이용할 수 있습니다.")
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
                 import time
                 time.sleep(1.5)
                 guest_msg.empty()
@@ -1992,7 +1992,7 @@ if choice == "🏠 홈화면":
         st.markdown(f'<div class="{cls_return}"></div>', unsafe_allow_html=True)
         if st.button("수익율", key="btn_return_purple", use_container_width=True):
             if not st.session_state.get('authenticated', False):
-                guest_msg.error("🚫 정회원부터 이용할 수 있습니다.")
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
                 import time
                 time.sleep(1.5)
                 guest_msg.empty()
@@ -2004,7 +2004,7 @@ if choice == "🏠 홈화면":
         st.markdown(f'<div class="{cls_top10}"></div>', unsafe_allow_html=True)
         if st.button("TOP10", key="btn_top10_red", use_container_width=True):
             if not st.session_state.get('authenticated', False):
-                guest_msg.error("🚫 정회원부터 이용할 수 있습니다.")
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
                 import time
                 time.sleep(1.5)
                 guest_msg.empty()
