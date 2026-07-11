@@ -1454,7 +1454,8 @@ if choice == "🏠 홈화면":
         # 최대 15만 건으로 제한하여 Streamlit Cloud 서버가 뻗지 않도록 방어합니다. (기존 50만 건은 1GB RAM 초과 위험)
         return _fetch_from_supabase(query, 150000)
 
-    # 2. 당일 데이터 엔진 (오늘만) -> 세션 델타 기반 실시간 압축 엔진! (1분 OOM 프리징 완벽 해결)
+    # 2. 당일 데이터 엔진 (오늘만) -> 1분 캐시 적용하여 전체 데이터(최대 15만건) 로드
+    @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 후 가장 최근 영업일로 매핑
         kst_date = (datetime.utcnow() + timedelta(hours=9)).date()
@@ -1465,8 +1466,8 @@ if choice == "🏠 홈화면":
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         query = query.eq("date", today_str)
             
-        # 🚀 [서버 뻗음 방지] 첫 접속이나 갱신 시, 최신 5000건을 깔끔하게 가져옵니다. (델타 병합 시 발생하는 무한루프 및 뻗음 방지)
-        df = _fetch_from_supabase(query, 5000)
+        # 🚀 [서버 뻗음 방지 해결] 1분 단위 캐시를 적용하여 오늘 하루치 전체 데이터를 가볍게 가져옵니다.
+        df = _fetch_from_supabase(query, 150000)
         
         # 💡 만약 오늘(KST 기준) 데이터가 아직 한 건도 없다면 (새벽 시간이거나 주말/휴일인 경우)
         if df.empty:
