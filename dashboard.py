@@ -3563,7 +3563,8 @@ if choice == "🏠 홈화면":
             st.write(f"선택하신 기간 동안 세력들이 가장 강력하게 매집한 Top 10 종목입니다.")
             st.write("---")
             
-            hot_signals = get_accumulated_hot_signals(main_df)
+            with st.spinner("🚀 기간 누적 폭주 종목을 분석하고 있습니다... 잠시만 기다려주세요 (최대 1~2분 소요)"):
+                hot_signals = get_accumulated_hot_signals(main_df)
             
             if not hot_signals:
                 st.info(f"해당 기간({global_period}) 내에 파워 스코어 30점 이상의 폭주 종목이 없습니다.")
