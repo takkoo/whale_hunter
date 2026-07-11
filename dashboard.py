@@ -1183,6 +1183,9 @@ def draw_whale_bar_chart(target_code, target_name, df):
 # ------------------------------------------------------------------
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
+if 'guest_id' not in st.session_state:
+    import uuid
+    st.session_state['guest_id'] = f"guest_{uuid.uuid4().hex[:8]}"
 
 menu = ["🏠 홈화면"]
 if st.session_state['authenticated']:
@@ -1831,20 +1834,38 @@ if choice == "🏠 홈화면":
             line-height: 1 !important;
         }
         
-        /* 회색 예비 버튼 활성화 상태 (기폭주 등) */
-        div.element-container:has(.btn-style-gray-active) { display: none; }
-        div.element-container:has(.btn-style-gray-active) + div.element-container button { 
-            background-color: transparent !important;
-            border: 2px solid #FFA500 !important; /* 주황색 테두리로 강조 */
+        /* 기폭주 버튼 (붉은색) 스타일 */
+        div.element-container:has(.btn-style-red) { display: none; }
+        div.element-container:has(.btn-style-red) + div.element-container button { 
+            background-color: #ff4b4b !important; 
+            border: 1px solid #cc3c3c !important;
             padding-left: 4px !important; 
             padding-right: 4px !important; 
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-gray-active) + div.element-container button p { 
+        div.element-container:has(.btn-style-red) + div.element-container button p { 
             font-size: 13px !important; 
-            color: #FFA500 !important;
+            color: #ffffff !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+        
+        /* 기폭주 버튼 활성화 상태 */
+        div.element-container:has(.btn-style-red-active) { display: none; }
+        div.element-container:has(.btn-style-red-active) + div.element-container button { 
+            background-color: transparent !important;
+            border: 2px solid #ff4b4b !important;
+            padding-left: 4px !important; 
+            padding-right: 4px !important; 
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-red-active) + div.element-container button p { 
+            font-size: 13px !important; 
+            color: #ff4b4b !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
@@ -2055,7 +2076,7 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "상선고 화면"
                     st.rerun()
         with btn_col6:
-            cls_res1 = "btn-style-gray-active" if scrn_select == "기간 누적 폭주" else "btn-style-gray"
+            cls_res1 = "btn-style-red-active" if scrn_select == "기간 누적 폭주" else "btn-style-red"
             st.markdown(f'<div class="{cls_res1}"></div>', unsafe_allow_html=True)
             if st.button("기폭주", key="btn_res1", use_container_width=True):
                 if st.session_state.get('scrn_select_radio') != "기간 누적 폭주":
@@ -2932,13 +2953,15 @@ if choice == "🏠 홈화면":
                 m_date = m_date.replace(day=1)
                 month_options.append(m_date.strftime("%Y년 %m월"))
                 
-            radar_col1, radar_col2, radar_col3, radar_col_btn = st.columns([2, 1.5, 2, 1.2])
+            radar_col1, radar_col2, radar_col3, radar_col4, radar_col_btn = st.columns([1.5, 1.3, 2.0, 1.5, 1.2])
             with radar_col1:
                 radar_month = st.selectbox("📅 조회할 월 선택", month_options, key="radar_month")
             with radar_col2:
                 radar_week = st.selectbox("📆 주차 선택", ["월 전체", "전달+이달", "1주차", "2주차", "3주차", "4주차", "5주차"], index=1, key="radar_week")
             with radar_col3:
                 radar_filter = st.selectbox("🎯 종목 필터", ["순수 개별종목 (우선주/ETF 제외)", "전체 종목 포함"], key="radar_filter")
+            with radar_col4:
+                radar_cell_format = st.selectbox("🔠 셀 표시형식", ["크기와 금액", "금액"], index=1, key="radar_cell_format")
             
             with radar_col_btn:
                 st.html("""
@@ -3118,6 +3141,7 @@ if choice == "🏠 홈화면":
                             html_parts.append(f"""
                                     <tr>
                                         <td style="border-bottom: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock}">
+                                            <a href="javascript:void(0);" id="goto___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
                                             {stock} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
                                         </td>
                             """)
@@ -3132,7 +3156,8 @@ if choice == "🏠 홈화면":
                                     
                                 inner_html = ""
                                 if d in u_dates:
-                                    inner_html += '<div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(255, 255, 255, 0.4); font-size: 22px; font-family: sans-serif; font-weight: bold; pointer-events: none; z-index: 1;">上</div>'
+                                    img_b64 = "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"
+                                    inner_html += f'<div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 1.0; pointer-events: none; z-index: 1;"><img src="data:image/png;base64,{img_b64}" width="35" height="35" /></div>'
                                     
                                 if amt >= 30_000_000:
                                     # 3천만원 기준 5단계 절대 산출
@@ -3158,17 +3183,30 @@ if choice == "🏠 홈화면":
                                     
                                     if d in u_dates:
                                         # 상한가 날(빨간 배경)에서는 글씨를 더 찐하게(테두리 강조) 처리
-                                        text_style = "color: #FFD700; font-size: 10.5px; font-weight: 900; line-height: 1; letter-spacing: -0.5px; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 2px 2px 2px #000;"
+                                        if radar_cell_format == "금액":
+                                            text_style = "color: #FFD700; font-size: 13px; font-weight: 900; line-height: 1; letter-spacing: -0.5px; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 2px 2px 2px #000;"
+                                        else:
+                                            text_style = "color: #FFD700; font-size: 10.5px; font-weight: 900; line-height: 1; letter-spacing: -0.5px; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 2px 2px 2px #000;"
                                     else:
                                         # 일반 날짜
-                                        text_style = "color: #FFA500; font-size: 10.5px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;"
+                                        if radar_cell_format == "금액":
+                                            text_style = "color: #FFA500; font-size: 13px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;"
+                                        else:
+                                            text_style = "color: #FFA500; font-size: 10.5px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;"
                                         
-                                    inner_html += f"""
-                                    <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2;" title="{amt_억:.1f}억 (Lv.{level})">
-                                        <div style="width: 25%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
-                                        <div style="position: absolute; bottom: 1px; left: 26%; {text_style}">{amt_str}</div>
-                                    </div>
-                                    """
+                                    if radar_cell_format == "금액":
+                                        inner_html += f"""
+                                        <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2; display: flex; align-items: center; justify-content: center;" title="{amt_억:.1f}억 (Lv.{level})">
+                                            <div style="{text_style}">{amt_str}</div>
+                                        </div>
+                                        """
+                                    else:
+                                        inner_html += f"""
+                                        <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2;" title="{amt_억:.1f}억 (Lv.{level})">
+                                            <div style="width: 25%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
+                                            <div style="position: absolute; bottom: 1px; left: 26%; {text_style}">{amt_str}</div>
+                                        </div>
+                                        """
                                     
                                 html_parts.append(f"""
                                         <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
@@ -3191,13 +3229,19 @@ if choice == "🏠 홈화면":
                         
                         if clicked and st.session_state.get("last_mock_clicked") != clicked:
                             st.session_state["last_mock_clicked"] = clicked
-                            # clicked is like "종목명___2026-06-29"
-                            stock, date_str = clicked.split("___")
-                            st.session_state['show_mock_dialog'] = {
-                                "stock": stock,
-                                "date": date_str
-                            }
-                            st.rerun()
+                            
+                            if clicked.startswith("goto___"):
+                                stock = clicked.split("___")[1]
+                                st.session_state['pending_search'] = stock
+                                st.session_state['scrn_select_radio'] = "시계열 추적"
+                                st.rerun()
+                            else:
+                                stock, date_str = clicked.split("___")
+                                st.session_state['show_mock_dialog'] = {
+                                    "stock": stock,
+                                    "date": date_str
+                                }
+                                st.rerun()
 
                 
         elif scrn_select == "수익율 자랑":
@@ -3417,15 +3461,17 @@ if choice == "🏠 홈화면":
                         
                         likes = post.get('likes_count') or 0
                         liked_users = post.get('liked_users') or []
-                        has_liked = st.session_state['current_user'] in liked_users
+                        curr_user = st.session_state.get('current_user', st.session_state.get('guest_id', 'Guest'))
+                        is_auth = st.session_state.get('authenticated', False)
+                        has_liked = (curr_user in liked_users)
                         
                         like_btn_text = f"❤️ {likes}" if has_liked else f"🤍 {likes}"
                         
                         with cols[0]:
-                            st.button(like_btn_text, key=f"like_{post['id']}", use_container_width=True, on_click=cb_toggle_like, args=(post['id'], likes, liked_users, st.session_state['current_user'], has_liked))
+                            st.button(like_btn_text, key=f"like_{post['id']}", use_container_width=True, on_click=cb_toggle_like, args=(post['id'], likes, liked_users, curr_user, has_liked))
                                 
                         idx = 1
-                        if st.session_state['current_user'] == post['author']:
+                        if is_auth and curr_user == post.get('author', ''):
                             if not is_editing:
                                 with cols[idx]:
                                     st.button("✏️ 수정", key=f"edit_{post['id']}", use_container_width=True, on_click=cb_toggle_edit, args=(edit_key, f"edit_text_{post['id']}", post.get('content', '')))
