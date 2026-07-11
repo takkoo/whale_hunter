@@ -1914,14 +1914,19 @@ if choice == "🏠 홈화면":
     with search_col1:
         raw_search_keyword = st.text_input("종목명 검색", label_visibility="collapsed", placeholder="입력 후 엔터", key="search_input_val")
         if raw_search_keyword:
-            sk = raw_search_keyword.replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
-            search_keyword = sk.replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
-            
-            # 검색어가 새롭게 입력된 경우 무조건 시계열 화면으로 강제 이동
-            if st.session_state.get('last_search_keyword') != search_keyword:
-                st.session_state['last_search_keyword'] = search_keyword
-                st.session_state['scrn_select_radio'] = "체결 로그"
-                st.rerun()
+            if not st.session_state.get('authenticated', False):
+                st.toast("정회원부터 검색할 수 있습니다.", icon="🚫")
+                search_keyword = ""
+                st.session_state['last_search_keyword'] = ""
+            else:
+                sk = raw_search_keyword.replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
+                search_keyword = sk.replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
+                
+                # 검색어가 새롭게 입력된 경우 무조건 시계열 화면으로 강제 이동
+                if st.session_state.get('last_search_keyword') != search_keyword:
+                    st.session_state['last_search_keyword'] = search_keyword
+                    st.session_state['scrn_select_radio'] = "체결 로그"
+                    st.rerun()
         else:
             search_keyword = ""
             st.session_state['last_search_keyword'] = ""
@@ -1929,9 +1934,12 @@ if choice == "🏠 홈화면":
     with search_col2:
         st.markdown('<div class="btn-style-darkblue"></div>', unsafe_allow_html=True)
         if st.button("🔍 엔터", use_container_width=True):
-            if search_keyword:
-                st.session_state['scrn_select_radio'] = "체결 로그"
-                st.rerun()
+            if not st.session_state.get('authenticated', False):
+                st.toast("정회원부터 검색할 수 있습니다.", icon="🚫")
+            else:
+                if search_keyword:
+                    st.session_state['scrn_select_radio'] = "체결 로그"
+                    st.rerun()
             
     # 현재 어떤 버튼이 활성화되어 있는지 상태 확인
     current_scrn = st.session_state.get('scrn_select_radio', "체결 로그")
@@ -1953,11 +1961,13 @@ if choice == "🏠 홈화면":
             import time
             st.session_state['realtime_mount_id'] = time.time()
             st.rerun()
-    if st.session_state.get('authenticated', False):
-        with btn_col2:
-            cls_upper = "btn-style-blue-active" if is_upper_active else "btn-style-blue"
-            st.markdown(f'<div class="{cls_upper}"></div>', unsafe_allow_html=True)
-            if st.button("상한가", key="btn_top10_blue", use_container_width=True):
+    with btn_col2:
+        cls_upper = "btn-style-blue-active" if is_upper_active else "btn-style-blue"
+        st.markdown(f'<div class="{cls_upper}"></div>', unsafe_allow_html=True)
+        if st.button("상한가", key="btn_top10_blue", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                st.toast("정회원부터 이용할 수 있습니다.", icon="🚫")
+            else:
                 st.session_state['pending_search'] = ""
                 st.session_state['scrn_select_radio'] = "체결 로그"
                 st.session_state['log_fetch_limit'] = 500
@@ -1966,16 +1976,22 @@ if choice == "🏠 홈화면":
                 import time
                 st.session_state['realtime_mount_id'] = time.time()
                 st.rerun()
-        with btn_col3:
-            cls_return = "btn-style-purple-active" if is_return_active else "btn-style-purple"
-            st.markdown(f'<div class="{cls_return}"></div>', unsafe_allow_html=True)
-            if st.button("수익율", key="btn_return_purple", use_container_width=True):
+    with btn_col3:
+        cls_return = "btn-style-purple-active" if is_return_active else "btn-style-purple"
+        st.markdown(f'<div class="{cls_return}"></div>', unsafe_allow_html=True)
+        if st.button("수익율", key="btn_return_purple", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                st.toast("정회원부터 이용할 수 있습니다.", icon="🚫")
+            else:
                 st.session_state['scrn_select_radio'] = "수익율 화면"
                 st.rerun()
-        with btn_col4:
-            cls_top10 = "btn-style-red-active" if is_top10_active else "btn-style-red"
-            st.markdown(f'<div class="{cls_top10}"></div>', unsafe_allow_html=True)
-            if st.button("TOP10", key="btn_top10_red", use_container_width=True):
+    with btn_col4:
+        cls_top10 = "btn-style-red-active" if is_top10_active else "btn-style-red"
+        st.markdown(f'<div class="{cls_top10}"></div>', unsafe_allow_html=True)
+        if st.button("TOP10", key="btn_top10_red", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                st.toast("정회원부터 이용할 수 있습니다.", icon="🚫")
+            else:
                 st.session_state['scrn_select_radio'] = "TOP 10 화면"
                 st.rerun()
 
