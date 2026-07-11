@@ -1439,7 +1439,7 @@ if choice == "🏠 홈화면":
         return query
 
     # 1. 과거 데이터 엔진 (35일 전 ~ 어제) -> 캐시 1시간
-    @st.cache_data(ttl=3600, max_entries=1, show_spinner=False)
+    @st.cache_data(ttl=3600, max_entries=1, show_spinner="⏳ 클라우드에서 대규모 과거 데이터를 불러오는 중입니다...")
     def load_historical_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         latest_date = get_latest_market_open_date()
         target_start = latest_date - timedelta(days=35)
