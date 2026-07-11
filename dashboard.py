@@ -3098,11 +3098,14 @@ if choice == "🏠 홈화면":
                         if not whale_df.empty:
                             whale_df = whale_df[whale_df['side'] == '매수'].copy()
                             whale_df['amount_krw'] = pd.to_numeric(whale_df['amount_krw'], errors='coerce').fillna(0)
-                            grouped = whale_df.groupby(['name', 'date'])['amount_krw'].sum().reset_index()
+                            grouped = whale_df.groupby(['name', 'date']).agg(
+                                amount_krw=('amount_krw', 'sum'),
+                                cnt=('amount_krw', 'count')
+                            ).reset_index()
                             for _, row in grouped.iterrows():
                                 if row['name'] not in daily_whale:
                                     daily_whale[row['name']] = {}
-                                daily_whale[row['name']][row['date']] = row['amount_krw']
+                                daily_whale[row['name']][row['date']] = {'amt': row['amount_krw'], 'cnt': row['cnt']}
                         
                         # 5. HTML/SVG 표 렌더링 준비
                         html_parts = []
@@ -3151,8 +3154,10 @@ if choice == "🏠 홈화면":
                                 border_style = "border-bottom: 1px solid #333; border-right: 1px solid #333;"
                                 
                                 amt = 0
+                                cnt = 0
                                 if stock in daily_whale and d in daily_whale[stock]:
-                                    amt = daily_whale[stock][d]
+                                    amt = daily_whale[stock][d]['amt']
+                                    cnt = daily_whale[stock][d]['cnt']
                                     
                                 inner_html = ""
                                 if d in u_dates:
@@ -3210,7 +3215,7 @@ if choice == "🏠 홈화면":
                                     
                                 html_parts.append(f"""
                                         <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
-                                            <a href="javascript:void(0);" id="{stock}___{d}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="클릭하여 해당 날짜의 가상 데이터 입력">
+                                            <a href="javascript:void(0);" id="{stock}___{d}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
                                                 {inner_html}
                                             </a>
                                         </td>
