@@ -1834,20 +1834,38 @@ if choice == "🏠 홈화면":
             line-height: 1 !important;
         }
         
-        /* 회색 예비 버튼 활성화 상태 (기폭주 등) */
-        div.element-container:has(.btn-style-gray-active) { display: none; }
-        div.element-container:has(.btn-style-gray-active) + div.element-container button { 
-            background-color: transparent !important;
-            border: 2px solid #FFA500 !important; /* 주황색 테두리로 강조 */
+        /* 기폭주 버튼 (붉은색) 스타일 */
+        div.element-container:has(.btn-style-red) { display: none; }
+        div.element-container:has(.btn-style-red) + div.element-container button { 
+            background-color: #ff4b4b !important; 
+            border: 1px solid #cc3c3c !important;
             padding-left: 4px !important; 
             padding-right: 4px !important; 
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-gray-active) + div.element-container button p { 
+        div.element-container:has(.btn-style-red) + div.element-container button p { 
             font-size: 13px !important; 
-            color: #FFA500 !important;
+            color: #ffffff !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+        
+        /* 기폭주 버튼 활성화 상태 */
+        div.element-container:has(.btn-style-red-active) { display: none; }
+        div.element-container:has(.btn-style-red-active) + div.element-container button { 
+            background-color: transparent !important;
+            border: 2px solid #ff4b4b !important;
+            padding-left: 4px !important; 
+            padding-right: 4px !important; 
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-red-active) + div.element-container button p { 
+            font-size: 13px !important; 
+            color: #ff4b4b !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
@@ -2058,7 +2076,7 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "상선고 화면"
                     st.rerun()
         with btn_col6:
-            cls_res1 = "btn-style-gray-active" if scrn_select == "기간 누적 폭주" else "btn-style-gray"
+            cls_res1 = "btn-style-red-active" if scrn_select == "기간 누적 폭주" else "btn-style-red"
             st.markdown(f'<div class="{cls_res1}"></div>', unsafe_allow_html=True)
             if st.button("기폭주", key="btn_res1", use_container_width=True):
                 if st.session_state.get('scrn_select_radio') != "기간 누적 폭주":
