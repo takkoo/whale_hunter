@@ -2953,13 +2953,15 @@ if choice == "🏠 홈화면":
                 m_date = m_date.replace(day=1)
                 month_options.append(m_date.strftime("%Y년 %m월"))
                 
-            radar_col1, radar_col2, radar_col3, radar_col_btn = st.columns([2, 1.5, 2, 1.2])
+            radar_col1, radar_col2, radar_col3, radar_col4, radar_col_btn = st.columns([1.5, 1.3, 2.0, 1.5, 1.2])
             with radar_col1:
                 radar_month = st.selectbox("📅 조회할 월 선택", month_options, key="radar_month")
             with radar_col2:
                 radar_week = st.selectbox("📆 주차 선택", ["월 전체", "전달+이달", "1주차", "2주차", "3주차", "4주차", "5주차"], index=1, key="radar_week")
             with radar_col3:
                 radar_filter = st.selectbox("🎯 종목 필터", ["순수 개별종목 (우선주/ETF 제외)", "전체 종목 포함"], key="radar_filter")
+            with radar_col4:
+                radar_cell_format = st.selectbox("🔠 셀 표시형식", ["크기와 금액", "금액"], key="radar_cell_format")
             
             with radar_col_btn:
                 st.html("""
@@ -3179,17 +3181,30 @@ if choice == "🏠 홈화면":
                                     
                                     if d in u_dates:
                                         # 상한가 날(빨간 배경)에서는 글씨를 더 찐하게(테두리 강조) 처리
-                                        text_style = "color: #FFD700; font-size: 10.5px; font-weight: 900; line-height: 1; letter-spacing: -0.5px; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 2px 2px 2px #000;"
+                                        if radar_cell_format == "금액":
+                                            text_style = "color: #FFD700; font-size: 13px; font-weight: 900; line-height: 1; letter-spacing: -0.5px; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 2px 2px 2px #000;"
+                                        else:
+                                            text_style = "color: #FFD700; font-size: 10.5px; font-weight: 900; line-height: 1; letter-spacing: -0.5px; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 2px 2px 2px #000;"
                                     else:
                                         # 일반 날짜
-                                        text_style = "color: #FFA500; font-size: 10.5px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;"
+                                        if radar_cell_format == "금액":
+                                            text_style = "color: #FFA500; font-size: 13px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;"
+                                        else:
+                                            text_style = "color: #FFA500; font-size: 10.5px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;"
                                         
-                                    inner_html += f"""
-                                    <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2;" title="{amt_억:.1f}억 (Lv.{level})">
-                                        <div style="width: 25%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
-                                        <div style="position: absolute; bottom: 1px; left: 26%; {text_style}">{amt_str}</div>
-                                    </div>
-                                    """
+                                    if radar_cell_format == "금액":
+                                        inner_html += f"""
+                                        <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2; display: flex; align-items: center; justify-content: center;" title="{amt_억:.1f}억 (Lv.{level})">
+                                            <div style="{text_style}">{amt_str}</div>
+                                        </div>
+                                        """
+                                    else:
+                                        inner_html += f"""
+                                        <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2;" title="{amt_억:.1f}억 (Lv.{level})">
+                                            <div style="width: 25%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
+                                            <div style="position: absolute; bottom: 1px; left: 26%; {text_style}">{amt_str}</div>
+                                        </div>
+                                        """
                                     
                                 html_parts.append(f"""
                                         <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
@@ -3212,13 +3227,19 @@ if choice == "🏠 홈화면":
                         
                         if clicked and st.session_state.get("last_mock_clicked") != clicked:
                             st.session_state["last_mock_clicked"] = clicked
-                            # clicked is like "종목명___2026-06-29"
-                            stock, date_str = clicked.split("___")
-                            st.session_state['show_mock_dialog'] = {
-                                "stock": stock,
-                                "date": date_str
-                            }
-                            st.rerun()
+                            
+                            if clicked.startswith("goto___"):
+                                stock = clicked.split("___")[1]
+                                st.session_state['pending_search'] = stock
+                                st.session_state['scrn_select_radio'] = "시계열 추적"
+                                st.rerun()
+                            else:
+                                stock, date_str = clicked.split("___")
+                                st.session_state['show_mock_dialog'] = {
+                                    "stock": stock,
+                                    "date": date_str
+                                }
+                                st.rerun()
 
                 
         elif scrn_select == "수익율 자랑":
