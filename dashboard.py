@@ -3417,15 +3417,21 @@ if choice == "🏠 홈화면":
                         
                         likes = post.get('likes_count') or 0
                         liked_users = post.get('liked_users') or []
-                        has_liked = st.session_state['current_user'] in liked_users
+                        curr_user = st.session_state.get('current_user', '')
+                        is_auth = st.session_state.get('authenticated', False)
+                        has_liked = is_auth and (curr_user in liked_users)
                         
                         like_btn_text = f"❤️ {likes}" if has_liked else f"🤍 {likes}"
                         
                         with cols[0]:
-                            st.button(like_btn_text, key=f"like_{post['id']}", use_container_width=True, on_click=cb_toggle_like, args=(post['id'], likes, liked_users, st.session_state['current_user'], has_liked))
+                            if is_auth:
+                                st.button(like_btn_text, key=f"like_{post['id']}", use_container_width=True, on_click=cb_toggle_like, args=(post['id'], likes, liked_users, curr_user, has_liked))
+                            else:
+                                if st.button(like_btn_text, key=f"like_{post['id']}", use_container_width=True):
+                                    st.warning("🚫 정회원만 이용할 수 있습니다.")
                                 
                         idx = 1
-                        if st.session_state['current_user'] == post['author']:
+                        if is_auth and curr_user == post.get('author', ''):
                             if not is_editing:
                                 with cols[idx]:
                                     st.button("✏️ 수정", key=f"edit_{post['id']}", use_container_width=True, on_click=cb_toggle_edit, args=(edit_key, f"edit_text_{post['id']}", post.get('content', '')))
