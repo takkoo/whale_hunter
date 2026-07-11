@@ -3095,6 +3095,10 @@ if choice == "🏠 홈화면":
                                 if stock in daily_whale and d in daily_whale[stock]:
                                     amt = daily_whale[stock][d]
                                     
+                                inner_html = ""
+                                if d in u_dates:
+                                    inner_html += '<div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(255, 255, 255, 0.4); font-size: 22px; font-family: sans-serif; font-weight: bold; pointer-events: none; z-index: 1;">上</div>'
+                                    
                                 if amt >= 30_000_000:
                                     # 3천만원 기준 5단계 절대 산출
                                     if amt >= 1_000_000_000:
@@ -3108,20 +3112,25 @@ if choice == "🏠 홈화면":
                                     else:
                                         level = 1
                                         
-                                    y_top = 100 - (level * 20)
+                                    if amt >= 100_000_000_000:
+                                        amt_str = f"{amt / 100_000_000_000:.1f}천억"
+                                    elif amt >= 10_000_000_000:
+                                        amt_str = f"{amt / 10_000_000_000:.1f}백억"
+                                    else:
+                                        amt_str = f"{amt / 100_000_000:.1f}억"
+                                        
                                     amt_억 = amt / 100_000_000
-                                    svg_html = f"""
-                                    <div style="width:100%; height:40px; position:relative;" title="{amt_억:.1f}억 (Lv.{level})">
-                                        <div style="width: 100%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
+                                    inner_html += f"""
+                                    <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2;" title="{amt_억:.1f}억 (Lv.{level})">
+                                        <div style="width: 25%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
+                                        <div style="position: absolute; bottom: 1px; left: 26%; color: #FFA500; font-size: 10.5px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;">{amt_str}</div>
                                     </div>
                                     """
-                                else:
-                                    svg_html = ""
                                     
                                 html_parts.append(f"""
-                                        <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; vertical-align: bottom;">
-                                            <a href="javascript:void(0);" id="{stock}___{d}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer;" title="클릭하여 해당 날짜의 가상 데이터 입력">
-                                                {svg_html}
+                                        <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
+                                            <a href="javascript:void(0);" id="{stock}___{d}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="클릭하여 해당 날짜의 가상 데이터 입력">
+                                                {inner_html}
                                             </a>
                                         </td>
                                 """)
