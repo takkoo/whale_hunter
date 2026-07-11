@@ -3197,7 +3197,7 @@ if choice == "🏠 홈화면":
                 st.session_state["show_brag_form"] = False
 
             # 🚨 [신규 튜닝]: expander 대신 명시적인 버튼을 사용하여 사용자 혼동 방지
-            btn_label = "글쓰기 창 닫기 ❌" if st.session_state["show_brag_form"] else "📝 자랑글 쓰기"
+            btn_label = "글쓰기 창 닫기 ❌" if st.session_state["show_brag_form"] else "📝 글 쓰기"
             is_auth = st.session_state.get("authenticated", False)
             
             if st.button(btn_label, use_container_width=False, disabled=not is_auth, help="로그인 후 자랑글을 작성할 수 있습니다." if not is_auth else None):
