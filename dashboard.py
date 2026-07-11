@@ -242,6 +242,32 @@ def is_market_open_now():
         
     return True
 
+def get_latest_market_open_date(base_date=None):
+    if base_date is None:
+        target = datetime.now()
+    else:
+        # datetime 객체가 아니라 date 객체면 변환
+        if not hasattr(base_date, 'time'):
+            target = datetime.combine(base_date, datetime.min.time())
+        else:
+            target = base_date
+            
+    # 오전 9시 전이면 아직 오늘 장이 안 열렸으므로 전날로 기준을 옮김 (평일이더라도)
+    if target.time() < datetime.strptime("09:00", "%H:%M").time():
+        target -= timedelta(days=1)
+        
+    holidays = get_market_holidays()
+    
+    while True:
+        if target.weekday() >= 5: # 5: 토, 6: 일
+            target -= timedelta(days=1)
+            continue
+        if target.strftime('%Y-%m-%d') in holidays:
+            target -= timedelta(days=1)
+            continue
+        break
+    return target.date()
+
 def render_profile_edit_panel(user_data, current_id, db_phone):
     st.subheader("📝 관제사 자격 정보 정비")
     st.write("---")
@@ -1022,7 +1048,7 @@ def draw_whale_bar_chart(target_code, target_name, df):
     # =========================================================================
     # 🚨 [신규 튜닝]: 오늘 기준 과거 30일 치 '빈 달력 뼈대' 만들기
     # =========================================================================
-    today = datetime.now().date()
+    today = get_latest_market_open_date()
     # 최근 30일 날짜 리스트 생성
     date_list = [today - timedelta(days=x) for x in range(30)]
     
@@ -1413,10 +1439,11 @@ if choice == "🏠 홈화면":
         return query
 
     # 1. 과거 데이터 엔진 (35일 전 ~ 어제) -> 캐시 1시간
-    @st.cache_data(ttl=3600, max_entries=1, show_spinner=False)
+    @st.cache_data(ttl=3600, max_entries=1, show_spinner="⏳ 클라우드에서 대규모 과거 데이터를 불러오는 중입니다...")
     def load_historical_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        target_start = datetime.now().date() - timedelta(days=35)
-        yesterday = datetime.now().date() - timedelta(days=1)
+        latest_date = get_latest_market_open_date()
+        target_start = latest_date - timedelta(days=35)
+        yesterday = latest_date - timedelta(days=1)
         
         # OOM(Out of Memory) 방지를 위해 꼭 필요한 컬럼만 명시적으로 가져옵니다! (단, 스키마 일치를 위해 id 포함)
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
@@ -1427,19 +1454,20 @@ if choice == "🏠 홈화면":
         # 최대 15만 건으로 제한하여 Streamlit Cloud 서버가 뻗지 않도록 방어합니다. (기존 50만 건은 1GB RAM 초과 위험)
         return _fetch_from_supabase(query, 150000)
 
-    # 2. 당일 데이터 엔진 (오늘만) -> 세션 델타 기반 실시간 압축 엔진! (1분 OOM 프리징 완벽 해결)
+    # 2. 당일 데이터 엔진 (오늘만) -> 1분 캐시 적용하여 전체 데이터(최대 15만건) 로드
+    @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 (클라우드 UTC와 로컬 PC의 시간차이 및 새벽 시간 데이터 없음 이슈 해결)
-        kst = datetime.utcnow() + timedelta(hours=9)
-        today_str = kst.strftime('%Y-%m-%d')
+        # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 후 가장 최근 영업일로 매핑
+        kst_date = (datetime.utcnow() + timedelta(hours=9)).date()
+        today_str = get_latest_market_open_date(kst_date).strftime('%Y-%m-%d')
         
         # 중복 제거를 위해 id 컬럼 추가
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
         query = _apply_common_filters(query, asset_type, market_type, show_closing_auction)
         query = query.eq("date", today_str)
             
-        # 🚀 [서버 뻗음 방지] 첫 접속이나 갱신 시, 최신 5000건을 깔끔하게 가져옵니다. (델타 병합 시 발생하는 무한루프 및 뻗음 방지)
-        df = _fetch_from_supabase(query, 5000)
+        # 🚀 [서버 뻗음 방지 해결] 1분 단위 캐시를 적용하여 오늘 하루치 전체 데이터를 가볍게 가져옵니다.
+        df = _fetch_from_supabase(query, 150000)
         
         # 💡 만약 오늘(KST 기준) 데이터가 아직 한 건도 없다면 (새벽 시간이거나 주말/휴일인 경우)
         if df.empty:
@@ -1909,19 +1937,29 @@ if choice == "🏠 홈화면":
             color: #FF1493 !important;
         }
     </style>""", unsafe_allow_html=True)
+    
+    guest_msg = st.sidebar.empty()
 
     search_col1, search_col2 = st.sidebar.columns([2, 1])
     with search_col1:
         raw_search_keyword = st.text_input("종목명 검색", label_visibility="collapsed", placeholder="입력 후 엔터", key="search_input_val")
         if raw_search_keyword:
-            sk = raw_search_keyword.replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
-            search_keyword = sk.replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
-            
-            # 검색어가 새롭게 입력된 경우 무조건 시계열 화면으로 강제 이동
-            if st.session_state.get('last_search_keyword') != search_keyword:
-                st.session_state['last_search_keyword'] = search_keyword
-                st.session_state['scrn_select_radio'] = "체결 로그"
-                st.rerun()
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+                search_keyword = ""
+                st.session_state['last_search_keyword'] = ""
+            else:
+                sk = raw_search_keyword.replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
+                search_keyword = sk.replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
+                
+                # 검색어가 새롭게 입력된 경우 무조건 시계열 화면으로 강제 이동
+                if st.session_state.get('last_search_keyword') != search_keyword:
+                    st.session_state['last_search_keyword'] = search_keyword
+                    st.session_state['scrn_select_radio'] = "체결 로그"
+                    st.rerun()
         else:
             search_keyword = ""
             st.session_state['last_search_keyword'] = ""
@@ -1929,9 +1967,15 @@ if choice == "🏠 홈화면":
     with search_col2:
         st.markdown('<div class="btn-style-darkblue"></div>', unsafe_allow_html=True)
         if st.button("🔍 엔터", use_container_width=True):
-            if search_keyword:
-                st.session_state['scrn_select_radio'] = "체결 로그"
-                st.rerun()
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if search_keyword:
+                    st.session_state['scrn_select_radio'] = "체결 로그"
+                    st.rerun()
             
     # 현재 어떤 버튼이 활성화되어 있는지 상태 확인
     current_scrn = st.session_state.get('scrn_select_radio', "체결 로그")
@@ -1945,39 +1989,60 @@ if choice == "🏠 홈화면":
         cls_list = "btn-style-darkblue-sm-active" if is_list_active else "btn-style-darkblue-sm"
         st.markdown(f'<div class="{cls_list}"></div>', unsafe_allow_html=True)
         if st.button("실시간", key="btn_list_view", use_container_width=True):
-            st.session_state['pending_search'] = ""
-            st.session_state['scrn_select_radio'] = "체결 로그"
-            st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
-            st.session_state['upper_limit_filter'] = False
-            st.session_state['ignore_next_selection'] = True
-            import time
-            st.session_state['realtime_mount_id'] = time.time()
-            st.rerun()
-    if st.session_state.get('authenticated', False):
-        with btn_col2:
-            cls_upper = "btn-style-blue-active" if is_upper_active else "btn-style-blue"
-            st.markdown(f'<div class="{cls_upper}"></div>', unsafe_allow_html=True)
-            if st.button("상한가", key="btn_top10_blue", use_container_width=True):
+            if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != False:
                 st.session_state['pending_search'] = ""
                 st.session_state['scrn_select_radio'] = "체결 로그"
-                st.session_state['log_fetch_limit'] = 500
-                st.session_state['upper_limit_filter'] = True
+                st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
+                st.session_state['upper_limit_filter'] = False
                 st.session_state['ignore_next_selection'] = True
                 import time
                 st.session_state['realtime_mount_id'] = time.time()
                 st.rerun()
-        with btn_col3:
-            cls_return = "btn-style-purple-active" if is_return_active else "btn-style-purple"
-            st.markdown(f'<div class="{cls_return}"></div>', unsafe_allow_html=True)
-            if st.button("수익율", key="btn_return_purple", use_container_width=True):
-                st.session_state['scrn_select_radio'] = "수익율 화면"
-                st.rerun()
-        with btn_col4:
-            cls_top10 = "btn-style-red-active" if is_top10_active else "btn-style-red"
-            st.markdown(f'<div class="{cls_top10}"></div>', unsafe_allow_html=True)
-            if st.button("TOP10", key="btn_top10_red", use_container_width=True):
-                st.session_state['scrn_select_radio'] = "TOP 10 화면"
-                st.rerun()
+    with btn_col2:
+        cls_upper = "btn-style-blue-active" if is_upper_active else "btn-style-blue"
+        st.markdown(f'<div class="{cls_upper}"></div>', unsafe_allow_html=True)
+        if st.button("상한가", key="btn_top10_blue", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != True:
+                    st.session_state['pending_search'] = ""
+                    st.session_state['scrn_select_radio'] = "체결 로그"
+                    st.session_state['log_fetch_limit'] = 500
+                    st.session_state['upper_limit_filter'] = True
+                    st.session_state['ignore_next_selection'] = True
+                    import time
+                    st.session_state['realtime_mount_id'] = time.time()
+                    st.rerun()
+    with btn_col3:
+        cls_return = "btn-style-purple-active" if is_return_active else "btn-style-purple"
+        st.markdown(f'<div class="{cls_return}"></div>', unsafe_allow_html=True)
+        if st.button("수익율", key="btn_return_purple", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if st.session_state.get('scrn_select_radio') != "수익율 화면":
+                    st.session_state['scrn_select_radio'] = "수익율 화면"
+                    st.rerun()
+    with btn_col4:
+        cls_top10 = "btn-style-red-active" if is_top10_active else "btn-style-red"
+        st.markdown(f'<div class="{cls_top10}"></div>', unsafe_allow_html=True)
+        if st.button("TOP10", key="btn_top10_red", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if st.session_state.get('scrn_select_radio') != "TOP 10 화면":
+                    st.session_state['scrn_select_radio'] = "TOP 10 화면"
+                    st.rerun()
 
     is_radar_active = (current_scrn == "상선고 화면")
     if st.session_state.get('is_admin', False):
@@ -1986,14 +2051,16 @@ if choice == "🏠 홈화면":
             cls_radar = "btn-style-orange-active" if is_radar_active else "btn-style-orange"
             st.markdown(f'<div class="{cls_radar}"></div>', unsafe_allow_html=True)
             if st.button("상선고", key="btn_radar_orange", use_container_width=True):
-                st.session_state['scrn_select_radio'] = "상선고 화면"
-                st.rerun()
+                if st.session_state.get('scrn_select_radio') != "상선고 화면":
+                    st.session_state['scrn_select_radio'] = "상선고 화면"
+                    st.rerun()
         with btn_col6:
             cls_res1 = "btn-style-gray-active" if scrn_select == "기간 누적 폭주" else "btn-style-gray"
             st.markdown(f'<div class="{cls_res1}"></div>', unsafe_allow_html=True)
             if st.button("기폭주", key="btn_res1", use_container_width=True):
-                st.session_state['scrn_select_radio'] = "기간 누적 폭주"
-                st.rerun()
+                if st.session_state.get('scrn_select_radio') != "기간 누적 폭주":
+                    st.session_state['scrn_select_radio'] = "기간 누적 폭주"
+                    st.rerun()
         with btn_col7:
             st.markdown(f'<div class="btn-style-gray"></div>', unsafe_allow_html=True)
             if st.button("예비2", key="btn_res2", use_container_width=True): pass
@@ -2012,7 +2079,7 @@ if choice == "🏠 홈화면":
     )
     
     # 날짜 연산을 위한 기준점 설정
-    today = datetime.now().date()
+    today = get_latest_market_open_date()
     if global_period == "당일 데이터만":
         start_date = today
     elif global_period == "최근 1주일 누적":
@@ -2869,7 +2936,7 @@ if choice == "🏠 홈화면":
             with radar_col1:
                 radar_month = st.selectbox("📅 조회할 월 선택", month_options, key="radar_month")
             with radar_col2:
-                radar_week = st.selectbox("📆 주차 선택", ["월 전체", "전달+이달", "1주차", "2주차", "3주차", "4주차", "5주차"], key="radar_week")
+                radar_week = st.selectbox("📆 주차 선택", ["월 전체", "전달+이달", "1주차", "2주차", "3주차", "4주차", "5주차"], index=1, key="radar_week")
             with radar_col3:
                 radar_filter = st.selectbox("🎯 종목 필터", ["순수 개별종목 (우선주/ETF 제외)", "전체 종목 포함"], key="radar_filter")
             
@@ -2943,12 +3010,13 @@ if choice == "🏠 홈화면":
                         start_dt = target_monday
                         end_dt = target_friday
                         
-                    if start_dt.date() > datetime.now().date():
+                    latest_date = get_latest_market_open_date()
+                    if start_dt.date() > latest_date:
                         st.warning("선택하신 기간은 아직 도래하지 않았습니다.")
                         st.stop()
                         
-                    if end_dt.date() > datetime.now().date():
-                        end_dt = datetime.now()
+                    if end_dt.date() > latest_date:
+                        end_dt = datetime.combine(latest_date, datetime.max.time())
                         
                     str_start = start_dt.strftime('%Y-%m-%d')
                     str_end = end_dt.strftime('%Y-%m-%d')
@@ -3062,6 +3130,10 @@ if choice == "🏠 홈화면":
                                 if stock in daily_whale and d in daily_whale[stock]:
                                     amt = daily_whale[stock][d]
                                     
+                                inner_html = ""
+                                if d in u_dates:
+                                    inner_html += '<div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(255, 255, 255, 0.4); font-size: 22px; font-family: sans-serif; font-weight: bold; pointer-events: none; z-index: 1;">上</div>'
+                                    
                                 if amt >= 30_000_000:
                                     # 3천만원 기준 5단계 절대 산출
                                     if amt >= 1_000_000_000:
@@ -3075,20 +3147,33 @@ if choice == "🏠 홈화면":
                                     else:
                                         level = 1
                                         
-                                    y_top = 100 - (level * 20)
+                                    if amt >= 100_000_000_000:
+                                        amt_str = f"{amt / 100_000_000_000:.1f}천억"
+                                    elif amt >= 10_000_000_000:
+                                        amt_str = f"{amt / 10_000_000_000:.1f}백억"
+                                    else:
+                                        amt_str = f"{amt / 100_000_000:.1f}억"
+                                        
                                     amt_억 = amt / 100_000_000
-                                    svg_html = f"""
-                                    <div style="width:100%; height:40px; position:relative;" title="{amt_억:.1f}억 (Lv.{level})">
-                                        <div style="width: 100%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
+                                    
+                                    if d in u_dates:
+                                        # 상한가 날(빨간 배경)에서는 글씨를 더 찐하게(테두리 강조) 처리
+                                        text_style = "color: #FFD700; font-size: 10.5px; font-weight: 900; line-height: 1; letter-spacing: -0.5px; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 2px 2px 2px #000;"
+                                    else:
+                                        # 일반 날짜
+                                        text_style = "color: #FFA500; font-size: 10.5px; font-weight: bold; line-height: 1; letter-spacing: -0.5px; text-shadow: 1px 1px 2px #000;"
+                                        
+                                    inner_html += f"""
+                                    <div style="width:100%; height:40px; position:absolute; top:0; left:0; pointer-events: none; z-index: 2;" title="{amt_억:.1f}억 (Lv.{level})">
+                                        <div style="width: 25%; height: {level * 20}%; background-color: rgba(255,165,0,0.9); clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: absolute; bottom: 0; left: 0;"></div>
+                                        <div style="position: absolute; bottom: 1px; left: 26%; {text_style}">{amt_str}</div>
                                     </div>
                                     """
-                                else:
-                                    svg_html = ""
                                     
                                 html_parts.append(f"""
-                                        <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; vertical-align: bottom;">
-                                            <a href="javascript:void(0);" id="{stock}___{d}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer;" title="클릭하여 해당 날짜의 가상 데이터 입력">
-                                                {svg_html}
+                                        <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
+                                            <a href="javascript:void(0);" id="{stock}___{d}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="클릭하여 해당 날짜의 가상 데이터 입력">
+                                                {inner_html}
                                             </a>
                                         </td>
                                 """)
@@ -3141,7 +3226,7 @@ if choice == "🏠 홈화면":
                 st.session_state["show_brag_form"] = False
 
             # 🚨 [신규 튜닝]: expander 대신 명시적인 버튼을 사용하여 사용자 혼동 방지
-            btn_label = "글쓰기 창 닫기 ❌" if st.session_state["show_brag_form"] else "📝 자랑글 쓰기"
+            btn_label = "글쓰기 창 닫기 ❌" if st.session_state["show_brag_form"] else "📝 글 쓰기"
             is_auth = st.session_state.get("authenticated", False)
             
             if st.button(btn_label, use_container_width=False, disabled=not is_auth, help="로그인 후 자랑글을 작성할 수 있습니다." if not is_auth else None):
@@ -3507,7 +3592,8 @@ if choice == "🏠 홈화면":
             st.write(f"선택하신 기간 동안 세력들이 가장 강력하게 매집한 Top 10 종목입니다.")
             st.write("---")
             
-            hot_signals = get_accumulated_hot_signals(main_df)
+            with st.spinner("🚀 기간 누적 폭주 종목을 분석하고 있습니다... 잠시만 기다려주세요 (최대 1~2분 소요)"):
+                hot_signals = get_accumulated_hot_signals(main_df)
             
             if not hot_signals:
                 st.info(f"해당 기간({global_period}) 내에 파워 스코어 30점 이상의 폭주 종목이 없습니다.")
