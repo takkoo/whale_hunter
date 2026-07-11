@@ -2902,7 +2902,7 @@ if choice == "🏠 홈화면":
             with radar_col1:
                 radar_month = st.selectbox("📅 조회할 월 선택", month_options, key="radar_month")
             with radar_col2:
-                radar_week = st.selectbox("📆 주차 선택", ["월 전체", "전달+이달", "1주차", "2주차", "3주차", "4주차", "5주차"], key="radar_week")
+                radar_week = st.selectbox("📆 주차 선택", ["월 전체", "전달+이달", "1주차", "2주차", "3주차", "4주차", "5주차"], index=1, key="radar_week")
             with radar_col3:
                 radar_filter = st.selectbox("🎯 종목 필터", ["순수 개별종목 (우선주/ETF 제외)", "전체 종목 포함"], key="radar_filter")
             
