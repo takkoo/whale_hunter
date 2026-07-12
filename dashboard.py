@@ -1503,7 +1503,7 @@ if choice == "🏠 홈화면":
         return df
 
     # 3. 검색 엔진 (검색어 전용) -> 캐시 1분
-    @st.cache_data(ttl=60, max_entries=1, show_spinner="🌀 돌도리 가동 중! 대규모 체결 데이터를 분석하고 있습니다...")
+    @st.cache_data(ttl=60, max_entries=1, show_spinner="대규모 체결 데이터를 분석하고 있습니다...")
     def load_search_data(search_kw, exact=False, start_date=None, limit=None, asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         # OOM 방지를 위해 필요한 컬럼만 추출 (단, 스키마 일치를 위해 id 포함)
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
