@@ -2025,7 +2025,6 @@ if choice == "🏠 홈화면":
         st.markdown(f'<div class="{cls_list}"></div>', unsafe_allow_html=True)
         if st.button("실시간", key="btn_list_view", use_container_width=True):
             if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != False or st.session_state.get('search_input_val', "") != "":
-                st.session_state['search_input_val'] = ""
                 st.session_state['last_search_keyword'] = ""
                 st.session_state['pending_search'] = ""
                 st.session_state['scrn_select_radio'] = "체결 로그"
@@ -2046,7 +2045,6 @@ if choice == "🏠 홈화면":
                 guest_msg.empty()
             else:
                 if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != True or st.session_state.get('search_input_val', "") != "":
-                    st.session_state['search_input_val'] = ""
                     st.session_state['last_search_keyword'] = ""
                     st.session_state['pending_search'] = ""
                     st.session_state['scrn_select_radio'] = "체결 로그"
