@@ -2853,7 +2853,7 @@ if choice == "🏠 홈화면":
                             try:
                                 supabase.table("system_settings").insert({
                                     "key": f"yield_req_{req_id}",
-                                    "value": json.dumps(req_data)
+                                    "value": json.dumps(req_data, ensure_ascii=False)
                                 }).execute()
                                 st.success("요청이 완료되었습니다!")
                                 st.rerun()
@@ -2972,7 +2972,7 @@ if choice == "🏠 홈화면":
                                                 try:
                                                     supabase.table("system_settings").upsert({
                                                         "key": db_key,
-                                                        "value": json.dumps(r)
+                                                        "value": json.dumps(r, ensure_ascii=False)
                                                     }).execute()
                                                     st.success("✅ 처리 완료!")
                                                     import time
