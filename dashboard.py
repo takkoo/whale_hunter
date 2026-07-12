@@ -269,8 +269,10 @@ def get_latest_market_open_date(base_date=None):
     return target.date()
 
 def render_profile_edit_panel(user_data, current_id, db_phone):
-    st.subheader("📝 관제사 자격 정보 정비")
+    st.subheader("📝 내 정보 수정")
     st.write("---")
+    
+    msg_container = st.empty()
     
     # 자가 정비 폼 버퍼 구성
     with st.form("profile_edit_form"):
@@ -304,7 +306,10 @@ def render_profile_edit_panel(user_data, current_id, db_phone):
             if new_nickname != user_data['name']:
                 name_check = supabase.table("users").select("id").eq("name", new_nickname).execute()
                 if name_check.data:
-                    st.error(f"❌ '{new_nickname}' 닉네임(호출명)은 이미 사용 중입니다. 다른 이름을 입력해 주십시오.")
+                    msg_container.error(f"❌ '{new_nickname}' 닉네임은 이미 사용 중입니다. 다른 이름을 입력해 주십시오.")
+                    import time
+                    time.sleep(1.5)
+                    msg_container.empty()
                     st.stop()
             
             # Supabase 창고 업데이트 슛!
