@@ -2959,21 +2959,30 @@ if choice == "🏠 홈화면":
                                         reply_text = st.text_input("답변 내용 (추출 완료 후 작성해주세요)", key=f"reply_{r['db_key']}")
                                         col_btn1, col_btn2 = st.columns([1, 4])
                                         with col_btn1:
-                                            if is_req_cached:
-                                                if st.form_submit_button("완료 처리"):
-                                                    r['reply'] = reply_text
-                                                    r['status'] = "완료됨"
-                                                    db_key = r.pop('db_key')
-                                                    supabase.table("system_settings").update({
-                                                        "value": json.dumps(r)
-                                                    }).eq("key", db_key).execute()
-                                                    st.success("처리 완료!")
-                                                    st.rerun()
+                                            # Streamlit 고질적 폼 제출 씹힘 방지: 버튼을 동적으로 disabled 하거나 라벨을 바꾸지 않음
+                                            submit_btn = st.form_submit_button("완료 처리")
+                                            
+                                        if submit_btn:
+                                            if not is_req_cached:
+                                                st.error("❌ 먼저 상단 메뉴에서 해당 조건의 데이터를 추출(캐싱)해주세요.")
                                             else:
-                                                st.form_submit_button("먼저 상단에서 데이터를 추출해주세요", disabled=True)
+                                                r['reply'] = reply_text
+                                                r['status'] = "완료됨"
+                                                db_key = r.pop('db_key')
+                                                try:
+                                                    supabase.table("system_settings").upsert({
+                                                        "key": db_key,
+                                                        "value": json.dumps(r)
+                                                    }).execute()
+                                                    st.success("✅ 처리 완료!")
+                                                    import time
+                                                    time.sleep(0.5)
+                                                    st.rerun()
+                                                except Exception as e:
+                                                    st.error(f"업데이트 실패: {e}")
                                 st.markdown("---")
             except Exception as e:
-                pass
+                st.error(f"요청 게시판 처리 중 오류 발생: {e}")
         elif scrn_select == "상선고 화면":
             st.markdown("<h4 style='color:#FF8C00; border-left: 4px solid #FF8C00; padding-left: 10px;'>📡 상한가 선행 고래 포착 레이더 (상선고)</h4>", unsafe_allow_html=True)
             
