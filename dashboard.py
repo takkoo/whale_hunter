@@ -276,9 +276,9 @@ def render_profile_edit_panel(user_data, current_id, db_phone):
     with st.form("profile_edit_form"):
         st.markdown("🛰️ 비상 연락망 및 필수 보안 설정")
         
-        # 이름과 ID는 읽기 전용(수정 불가) 락을 걸어 안전성 확보
+        # ID는 읽기 전용으로 안전성 확보, 실명(닉네임)은 수정 가능
         st.text_input("ID", value=current_id, disabled=True)
-        st.text_input("실명", value=user_data['name'], disabled=True)
+        new_nickname = st.text_input("실명 (또는 호출명)", value=user_data['name'])
         
         # 🛠️ 수정 가능한 소자들 배치
         up_phone = st.text_input("비상 연락처 수정", value=db_phone)
@@ -300,12 +300,21 @@ def render_profile_edit_panel(user_data, current_id, db_phone):
             # 🎯 전화번호는 반드시 기존 인코딩 칩셋을 거쳐 보안화 한 뒤 인서트!
             encoded_phone = base64.b64encode(up_phone.encode('utf-8')).decode('utf-8')
             
+            # 닉네임 중복 체크
+            if new_nickname != user_data['name']:
+                name_check = supabase.table("users").select("id").eq("name", new_nickname).execute()
+                if name_check.data:
+                    st.error(f"❌ '{new_nickname}' 닉네임(호출명)은 이미 사용 중입니다. 다른 이름을 입력해 주십시오.")
+                    st.stop()
+            
             # Supabase 창고 업데이트 슛!
             update_payload = {
+                "name": new_nickname,
                 "phone_encoded": encoded_phone,
                 "auto_refresh_enabled": up_auto_refresh
             }
             
+            st.session_state['current_user'] = new_nickname
             st.session_state['auto_refresh_enabled'] = up_auto_refresh
             
             # 🎯 2. 패스워드 교체 인터럽트 분기 회로 가동
@@ -1267,21 +1276,26 @@ if choice == "🔐 로그인/가입":
                     hashed_pw = encrypt_password(new_pw)
                     encoded_phone = encode_phone(new_phone)
                     
-                    try:
-                        supabase.table("users").insert({
-                            "username": new_id,
-                            "name": new_name,
-                            "password_hash": hashed_pw,
-                            "phone_encoded": encoded_phone,
-                            "is_allowed": False
-                        }).execute()
-                        
-                        st.success(f"🎉 신청 완료! 최고 관리자에게 '{new_id}' 승인을 요청하십시오.")
-                    except Exception as e:
-                        # 🎯 [디버깅 프로브 인가] 검은색 파이썬 터미널 창에 날것의 에러를 출력합니다!
-                        print(f"\n🚨 [보안 게이트 에러 계측]: {e}\n")
-                        # 웹 화면 경고창에도 진짜 에러 내용을 띄워버립니다.
-                        st.error(f"❌ 등록 실패 (실제 에러 사유): {e}")
+                    # 닉네임 중복 체크
+                    name_check = supabase.table("users").select("id").eq("name", new_name).execute()
+                    if name_check.data:
+                        st.error(f"❌ '{new_name}' 닉네임(호출명)은 이미 사용 중입니다. 다른 이름을 입력해 주십시오.")
+                    else:
+                        try:
+                            supabase.table("users").insert({
+                                "username": new_id,
+                                "name": new_name,
+                                "password_hash": hashed_pw,
+                                "phone_encoded": encoded_phone,
+                                "is_allowed": False
+                            }).execute()
+                            
+                            st.success(f"🎉 신청 완료! 최고 관리자에게 '{new_id}' 승인을 요청하십시오.")
+                        except Exception as e:
+                            # 🎯 [디버깅 프로브 인가] 검은색 파이썬 터미널 창에 날것의 에러를 출력합니다!
+                            print(f"\n🚨 [보안 게이트 에러 계측]: {e}\n")
+                            # 웹 화면 경고창에도 진짜 에러 내용을 띄워버립니다.
+                            st.error(f"❌ 등록 실패 (실제 에러 사유): {e}")
 
             else:
                 st.warning("⚠️ 모든 서류 항목을 공백 없이 작성해 주십시오.")
@@ -2010,7 +2024,9 @@ if choice == "🏠 홈화면":
         cls_list = "btn-style-darkblue-sm-active" if is_list_active else "btn-style-darkblue-sm"
         st.markdown(f'<div class="{cls_list}"></div>', unsafe_allow_html=True)
         if st.button("실시간", key="btn_list_view", use_container_width=True):
-            if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != False:
+            if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != False or st.session_state.get('search_input_val', "") != "":
+                st.session_state['search_input_val'] = ""
+                st.session_state['last_search_keyword'] = ""
                 st.session_state['pending_search'] = ""
                 st.session_state['scrn_select_radio'] = "체결 로그"
                 st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
@@ -2029,7 +2045,9 @@ if choice == "🏠 홈화면":
                 time.sleep(1.5)
                 guest_msg.empty()
             else:
-                if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != True:
+                if st.session_state.get('scrn_select_radio') != "체결 로그" or st.session_state.get('upper_limit_filter', False) != True or st.session_state.get('search_input_val', "") != "":
+                    st.session_state['search_input_val'] = ""
+                    st.session_state['last_search_keyword'] = ""
                     st.session_state['pending_search'] = ""
                     st.session_state['scrn_select_radio'] = "체결 로그"
                     st.session_state['log_fetch_limit'] = 500
@@ -4195,7 +4213,7 @@ if choice == "🏠 홈화면":
                         use_container_width=False,
                         on_select="rerun",
                         selection_mode="single-row",
-                        key="whale_log_board_main"
+                        key=f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}"
                     )
                     
                     # 🎯 "더 보기" 버튼: 검색어가 없을 때, 가져온 데이터가 limit 이상이라면(더 있을 가능성이 높다면) 표출
