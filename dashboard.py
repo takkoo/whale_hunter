@@ -2964,16 +2964,17 @@ if choice == "🏠 홈화면":
                                                     r['reply'] = reply_text
                                                     r['status'] = "완료됨"
                                                     db_key = r.pop('db_key')
-                                                    supabase.table("system_settings").update({
+                                                    supabase.table("system_settings").upsert({
+                                                        "key": db_key,
                                                         "value": json.dumps(r)
-                                                    }).eq("key", db_key).execute()
+                                                    }).execute()
                                                     st.success("처리 완료!")
                                                     st.rerun()
                                             else:
                                                 st.form_submit_button("먼저 상단에서 데이터를 추출해주세요", disabled=True)
                                 st.markdown("---")
             except Exception as e:
-                pass
+                st.error(f"요청 게시판 처리 중 오류 발생: {e}")
         elif scrn_select == "상선고 화면":
             st.markdown("<h4 style='color:#FF8C00; border-left: 4px solid #FF8C00; padding-left: 10px;'>📡 상한가 선행 고래 포착 레이더 (상선고)</h4>", unsafe_allow_html=True)
             
