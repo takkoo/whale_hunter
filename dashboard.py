@@ -2031,6 +2031,12 @@ if choice == "🏠 홈화면":
                 st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
                 st.session_state['upper_limit_filter'] = False
                 st.session_state['ignore_next_selection'] = True
+                
+                # 강제 테이블 선택 초기화 (세션 상태에서 삭제)
+                for k in list(st.session_state.keys()):
+                    if k.startswith("whale_log_board_main_"):
+                        del st.session_state[k]
+                        
                 import time
                 st.session_state['realtime_mount_id'] = time.time()
                 st.rerun()
@@ -2051,6 +2057,12 @@ if choice == "🏠 홈화면":
                     st.session_state['log_fetch_limit'] = 500
                     st.session_state['upper_limit_filter'] = True
                     st.session_state['ignore_next_selection'] = True
+                    
+                    # 강제 테이블 선택 초기화 (세션 상태에서 삭제)
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("whale_log_board_main_"):
+                            del st.session_state[k]
+                            
                     import time
                     st.session_state['realtime_mount_id'] = time.time()
                     st.rerun()
