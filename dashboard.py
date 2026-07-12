@@ -278,7 +278,7 @@ def render_profile_edit_panel(user_data, current_id, db_phone):
         
         # ID는 읽기 전용으로 안전성 확보, 실명(닉네임)은 수정 가능
         st.text_input("ID", value=current_id, disabled=True)
-        new_nickname = st.text_input("실명 (또는 호출명)", value=user_data['name'])
+        new_nickname = st.text_input("닉네임", value=user_data['name'])
         
         # 🛠️ 수정 가능한 소자들 배치
         up_phone = st.text_input("비상 연락처 수정", value=db_phone)
@@ -1260,7 +1260,7 @@ if choice == "🔐 로그인/가입":
         
         # 🎯 회원가입 구역도 크롬이 감지할 수 있게 form으로 묶어줍니다.
         with st.form("register_form"):
-            new_name = st.text_input("실명 (또는 호출명)")
+            new_name = st.text_input("닉네임")
             new_id = st.text_input("희망 관제 ID")
             new_phone = st.text_input("비상 연락처 (전화번호)", placeholder="010-XXXX-XXXX")
             new_pw = st.text_input("비밀번호 설정", type="password", help="간편하게 5자 이상 문자, 숫자, [!, #, &]를 사용해 입력하세요!")
@@ -1503,7 +1503,7 @@ if choice == "🏠 홈화면":
         return df
 
     # 3. 검색 엔진 (검색어 전용) -> 캐시 1분
-    @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
+    @st.cache_data(ttl=60, max_entries=1, show_spinner="🌀 돌도리 가동 중! 대규모 체결 데이터를 분석하고 있습니다...")
     def load_search_data(search_kw, exact=False, start_date=None, limit=None, asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
         # OOM 방지를 위해 필요한 컬럼만 추출 (단, 스키마 일치를 위해 id 포함)
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
