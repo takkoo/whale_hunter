@@ -2031,11 +2031,10 @@ if choice == "🏠 홈화면":
                 st.session_state['log_fetch_limit'] = 500 # 더보기 초기화
                 st.session_state['upper_limit_filter'] = False
                 st.session_state['ignore_next_selection'] = True
+                st.session_state['ignore_next_selection'] = True
                 
-                # 강제 테이블 선택 초기화 (세션 상태에서 삭제)
-                for k in list(st.session_state.keys()):
-                    if k.startswith("whale_log_board_main_"):
-                        del st.session_state[k]
+                # 강제 테이블 선택 초기화 (키 변경 방식)
+                st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
                         
                 import time
                 st.session_state['realtime_mount_id'] = time.time()
@@ -2057,11 +2056,10 @@ if choice == "🏠 홈화면":
                     st.session_state['log_fetch_limit'] = 500
                     st.session_state['upper_limit_filter'] = True
                     st.session_state['ignore_next_selection'] = True
+                    st.session_state['ignore_next_selection'] = True
                     
-                    # 강제 테이블 선택 초기화 (세션 상태에서 삭제)
-                    for k in list(st.session_state.keys()):
-                        if k.startswith("whale_log_board_main_"):
-                            del st.session_state[k]
+                    # 강제 테이블 선택 초기화 (키 변경 방식)
+                    st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
                             
                     import time
                     st.session_state['realtime_mount_id'] = time.time()
@@ -4223,7 +4221,7 @@ if choice == "🏠 홈화면":
                         use_container_width=False,
                         on_select="rerun",
                         selection_mode="single-row",
-                        key=f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}"
+                        key=f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}_{st.session_state.get('df_reset_counter', 0)}"
                     )
                     
                     # 🎯 "더 보기" 버튼: 검색어가 없을 때, 가져온 데이터가 limit 이상이라면(더 있을 가능성이 높다면) 표출
