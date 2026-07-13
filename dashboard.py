@@ -3598,102 +3598,102 @@ if choice == "🏠 홈화면":
                         if view_mode == "목록형":
                         
                         # --- 행 간격 극강 압축 및 헤더 스타일을 위한 CSS ---
-                        st.html("""
-                        <style>
-                            /* my-table-start 마커 이후의 모든 element-container (행) 위쪽 여백 제거하여 간격 완벽 밀착 */
-                            div.element-container:has(.my-table-start) ~ div.element-container {
-                                margin-top: -16px !important;
-                            }
+                            st.html("""
+                            <style>
+                                /* my-table-start 마커 이후의 모든 element-container (행) 위쪽 여백 제거하여 간격 완벽 밀착 */
+                                div.element-container:has(.my-table-start) ~ div.element-container {
+                                    margin-top: -16px !important;
+                                }
                             
-                            /* 테이블 행(가로 블록) 일괄 스타일링 */
-                            div.element-container:has(.my-table-start) ~ div.element-container div[data-testid="stHorizontalBlock"] {
-                                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-                                padding-top: 4px !important;
-                                padding-bottom: 4px !important;
-                                align-items: center !important;
-                            }
+                                /* 테이블 행(가로 블록) 일괄 스타일링 */
+                                div.element-container:has(.my-table-start) ~ div.element-container div[data-testid="stHorizontalBlock"] {
+                                    border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+                                    padding-top: 4px !important;
+                                    padding-bottom: 4px !important;
+                                    align-items: center !important;
+                                }
                             
-                            /* 헤더 행 스타일 (고유 ID 사용해서 정확히 타겟팅) */
-                            div[data-testid="stHorizontalBlock"]:has(#brag-board-header) {
-                                border-top: none !important;
-                                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-                                background-color: rgba(255,255,255,0.03) !important;
-                                padding-top: 8px !important;
-                                padding-bottom: 8px !important;
-                                border-radius: 4px 4px 0 0;
-                            }
+                                /* 헤더 행 스타일 (고유 ID 사용해서 정확히 타겟팅) */
+                                div[data-testid="stHorizontalBlock"]:has(#brag-board-header) {
+                                    border-top: none !important;
+                                    border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+                                    background-color: rgba(255,255,255,0.03) !important;
+                                    padding-top: 8px !important;
+                                    padding-bottom: 8px !important;
+                                    border-radius: 4px 4px 0 0;
+                                }
                             
-                            /* 버튼 높이 완벽 통일 */
-                            .stButton button[kind="tertiary"] {
-                                min-height: 24px !important;
-                                padding: 0px !important;
-                                margin: 0px !important;
-                            }
-                        </style>
-                        """)
+                                /* 버튼 높이 완벽 통일 */
+                                .stButton button[kind="tertiary"] {
+                                    min-height: 24px !important;
+                                    padding: 0px !important;
+                                    margin: 0px !important;
+                                }
+                            </style>
+                            """)
                         
-                        # --- 테이블 마커 ---
-                        st.html("<div class='my-table-start'></div>")
+                            # --- 테이블 마커 ---
+                            st.html("<div class='my-table-start'></div>")
                         
-                        # --- 테이블 헤더 ---
-                        show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
-                        show_views_public = True
-                        if show_views_res.data and show_views_res.data[0]['value'] == "False":
-                            show_views_public = False
+                            # --- 테이블 헤더 ---
+                            show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
+                            show_views_public = True
+                            if show_views_res.data and show_views_res.data[0]['value'] == "False":
+                                show_views_public = False
                         
-                        can_see_views = is_admin_view or show_views_public
+                            can_see_views = is_admin_view or show_views_public
 
-                        col1, col2, col3, col4, col5 = st.columns([5, 2, 2, 1.5, 1.5])
-                        with col1: st.html("<div id='brag-board-header' style='font-weight:bold; text-align:center;'>제목</div>")
-                        with col2: st.html("<div style='font-weight:bold; text-align:center;'>작성자</div>")
-                        with col3: st.html("<div style='font-weight:bold; text-align:center;'>작성일시</div>")
-                        with col4: 
-                            header_text = "조회수" if can_see_views else ""
-                            st.html(f"<div style='font-weight:bold; text-align:center;'>{header_text}</div>")
-                        with col5: st.html("<div style='font-weight:bold; text-align:center;'>좋아요</div>")
+                            col1, col2, col3, col4, col5 = st.columns([5, 2, 2, 1.5, 1.5])
+                            with col1: st.html("<div id='brag-board-header' style='font-weight:bold; text-align:center;'>제목</div>")
+                            with col2: st.html("<div style='font-weight:bold; text-align:center;'>작성자</div>")
+                            with col3: st.html("<div style='font-weight:bold; text-align:center;'>작성일시</div>")
+                            with col4: 
+                                header_text = "조회수" if can_see_views else ""
+                                st.html(f"<div style='font-weight:bold; text-align:center;'>{header_text}</div>")
+                            with col5: st.html("<div style='font-weight:bold; text-align:center;'>좋아요</div>")
                         
-                        now_seoul = pd.Timestamp.now(tz='Asia/Seoul')
+                            now_seoul = pd.Timestamp.now(tz='Asia/Seoul')
                         
-                        for p in brag_res.data:
-                            if p.get('is_hidden') and not is_admin_view:
-                                continue
+                            for p in brag_res.data:
+                                if p.get('is_hidden') and not is_admin_view:
+                                    continue
                                 
-                            p_time_utc = pd.to_datetime(p['created_at'])
-                            if p_time_utc.tzinfo is None:
-                                p_time_utc = p_time_utc.tz_localize('UTC')
-                            p_time_seoul = p_time_utc.tz_convert('Asia/Seoul')
+                                p_time_utc = pd.to_datetime(p['created_at'])
+                                if p_time_utc.tzinfo is None:
+                                    p_time_utc = p_time_utc.tz_localize('UTC')
+                                p_time_seoul = p_time_utc.tz_convert('Asia/Seoul')
                             
-                            if p_time_seoul.date() == now_seoul.date():
-                                p_time = p_time_seoul.strftime('%H:%M')
-                            else:
-                                p_time = p_time_seoul.strftime('%y.%m.%d')
+                                if p_time_seoul.date() == now_seoul.date():
+                                    p_time = p_time_seoul.strftime('%H:%M')
+                                else:
+                                    p_time = p_time_seoul.strftime('%y.%m.%d')
                             
-                            title_text = p.get('title') or "제목 없음"
+                                title_text = p.get('title') or "제목 없음"
                             
-                            if p.get('is_hidden'):
-                                title_text = f"🚨[숨김] {title_text}"
+                                if p.get('is_hidden'):
+                                    title_text = f"🚨[숨김] {title_text}"
                                 
-                            likes = p.get('likes_count') or 0
-                            views = p.get('views_count') or 0
+                                likes = p.get('likes_count') or 0
+                                views = p.get('views_count') or 0
                             
-                            c1, c2, c3, c4, c5 = st.columns([5, 2, 2, 1.5, 1.5])
-                            with c1:
-                                def view_detail_cb(post_id=p['id'], current_views=views):
-                                    st.session_state["brag_view_mode"] = "detail"
-                                    st.session_state["brag_selected_post"] = post_id
-                                    # 조회수 1 증가 (DB 직빵 업데이트)
-                                    supabase.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
-                                    
-                                st.button(title_text, key=f"list_btn_{p['id']}", on_click=view_detail_cb, type="tertiary")
-                            with c2:
-                                st.html(f"<div style='text-align:center; font-size:14px; margin-top:4px;'>{p['author']}</div>")
-                            with c3:
-                                st.html(f"<div style='text-align:center; font-size:14px; color:gray; margin-top:4px;'>{p_time}</div>")
-                            with c4:
-                                view_text = str(views) if can_see_views else "-"
-                                st.html(f"<div style='text-align:center; font-size:14px; color:#A0C4FF; margin-top:4px;'>{view_text}</div>")
-                            with c5:
-                                st.html(f"<div style='text-align:center; font-size:14px; color:#FFB4B4; margin-top:4px;'>{likes}</div>")
+                                c1, c2, c3, c4, c5 = st.columns([5, 2, 2, 1.5, 1.5])
+                                with c1:
+                                    def view_detail_cb(post_id=p['id'], current_views=views):
+                                        st.session_state["brag_view_mode"] = "detail"
+                                        st.session_state["brag_selected_post"] = post_id
+                                        # 조회수 1 증가 (DB 직빵 업데이트)
+                                        supabase.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
+                                        
+                                    st.button(title_text, key=f"list_btn_{p['id']}", on_click=view_detail_cb, type="tertiary")
+                                with c2:
+                                    st.html(f"<div style='text-align:center; font-size:14px; margin-top:4px;'>{p['author']}</div>")
+                                with c3:
+                                    st.html(f"<div style='text-align:center; font-size:14px; color:gray; margin-top:4px;'>{p_time}</div>")
+                                with c4:
+                                    view_text = str(views) if can_see_views else "-"
+                                    st.html(f"<div style='text-align:center; font-size:14px; color:#A0C4FF; margin-top:4px;'>{view_text}</div>")
+                                with c5:
+                                    st.html(f"<div style='text-align:center; font-size:14px; color:#FFB4B4; margin-top:4px;'>{likes}</div>")
                         
                         elif view_mode == "바둑판형":
                             show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
