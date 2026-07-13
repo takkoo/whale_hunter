@@ -2183,8 +2183,9 @@ if choice == "🏠 홈화면":
             
             # 당일 데이터만 필요한 경우 과거 데이터를 부를 필요가 없음
             # 🚀 [치명적 OOM 방어 2단계] "체결 로그(실시간)" 화면은 1분마다 새로고침 되므로, 여기서 1달치 데이터를 캐시에서 꺼내면 무조건 서버가 터집니다!
-            # 따라서 "체결 로그" 탭에서는 무조건 당일 데이터(today_df)만 사용하도록 강제합니다.
-            if global_period == "당일 데이터만" or scrn_select == "체결 로그":
+            # 따라서 상한가 탭이 아닌 일반 "체결 로그" 탭에서는 무조건 당일 데이터(today_df)만 사용하도록 강제합니다.
+            is_realtime_log = (scrn_select == "체결 로그" and not show_only_upper_limit)
+            if is_realtime_log or (global_period == "당일 데이터만" and not show_only_upper_limit):
                 df = today_df
             else:
                 historical_df = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
@@ -2192,11 +2193,19 @@ if choice == "🏠 홈화면":
                 
             # 상한가 전용 필터 적용
             if show_only_upper_limit and not df.empty:
-                upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", start_date.strftime('%Y-%m-%d')).execute()
+                # 1. 전상 인정 기간 설정값 읽어오기
+                sys_set = supabase.table("system_settings").select("value").eq("key", "prev_upper_limit_window_days").execute()
+                upper_window_days = int(sys_set.data[0]['value']) if sys_set.data else 3
+                upper_start_date = today - timedelta(days=upper_window_days)
+                
+                # 2. 해당 기간 내 상한가 종목 조회 및 체결 로그 필터링
+                upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", upper_start_date.strftime('%Y-%m-%d')).execute()
                 if upper_res.data:
                     upper_stock_names = list(set([item['name'] for item in upper_res.data]))
                     if upper_stock_names:
                         df = df[df['name'].isin(upper_stock_names)]
+                        # 표시되는 고래 거래 내역도 인정 기간 내의 데이터로 제한
+                        df = df[df['date'] >= upper_start_date.strftime('%Y-%m-%d')]
                     else:
                         df = pd.DataFrame(columns=df.columns)
                 else:
