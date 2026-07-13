@@ -67,6 +67,18 @@ def apply_query_params():
 
 apply_query_params()
 
+# 🔒 [전역 보안 점검] 비회원이 URL 조작이나 로그아웃을 통해 회원 전용 화면에 머무는 것 차단
+# 위젯이 렌더링되기 전이므로 여기서 session_state를 변경해도 StreamlitAPIException이 발생하지 않습니다.
+if not st.session_state.get('authenticated', False):
+    _scrn = st.session_state.get('scrn_select_radio', "체결 로그")
+    _search = st.session_state.get('search_input_val', "")
+    if _scrn in ["TOP 10 화면", "시계열 추적", "수익율 화면", "상선고 화면", "기간 누적 폭주"] or st.session_state.get('upper_limit_filter', False) or _search:
+        st.session_state['scrn_select_radio'] = "체결 로그"
+        st.session_state['upper_limit_filter'] = False
+        st.session_state['last_search_keyword'] = ""
+        st.session_state['search_input_val'] = "" 
+        st.query_params.clear()
+
 # 🚀 [브라우저 뒤로가기 강제 새로고침 패치]
 # Streamlit SPA 특성상 뒤로가기 시 URL만 바뀌고 화면이 멈추는 현상을 방지하기 위해
 # popstate 이벤트 감지 시 화면 깜빡임 없이 숨겨진 버튼을 눌러 Streamlit 내부 렌더링만 강제로 유발합니다.
@@ -2210,17 +2222,7 @@ if choice == "🏠 홈화면":
         st.session_state['scrn_select_radio'] = "체결 로그"
     scrn_select = st.session_state['scrn_select_radio']
 
-    # 🔒 [전역 보안 점검] 비회원이 URL 조작이나 로그아웃을 통해 회원 전용 화면에 머무는 것 차단
-    if not st.session_state.get('authenticated', False):
-        if scrn_select in ["TOP 10 화면", "시계열 추적", "수익율 화면", "상선고 화면", "기간 누적 폭주"] or st.session_state.get('upper_limit_filter', False) or search_keyword:
-            st.session_state['scrn_select_radio'] = "체결 로그"
-            st.session_state['upper_limit_filter'] = False
-            st.session_state['last_search_keyword'] = ""
-            st.session_state['search_input_val'] = ""
-            search_keyword = ""
-            scrn_select = "체결 로그"
-            st.query_params.clear()
-    
+
     # 🌟 [ 전략적 펌핑 로직 ]
     # 체결 로그(목록보기) 상태이고 검색어가 없을 때는 세션에 저장된 limit 만큼 가져옵니다.
     if scrn_select == "체결 로그" and not search_keyword.strip():
