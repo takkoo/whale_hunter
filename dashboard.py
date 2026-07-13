@@ -36,6 +36,102 @@ def init_supabase_client():
 supabase = init_supabase_client()
 
 # ------------------------------------------------------------------
+# 🗺️ [내비게이션 동기화] 브라우저 뒤로가기(Query Params) 지원 (상단: URL -> State)
+# ------------------------------------------------------------------
+
+# 1. JS popstate로부터 넘어온 raw 쿼리 스트링 처리 (버그 회피용)
+raw_qs = st.session_state.get("popstate_sync", "")
+if raw_qs:
+    # 한 번 읽었으면 위젯 렌더링을 위해 비웁니다.
+    st.session_state["popstate_sync"] = ""
+
+# 2. 통신용 숨겨진 텍스트 인풋 렌더링
+st.markdown('<div id="url_sync_marker" style="display:none;"></div>', unsafe_allow_html=True)
+st.text_input("Popstate Sync", key="popstate_sync", label_visibility="collapsed")
+st.markdown("""
+<style>
+    div[data-testid="stElementContainer"]:has(#url_sync_marker) + div[data-testid="stElementContainer"] {
+        display: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+def apply_query_params(raw_qs):
+    params = {}
+    if raw_qs:
+        import urllib.parse
+        if raw_qs.startswith("?"):
+            raw_qs = raw_qs[1:]
+        parsed = urllib.parse.parse_qs(raw_qs)
+        for k, v in parsed.items():
+            params[k] = v[0]
+    else:
+        params = {k: st.query_params.get(k) for k in st.query_params}
+
+    page = params.get("page")
+    if page and page != st.session_state.get("last_page"):
+        st.session_state['scrn_select_radio'] = page
+        st.session_state["last_page"] = page
+
+    upper = params.get("upper")
+    if upper is not None and upper != st.session_state.get("last_upper"):
+        st.session_state['upper_limit_filter'] = (upper == "true")
+        st.session_state["last_upper"] = upper
+
+    view = params.get("view")
+    if view and view != st.session_state.get("last_view"):
+        st.session_state['brag_view_mode'] = view
+        st.session_state["last_view"] = view
+
+    post_id = params.get("post_id")
+    if post_id and post_id != st.session_state.get("last_post_id"):
+        try:
+            st.session_state['brag_selected_post'] = int(post_id)
+        except ValueError:
+            st.session_state['brag_selected_post'] = post_id
+        st.session_state["last_post_id"] = post_id
+    elif "post_id" not in params and st.session_state.get("last_post_id") is not None:
+        st.session_state['brag_selected_post'] = None
+        st.session_state["last_post_id"] = None
+
+apply_query_params(raw_qs)
+
+# 🔒 [전역 보안 점검] 비회원이 URL 조작이나 로그아웃을 통해 회원 전용 화면에 머무는 것 차단
+# 위젯이 렌더링되기 전이므로 여기서 session_state를 변경해도 StreamlitAPIException이 발생하지 않습니다.
+if not st.session_state.get('authenticated', False):
+    _scrn = st.session_state.get('scrn_select_radio', "체결 로그")
+    _search = st.session_state.get('search_input_val', "")
+    if _scrn in ["TOP 10 화면", "시계열 추적", "수익율 화면", "상선고 화면", "기간 누적 폭주"] or st.session_state.get('upper_limit_filter', False) or _search:
+        st.session_state['scrn_select_radio'] = "체결 로그"
+        st.session_state['upper_limit_filter'] = False
+        st.session_state['last_search_keyword'] = ""
+        st.session_state['search_input_val'] = "" 
+        st.query_params.clear()
+
+# 🚀 [브라우저 뒤로가기 강제 동기화 패치]
+import streamlit.components.v1 as components
+components.html(
+    """
+    <script>
+        const parentWindow = window.parent || window;
+        if (!parentWindow.hasPopStateListener) {
+            parentWindow.addEventListener("popstate", () => {
+                const inputs = parentWindow.document.querySelectorAll('input[aria-label="Popstate Sync"]');
+                if (inputs.length > 0) {
+                    const input = inputs[0];
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                    setter.call(input, parentWindow.location.search);
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+                }
+            });
+            parentWindow.hasPopStateListener = true;
+        }
+    </script>
+    """,
+    height=0, width=0
+)
+# ------------------------------------------------------------------
 # 🎯 [가상 데이터 쾌속 입력 팝업 로직] 상선고 히트맵 셀 클릭 연동
 # ------------------------------------------------------------------
 if "mock_stock" in st.query_params and "mock_date" in st.query_params:
@@ -2143,7 +2239,8 @@ if choice == "🏠 홈화면":
     if 'scrn_select_radio' not in st.session_state:
         st.session_state['scrn_select_radio'] = "체결 로그"
     scrn_select = st.session_state['scrn_select_radio']
-    
+
+
     # 🌟 [ 전략적 펌핑 로직 ]
     # 체결 로그(목록보기) 상태이고 검색어가 없을 때는 세션에 저장된 limit 만큼 가져옵니다.
     if scrn_select == "체결 로그" and not search_keyword.strip():
@@ -2183,8 +2280,9 @@ if choice == "🏠 홈화면":
             
             # 당일 데이터만 필요한 경우 과거 데이터를 부를 필요가 없음
             # 🚀 [치명적 OOM 방어 2단계] "체결 로그(실시간)" 화면은 1분마다 새로고침 되므로, 여기서 1달치 데이터를 캐시에서 꺼내면 무조건 서버가 터집니다!
-            # 따라서 "체결 로그" 탭에서는 무조건 당일 데이터(today_df)만 사용하도록 강제합니다.
-            if global_period == "당일 데이터만" or scrn_select == "체결 로그":
+            # 따라서 상한가 탭이 아닌 일반 "체결 로그" 탭에서는 무조건 당일 데이터(today_df)만 사용하도록 강제합니다.
+            is_realtime_log = (scrn_select == "체결 로그" and not show_only_upper_limit)
+            if is_realtime_log or (global_period == "당일 데이터만" and not show_only_upper_limit):
                 df = today_df
             else:
                 historical_df = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
@@ -2192,11 +2290,19 @@ if choice == "🏠 홈화면":
                 
             # 상한가 전용 필터 적용
             if show_only_upper_limit and not df.empty:
-                upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", start_date.strftime('%Y-%m-%d')).execute()
+                # 1. 전상 인정 기간 설정값 읽어오기
+                sys_set = supabase.table("system_settings").select("value").eq("key", "prev_upper_limit_window_days").execute()
+                upper_window_days = int(sys_set.data[0]['value']) if sys_set.data else 3
+                upper_start_date = today - timedelta(days=upper_window_days)
+                
+                # 2. 해당 기간 내 상한가 종목 조회 및 체결 로그 필터링
+                upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", upper_start_date.strftime('%Y-%m-%d')).execute()
                 if upper_res.data:
                     upper_stock_names = list(set([item['name'] for item in upper_res.data]))
                     if upper_stock_names:
                         df = df[df['name'].isin(upper_stock_names)]
+                        # 표시되는 고래 거래 내역도 인정 기간 내의 데이터로 제한
+                        df = df[df['date'] >= upper_start_date.strftime('%Y-%m-%d')]
                     else:
                         df = pd.DataFrame(columns=df.columns)
                 else:
@@ -3318,12 +3424,19 @@ if choice == "🏠 홈화면":
             btn_label = "글쓰기 창 닫기 ❌" if st.session_state["show_brag_form"] else "📝 글 쓰기"
             is_auth = st.session_state.get("authenticated", False)
             
-            if st.button(btn_label, use_container_width=False, disabled=not is_auth, help="로그인 후 자랑글을 작성할 수 있습니다." if not is_auth else None):
-                st.session_state["show_brag_form"] = not st.session_state["show_brag_form"]
-                if st.session_state["show_brag_form"]:
-                    import time
-                    st.session_state["brag_mount_id"] = time.time()
-                st.rerun()
+            if "brag_layout_mode_radio" not in st.session_state:
+                st.session_state["brag_layout_mode_radio"] = "바둑판형"
+                
+            col_btn, col_view = st.columns([1.5, 8.5])
+            with col_btn:
+                if st.button(btn_label, use_container_width=True, disabled=not is_auth, help="로그인 후 자랑글을 작성할 수 있습니다." if not is_auth else None):
+                    st.session_state["show_brag_form"] = not st.session_state["show_brag_form"]
+                    if st.session_state["show_brag_form"]:
+                        import time
+                        st.session_state["brag_mount_id"] = time.time()
+                    st.rerun()
+            with col_view:
+                st.radio("보기 형태", ["목록형", "바둑판형"], horizontal=True, label_visibility="collapsed", key="brag_layout_mode_radio")
 
             if st.session_state["show_brag_form"]:
                 st.html("""
@@ -3571,110 +3684,168 @@ if choice == "🏠 홈화면":
                     st.button("⬅️ 목록으로", type="primary", on_click=back_to_list)
                     render_post(st.session_state["brag_selected_post"])
                 else:
-                    brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden").order("created_at", desc=True).limit(100).execute()
+                    view_mode = st.session_state.get("brag_layout_mode_radio", "바둑판형")
+                    
+                    if view_mode == "목록형":
+                        brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden").order("created_at", desc=True).limit(100).execute()
+                    else:
+                        brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden, image_base64").order("created_at", desc=True).limit(100).execute()
                     
                     if not brag_res.data:
                         st.info("아직 자랑글이 없습니다. 첫 번째로 자랑해 보세요!")
                     else:
                         st.markdown(f"<div style='font-size: 14px; color: gray; margin-bottom: 10px;'>총 {len(brag_res.data)}개의 자랑글이 있습니다.</div>", unsafe_allow_html=True)
                         
+                        if view_mode == "목록형":
+                        
                         # --- 행 간격 극강 압축 및 헤더 스타일을 위한 CSS ---
-                        st.html("""
-                        <style>
-                            /* my-table-start 마커 이후의 모든 element-container (행) 위쪽 여백 제거하여 간격 완벽 밀착 */
-                            div.element-container:has(.my-table-start) ~ div.element-container {
-                                margin-top: -16px !important;
-                            }
+                            st.html("""
+                            <style>
+                                /* my-table-start 마커 이후의 모든 element-container (행) 위쪽 여백 제거하여 간격 완벽 밀착 */
+                                div.element-container:has(.my-table-start) ~ div.element-container {
+                                    margin-top: -16px !important;
+                                }
                             
-                            /* 테이블 행(가로 블록) 일괄 스타일링 */
-                            div.element-container:has(.my-table-start) ~ div.element-container div[data-testid="stHorizontalBlock"] {
-                                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-                                padding-top: 4px !important;
-                                padding-bottom: 4px !important;
-                                align-items: center !important;
-                            }
+                                /* 테이블 행(가로 블록) 일괄 스타일링 */
+                                div.element-container:has(.my-table-start) ~ div.element-container div[data-testid="stHorizontalBlock"] {
+                                    border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+                                    padding-top: 4px !important;
+                                    padding-bottom: 4px !important;
+                                    align-items: center !important;
+                                }
                             
-                            /* 헤더 행 스타일 (고유 ID 사용해서 정확히 타겟팅) */
-                            div[data-testid="stHorizontalBlock"]:has(#brag-board-header) {
-                                border-top: none !important;
-                                border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-                                background-color: rgba(255,255,255,0.03) !important;
-                                padding-top: 8px !important;
-                                padding-bottom: 8px !important;
-                                border-radius: 4px 4px 0 0;
-                            }
+                                /* 헤더 행 스타일 (고유 ID 사용해서 정확히 타겟팅) */
+                                div[data-testid="stHorizontalBlock"]:has(#brag-board-header) {
+                                    border-top: none !important;
+                                    border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+                                    background-color: rgba(255,255,255,0.03) !important;
+                                    padding-top: 8px !important;
+                                    padding-bottom: 8px !important;
+                                    border-radius: 4px 4px 0 0;
+                                }
                             
-                            /* 버튼 높이 완벽 통일 */
-                            .stButton button[kind="tertiary"] {
-                                min-height: 24px !important;
-                                padding: 0px !important;
-                                margin: 0px !important;
-                            }
-                        </style>
-                        """)
+                                /* 버튼 높이 완벽 통일 */
+                                .stButton button[kind="tertiary"] {
+                                    min-height: 24px !important;
+                                    padding: 0px !important;
+                                    margin: 0px !important;
+                                }
+                            </style>
+                            """)
                         
-                        # --- 테이블 마커 ---
-                        st.html("<div class='my-table-start'></div>")
+                            # --- 테이블 마커 ---
+                            st.html("<div class='my-table-start'></div>")
                         
-                        # --- 테이블 헤더 ---
-                        show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
-                        show_views_public = True
-                        if show_views_res.data and show_views_res.data[0]['value'] == "False":
-                            show_views_public = False
+                            # --- 테이블 헤더 ---
+                            show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
+                            show_views_public = True
+                            if show_views_res.data and show_views_res.data[0]['value'] == "False":
+                                show_views_public = False
                         
-                        can_see_views = is_admin_view or show_views_public
+                            can_see_views = is_admin_view or show_views_public
 
-                        col1, col2, col3, col4, col5 = st.columns([5, 2, 2, 1.5, 1.5])
-                        with col1: st.html("<div id='brag-board-header' style='font-weight:bold; text-align:center;'>제목</div>")
-                        with col2: st.html("<div style='font-weight:bold; text-align:center;'>작성자</div>")
-                        with col3: st.html("<div style='font-weight:bold; text-align:center;'>작성일시</div>")
-                        with col4: 
-                            header_text = "조회수" if can_see_views else ""
-                            st.html(f"<div style='font-weight:bold; text-align:center;'>{header_text}</div>")
-                        with col5: st.html("<div style='font-weight:bold; text-align:center;'>좋아요</div>")
+                            col1, col2, col3, col4, col5 = st.columns([5, 2, 2, 1.5, 1.5])
+                            with col1: st.html("<div id='brag-board-header' style='font-weight:bold; text-align:center;'>제목</div>")
+                            with col2: st.html("<div style='font-weight:bold; text-align:center;'>작성자</div>")
+                            with col3: st.html("<div style='font-weight:bold; text-align:center;'>작성일시</div>")
+                            with col4: 
+                                header_text = "조회수" if can_see_views else ""
+                                st.html(f"<div style='font-weight:bold; text-align:center;'>{header_text}</div>")
+                            with col5: st.html("<div style='font-weight:bold; text-align:center;'>좋아요</div>")
                         
-                        now_seoul = pd.Timestamp.now(tz='Asia/Seoul')
+                            now_seoul = pd.Timestamp.now(tz='Asia/Seoul')
                         
-                        for p in brag_res.data:
-                            if p.get('is_hidden') and not is_admin_view:
-                                continue
+                            for p in brag_res.data:
+                                if p.get('is_hidden') and not is_admin_view:
+                                    continue
                                 
-                            p_time_utc = pd.to_datetime(p['created_at'])
-                            if p_time_utc.tzinfo is None:
-                                p_time_utc = p_time_utc.tz_localize('UTC')
-                            p_time_seoul = p_time_utc.tz_convert('Asia/Seoul')
+                                p_time_utc = pd.to_datetime(p['created_at'])
+                                if p_time_utc.tzinfo is None:
+                                    p_time_utc = p_time_utc.tz_localize('UTC')
+                                p_time_seoul = p_time_utc.tz_convert('Asia/Seoul')
                             
-                            if p_time_seoul.date() == now_seoul.date():
-                                p_time = p_time_seoul.strftime('%H:%M')
-                            else:
-                                p_time = p_time_seoul.strftime('%y.%m.%d')
+                                if p_time_seoul.date() == now_seoul.date():
+                                    p_time = p_time_seoul.strftime('%H:%M')
+                                else:
+                                    p_time = p_time_seoul.strftime('%y.%m.%d')
                             
-                            title_text = p.get('title') or "제목 없음"
+                                title_text = p.get('title') or "제목 없음"
                             
-                            if p.get('is_hidden'):
-                                title_text = f"🚨[숨김] {title_text}"
+                                if p.get('is_hidden'):
+                                    title_text = f"🚨[숨김] {title_text}"
                                 
-                            likes = p.get('likes_count') or 0
-                            views = p.get('views_count') or 0
+                                likes = p.get('likes_count') or 0
+                                views = p.get('views_count') or 0
                             
-                            c1, c2, c3, c4, c5 = st.columns([5, 2, 2, 1.5, 1.5])
-                            with c1:
-                                def view_detail_cb(post_id=p['id'], current_views=views):
-                                    st.session_state["brag_view_mode"] = "detail"
-                                    st.session_state["brag_selected_post"] = post_id
-                                    # 조회수 1 증가 (DB 직빵 업데이트)
-                                    supabase.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
-                                    
-                                st.button(title_text, key=f"list_btn_{p['id']}", on_click=view_detail_cb, type="tertiary")
-                            with c2:
-                                st.html(f"<div style='text-align:center; font-size:14px; margin-top:4px;'>{p['author']}</div>")
-                            with c3:
-                                st.html(f"<div style='text-align:center; font-size:14px; color:gray; margin-top:4px;'>{p_time}</div>")
-                            with c4:
-                                view_text = str(views) if can_see_views else "-"
-                                st.html(f"<div style='text-align:center; font-size:14px; color:#A0C4FF; margin-top:4px;'>{view_text}</div>")
-                            with c5:
-                                st.html(f"<div style='text-align:center; font-size:14px; color:#FFB4B4; margin-top:4px;'>{likes}</div>")
+                                c1, c2, c3, c4, c5 = st.columns([5, 2, 2, 1.5, 1.5])
+                                with c1:
+                                    def view_detail_cb(post_id=p['id'], current_views=views):
+                                        st.session_state["brag_view_mode"] = "detail"
+                                        st.session_state["brag_selected_post"] = post_id
+                                        # 조회수 1 증가 (DB 직빵 업데이트)
+                                        supabase.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
+                                        
+                                    st.button(title_text, key=f"list_btn_{p['id']}", on_click=view_detail_cb, type="tertiary")
+                                with c2:
+                                    st.html(f"<div style='text-align:center; font-size:14px; margin-top:4px;'>{p['author']}</div>")
+                                with c3:
+                                    st.html(f"<div style='text-align:center; font-size:14px; color:gray; margin-top:4px;'>{p_time}</div>")
+                                with c4:
+                                    view_text = str(views) if can_see_views else "-"
+                                    st.html(f"<div style='text-align:center; font-size:14px; color:#A0C4FF; margin-top:4px;'>{view_text}</div>")
+                                with c5:
+                                    st.html(f"<div style='text-align:center; font-size:14px; color:#FFB4B4; margin-top:4px;'>{likes}</div>")
+                        
+                        elif view_mode == "바둑판형":
+                            show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
+                            show_views_public = True
+                            if show_views_res.data and show_views_res.data[0]['value'] == "False":
+                                show_views_public = False
+                            can_see_views = is_admin_view or show_views_public
+                            now_seoul = pd.Timestamp.now(tz='Asia/Seoul')
+                            
+                            display_posts = [p for p in brag_res.data if not (p.get('is_hidden') and not is_admin_view)]
+                            
+                            num_cols = 4
+                            for i in range(0, len(display_posts), num_cols):
+                                cols = st.columns(num_cols)
+                                for j in range(num_cols):
+                                    if i + j < len(display_posts):
+                                        p = display_posts[i + j]
+                                        with cols[j]:
+                                            with st.container(border=True):
+                                                title_text = p.get('title') or "제목 없음"
+                                                if p.get('is_hidden'):
+                                                    title_text = f"🚨[숨김] {title_text}"
+                                                    
+                                                def view_detail_cb_grid(post_id=p['id'], current_views=p.get('views_count') or 0):
+                                                    st.session_state["brag_view_mode"] = "detail"
+                                                    st.session_state["brag_selected_post"] = post_id
+                                                    supabase.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
+                                                
+                                                # 버튼의 라벨 길이를 자르거나 할 수 있지만 여기선 그대로 렌더링
+                                                st.button(title_text, key=f"grid_btn_{p['id']}", on_click=view_detail_cb_grid, use_container_width=True)
+                                                
+                                                if p.get('image_base64'):
+                                                    img_b64 = p['image_base64']
+                                                    st.html(f"<div style='height: 120px; width: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; border-radius: 4px; margin-bottom: 8px; margin-top: 4px;'><img src='data:image/jpeg;base64,{img_b64}' style='min-width: 100%; min-height: 100%; object-fit: cover;'></div>")
+                                                else:
+                                                    st.html("<div style='height: 120px; width: 100%; display: flex; justify-content: center; align-items: center; background-color: rgba(255,255,255,0.05); border-radius: 4px; margin-bottom: 8px; margin-top: 4px; color: gray; font-size: 12px;'>이미지 없음</div>")
+                                                
+                                                p_time_utc = pd.to_datetime(p['created_at'])
+                                                if p_time_utc.tzinfo is None:
+                                                    p_time_utc = p_time_utc.tz_localize('UTC')
+                                                p_time_seoul = p_time_utc.tz_convert('Asia/Seoul')
+                                                if p_time_seoul.date() == now_seoul.date():
+                                                    p_time = p_time_seoul.strftime('%H:%M')
+                                                else:
+                                                    p_time = p_time_seoul.strftime('%y.%m.%d')
+                                                    
+                                                st.markdown(f"<div style='font-size: 12px; color: #aaa; margin-top: 4px; text-align: left;'>👤 {p['author']}</div>", unsafe_allow_html=True)
+                                                info_str = f"🕒 {p_time} &nbsp;|&nbsp; ❤️ {p.get('likes_count') or 0}"
+                                                if can_see_views:
+                                                    info_str += f" &nbsp;|&nbsp; 👁️ {p.get('views_count') or 0}"
+                                                st.markdown(f"<div style='font-size: 11px; color: #888; margin-top: 2px; text-align: left;'>{info_str}</div>", unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"게시글 로딩 에러: {e}")
 
@@ -4294,3 +4465,46 @@ elif choice == "📝 내 정보 수정":
 elif choice == "🛠️ 사용자 관리 사령탑":
     # 👑 최고 관리자 전용 제어반 함수 호출
     render_admin_panel()
+
+# ------------------------------------------------------------------
+# 🗺️ [내비게이션 동기화] 브라우저 뒤로가기(Query Params) 지원 (하단: State -> URL)
+# ------------------------------------------------------------------
+def update_query_params():
+    current_page = st.session_state.get('scrn_select_radio', "체결 로그")
+    if current_page != st.session_state.get("last_page"):
+        st.query_params["page"] = current_page
+        st.session_state["last_page"] = current_page
+        
+    current_upper = "true" if st.session_state.get('upper_limit_filter', False) else "false"
+    if current_upper != st.session_state.get("last_upper"):
+        st.query_params["upper"] = current_upper
+        st.session_state["last_upper"] = current_upper
+
+    if current_page == "수익율 자랑":
+        current_view = st.session_state.get('brag_view_mode', "list")
+        if current_view != st.session_state.get("last_view"):
+            st.query_params["view"] = current_view
+            st.session_state["last_view"] = current_view
+            
+        current_post_id = st.session_state.get('brag_selected_post')
+        last_post_id = st.session_state.get("last_post_id")
+        current_post_id_str = str(current_post_id) if current_post_id is not None else None
+        
+        if current_post_id_str != last_post_id:
+            if current_post_id_str is not None:
+                st.query_params["post_id"] = current_post_id_str
+            else:
+                if "post_id" in st.query_params:
+                    del st.query_params["post_id"]
+            st.session_state["last_post_id"] = current_post_id_str
+    else:
+        # 타 페이지 이동 시 자랑게시판 파라미터 삭제
+        if "view" in st.query_params:
+            del st.query_params["view"]
+        if "post_id" in st.query_params:
+            del st.query_params["post_id"]
+        st.session_state["last_view"] = None
+        st.session_state["last_post_id"] = None
+        st.session_state['brag_selected_post'] = None 
+
+update_query_params()
