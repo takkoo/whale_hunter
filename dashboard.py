@@ -69,7 +69,17 @@ apply_query_params()
 
 # 🚀 [브라우저 뒤로가기 강제 새로고침 패치]
 # Streamlit SPA 특성상 뒤로가기 시 URL만 바뀌고 화면이 멈추는 현상을 방지하기 위해
-# 브라우저의 popstate 이벤트 감지 시 전체 새로고침을 트리거합니다.
+# popstate 이벤트 감지 시 화면 깜빡임 없이 숨겨진 버튼을 눌러 Streamlit 내부 렌더링만 강제로 유발합니다.
+st.markdown('<div id="popstate_btn_marker" style="display:none;"></div>', unsafe_allow_html=True)
+st.button("TriggerPopStateRerun", key="popstate_btn")
+st.markdown("""
+<style>
+    div[data-testid="stElementContainer"]:has(#popstate_btn_marker) + div[data-testid="stElementContainer"] {
+        display: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 import streamlit.components.v1 as components
 components.html(
     """
@@ -77,7 +87,13 @@ components.html(
         const parentWindow = window.parent || window;
         if (!parentWindow.hasPopStateListener) {
             parentWindow.addEventListener("popstate", () => {
-                parentWindow.location.reload();
+                const buttons = parentWindow.document.querySelectorAll('button');
+                for (let btn of buttons) {
+                    if (btn.innerText.includes("TriggerPopStateRerun")) {
+                        btn.click();
+                        break;
+                    }
+                }
             });
             parentWindow.hasPopStateListener = true;
         }
@@ -2193,6 +2209,17 @@ if choice == "🏠 홈화면":
     if 'scrn_select_radio' not in st.session_state:
         st.session_state['scrn_select_radio'] = "체결 로그"
     scrn_select = st.session_state['scrn_select_radio']
+
+    # 🔒 [전역 보안 점검] 비회원이 URL 조작이나 로그아웃을 통해 회원 전용 화면에 머무는 것 차단
+    if not st.session_state.get('authenticated', False):
+        if scrn_select in ["TOP 10 화면", "시계열 추적", "수익율 화면", "상선고 화면", "기간 누적 폭주"] or st.session_state.get('upper_limit_filter', False) or search_keyword:
+            st.session_state['scrn_select_radio'] = "체결 로그"
+            st.session_state['upper_limit_filter'] = False
+            st.session_state['last_search_keyword'] = ""
+            st.session_state['search_input_val'] = ""
+            search_keyword = ""
+            scrn_select = "체결 로그"
+            st.query_params.clear()
     
     # 🌟 [ 전략적 펌핑 로직 ]
     # 체결 로그(목록보기) 상태이고 검색어가 없을 때는 세션에 저장된 limit 만큼 가져옵니다.
