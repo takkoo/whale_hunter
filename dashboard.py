@@ -3339,8 +3339,6 @@ if choice == "🏠 홈화면":
                         st.session_state["brag_mount_id"] = time.time()
                     st.rerun()
             with col_view:
-                # 수직 정렬 미세 조정을 위한 공백 (기존 st.write("") 보다 높이를 줄임)
-                st.html("<div style='margin-top: 8px;'></div>")
                 st.radio("보기 형태", ["목록형", "바둑판형"], horizontal=True, label_visibility="collapsed", key="brag_layout_mode_radio")
 
             if st.session_state["show_brag_form"]:
