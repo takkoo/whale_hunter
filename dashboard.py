@@ -3713,12 +3713,6 @@ if choice == "🏠 홈화면":
                                         p = display_posts[i + j]
                                         with cols[j]:
                                             with st.container(border=True):
-                                                if p.get('image_base64'):
-                                                    img_b64 = p['image_base64']
-                                                    st.html(f"<div style='height: 120px; width: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; border-radius: 4px; margin-bottom: 8px;'><img src='data:image/jpeg;base64,{img_b64}' style='min-width: 100%; min-height: 100%; object-fit: cover;'></div>")
-                                                else:
-                                                    st.html("<div style='height: 120px; width: 100%; display: flex; justify-content: center; align-items: center; background-color: rgba(255,255,255,0.05); border-radius: 4px; margin-bottom: 8px; color: gray; font-size: 12px;'>이미지 없음</div>")
-                                                
                                                 title_text = p.get('title') or "제목 없음"
                                                 if p.get('is_hidden'):
                                                     title_text = f"🚨[숨김] {title_text}"
@@ -3730,6 +3724,12 @@ if choice == "🏠 홈화면":
                                                 
                                                 # 버튼의 라벨 길이를 자르거나 할 수 있지만 여기선 그대로 렌더링
                                                 st.button(title_text, key=f"grid_btn_{p['id']}", on_click=view_detail_cb_grid, use_container_width=True)
+                                                
+                                                if p.get('image_base64'):
+                                                    img_b64 = p['image_base64']
+                                                    st.html(f"<div style='height: 120px; width: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; border-radius: 4px; margin-bottom: 8px; margin-top: 4px;'><img src='data:image/jpeg;base64,{img_b64}' style='min-width: 100%; min-height: 100%; object-fit: cover;'></div>")
+                                                else:
+                                                    st.html("<div style='height: 120px; width: 100%; display: flex; justify-content: center; align-items: center; background-color: rgba(255,255,255,0.05); border-radius: 4px; margin-bottom: 8px; margin-top: 4px; color: gray; font-size: 12px;'>이미지 없음</div>")
                                                 
                                                 p_time_utc = pd.to_datetime(p['created_at'])
                                                 if p_time_utc.tzinfo is None:
