@@ -99,13 +99,16 @@ components.html(
         const parentWindow = window.parent || window;
         if (!parentWindow.hasPopStateListener) {
             parentWindow.addEventListener("popstate", () => {
-                const buttons = parentWindow.document.querySelectorAll('button');
-                for (let btn of buttons) {
-                    if (btn.innerText.includes("TriggerPopStateRerun")) {
-                        btn.click();
-                        break;
+                // Streamlit의 내부 상태 업데이트가 끝날 때까지 약간 기다린 후 버튼 클릭
+                setTimeout(() => {
+                    const buttons = parentWindow.document.querySelectorAll('button');
+                    for (let btn of buttons) {
+                        if (btn.innerText.includes("TriggerPopStateRerun")) {
+                            btn.click();
+                            break;
+                        }
                     }
-                }
+                }, 150);
             });
             parentWindow.hasPopStateListener = true;
         }
