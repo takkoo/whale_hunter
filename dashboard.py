@@ -66,6 +66,25 @@ def apply_query_params():
         st.session_state["last_post_id"] = None
 
 apply_query_params()
+
+# 🚀 [브라우저 뒤로가기 강제 새로고침 패치]
+# Streamlit SPA 특성상 뒤로가기 시 URL만 바뀌고 화면이 멈추는 현상을 방지하기 위해
+# 브라우저의 popstate 이벤트 감지 시 전체 새로고침을 트리거합니다.
+import streamlit.components.v1 as components
+components.html(
+    """
+    <script>
+        const parentWindow = window.parent || window;
+        if (!parentWindow.hasPopStateListener) {
+            parentWindow.addEventListener("popstate", () => {
+                parentWindow.location.reload();
+            });
+            parentWindow.hasPopStateListener = true;
+        }
+    </script>
+    """,
+    height=0, width=0
+)
 # ------------------------------------------------------------------
 # 🎯 [가상 데이터 쾌속 입력 팝업 로직] 상선고 히트맵 셀 클릭 연동
 # ------------------------------------------------------------------
