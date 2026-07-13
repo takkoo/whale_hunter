@@ -3580,12 +3580,22 @@ if choice == "🏠 홈화면":
                     st.button("⬅️ 목록으로", type="primary", on_click=back_to_list)
                     render_post(st.session_state["brag_selected_post"])
                 else:
-                    brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden").order("created_at", desc=True).limit(100).execute()
+                    if "brag_layout_mode" not in st.session_state:
+                        st.session_state["brag_layout_mode"] = "목록형"
+                        
+                    view_mode = st.radio("보기 형태", ["목록형", "바둑판형"], horizontal=True, key="brag_layout_mode_radio")
+                    
+                    if view_mode == "목록형":
+                        brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden").order("created_at", desc=True).limit(100).execute()
+                    else:
+                        brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden, image_base64").order("created_at", desc=True).limit(100).execute()
                     
                     if not brag_res.data:
                         st.info("아직 자랑글이 없습니다. 첫 번째로 자랑해 보세요!")
                     else:
                         st.markdown(f"<div style='font-size: 14px; color: gray; margin-bottom: 10px;'>총 {len(brag_res.data)}개의 자랑글이 있습니다.</div>", unsafe_allow_html=True)
+                        
+                        if view_mode == "목록형":
                         
                         # --- 행 간격 극강 압축 및 헤더 스타일을 위한 CSS ---
                         st.html("""
@@ -3684,6 +3694,57 @@ if choice == "🏠 홈화면":
                                 st.html(f"<div style='text-align:center; font-size:14px; color:#A0C4FF; margin-top:4px;'>{view_text}</div>")
                             with c5:
                                 st.html(f"<div style='text-align:center; font-size:14px; color:#FFB4B4; margin-top:4px;'>{likes}</div>")
+                        
+                        elif view_mode == "바둑판형":
+                            show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
+                            show_views_public = True
+                            if show_views_res.data and show_views_res.data[0]['value'] == "False":
+                                show_views_public = False
+                            can_see_views = is_admin_view or show_views_public
+                            now_seoul = pd.Timestamp.now(tz='Asia/Seoul')
+                            
+                            display_posts = [p for p in brag_res.data if not (p.get('is_hidden') and not is_admin_view)]
+                            
+                            num_cols = 4
+                            for i in range(0, len(display_posts), num_cols):
+                                cols = st.columns(num_cols)
+                                for j in range(num_cols):
+                                    if i + j < len(display_posts):
+                                        p = display_posts[i + j]
+                                        with cols[j]:
+                                            with st.container(border=True):
+                                                if p.get('image_base64'):
+                                                    img_b64 = p['image_base64']
+                                                    st.html(f"<div style='height: 120px; width: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; border-radius: 4px; margin-bottom: 8px;'><img src='data:image/jpeg;base64,{img_b64}' style='min-width: 100%; min-height: 100%; object-fit: cover;'></div>")
+                                                else:
+                                                    st.html("<div style='height: 120px; width: 100%; display: flex; justify-content: center; align-items: center; background-color: rgba(255,255,255,0.05); border-radius: 4px; margin-bottom: 8px; color: gray; font-size: 12px;'>이미지 없음</div>")
+                                                
+                                                title_text = p.get('title') or "제목 없음"
+                                                if p.get('is_hidden'):
+                                                    title_text = f"🚨[숨김] {title_text}"
+                                                    
+                                                def view_detail_cb_grid(post_id=p['id'], current_views=p.get('views_count') or 0):
+                                                    st.session_state["brag_view_mode"] = "detail"
+                                                    st.session_state["brag_selected_post"] = post_id
+                                                    supabase.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
+                                                
+                                                # 버튼의 라벨 길이를 자르거나 할 수 있지만 여기선 그대로 렌더링
+                                                st.button(title_text, key=f"grid_btn_{p['id']}", on_click=view_detail_cb_grid, use_container_width=True)
+                                                
+                                                p_time_utc = pd.to_datetime(p['created_at'])
+                                                if p_time_utc.tzinfo is None:
+                                                    p_time_utc = p_time_utc.tz_localize('UTC')
+                                                p_time_seoul = p_time_utc.tz_convert('Asia/Seoul')
+                                                if p_time_seoul.date() == now_seoul.date():
+                                                    p_time = p_time_seoul.strftime('%H:%M')
+                                                else:
+                                                    p_time = p_time_seoul.strftime('%y.%m.%d')
+                                                    
+                                                st.markdown(f"<div style='font-size: 12px; color: #aaa; margin-top: 4px; text-align: left;'>👤 {p['author']}</div>", unsafe_allow_html=True)
+                                                info_str = f"🕒 {p_time} &nbsp;|&nbsp; ❤️ {p.get('likes_count') or 0}"
+                                                if can_see_views:
+                                                    info_str += f" &nbsp;|&nbsp; 👁️ {p.get('views_count') or 0}"
+                                                st.markdown(f"<div style='font-size: 11px; color: #888; margin-top: 2px; text-align: left;'>{info_str}</div>", unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"게시글 로딩 에러: {e}")
 
