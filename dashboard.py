@@ -44,6 +44,11 @@ def apply_query_params():
         st.session_state['scrn_select_radio'] = page
         st.session_state["last_page"] = page
 
+    upper = st.query_params.get("upper")
+    if upper is not None and upper != st.session_state.get("last_upper"):
+        st.session_state['upper_limit_filter'] = (upper == "true")
+        st.session_state["last_upper"] = upper
+
     view = st.query_params.get("view")
     if view and view != st.session_state.get("last_view"):
         st.session_state['brag_view_mode'] = view
@@ -4404,21 +4409,36 @@ def update_query_params():
         st.query_params["page"] = current_page
         st.session_state["last_page"] = current_page
         
-    current_view = st.session_state.get('brag_view_mode', "list")
-    if current_view != st.session_state.get("last_view"):
-        st.query_params["view"] = current_view
-        st.session_state["last_view"] = current_view
+    current_upper = "true" if st.session_state.get('upper_limit_filter', False) else "false"
+    if current_upper != st.session_state.get("last_upper"):
+        st.query_params["upper"] = current_upper
+        st.session_state["last_upper"] = current_upper
+
+    if current_page == "수익율 자랑":
+        current_view = st.session_state.get('brag_view_mode', "list")
+        if current_view != st.session_state.get("last_view"):
+            st.query_params["view"] = current_view
+            st.session_state["last_view"] = current_view
+            
+        current_post_id = st.session_state.get('brag_selected_post')
+        last_post_id = st.session_state.get("last_post_id")
+        current_post_id_str = str(current_post_id) if current_post_id is not None else None
         
-    current_post_id = st.session_state.get('brag_selected_post')
-    last_post_id = st.session_state.get("last_post_id")
-    current_post_id_str = str(current_post_id) if current_post_id is not None else None
-    
-    if current_post_id_str != last_post_id:
-        if current_post_id_str is not None:
-            st.query_params["post_id"] = current_post_id_str
-        else:
-            if "post_id" in st.query_params:
-                del st.query_params["post_id"]
-        st.session_state["last_post_id"] = current_post_id_str
+        if current_post_id_str != last_post_id:
+            if current_post_id_str is not None:
+                st.query_params["post_id"] = current_post_id_str
+            else:
+                if "post_id" in st.query_params:
+                    del st.query_params["post_id"]
+            st.session_state["last_post_id"] = current_post_id_str
+    else:
+        # 타 페이지 이동 시 자랑게시판 파라미터 삭제
+        if "view" in st.query_params:
+            del st.query_params["view"]
+        if "post_id" in st.query_params:
+            del st.query_params["post_id"]
+        st.session_state["last_view"] = None
+        st.session_state["last_post_id"] = None
+        st.session_state['brag_selected_post'] = None 
 
 update_query_params()
