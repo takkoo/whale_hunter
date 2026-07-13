@@ -38,34 +38,63 @@ supabase = init_supabase_client()
 # ------------------------------------------------------------------
 # 🗺️ [내비게이션 동기화] 브라우저 뒤로가기(Query Params) 지원 (상단: URL -> State)
 # ------------------------------------------------------------------
-def apply_query_params():
-    page = st.query_params.get("page")
+
+# 1. JS popstate로부터 넘어온 raw 쿼리 스트링 처리 (버그 회피용)
+raw_qs = st.session_state.get("popstate_sync", "")
+if raw_qs:
+    # 한 번 읽었으면 위젯 렌더링을 위해 비웁니다.
+    st.session_state["popstate_sync"] = ""
+
+# 2. 통신용 숨겨진 텍스트 인풋 렌더링
+st.markdown('<div id="url_sync_marker" style="display:none;"></div>', unsafe_allow_html=True)
+st.text_input("Popstate Sync", key="popstate_sync", label_visibility="collapsed")
+st.markdown("""
+<style>
+    div[data-testid="stElementContainer"]:has(#url_sync_marker) + div[data-testid="stElementContainer"] {
+        display: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+def apply_query_params(raw_qs):
+    params = {}
+    if raw_qs:
+        import urllib.parse
+        if raw_qs.startswith("?"):
+            raw_qs = raw_qs[1:]
+        parsed = urllib.parse.parse_qs(raw_qs)
+        for k, v in parsed.items():
+            params[k] = v[0]
+    else:
+        params = {k: st.query_params.get(k) for k in st.query_params}
+
+    page = params.get("page")
     if page and page != st.session_state.get("last_page"):
         st.session_state['scrn_select_radio'] = page
         st.session_state["last_page"] = page
 
-    upper = st.query_params.get("upper")
+    upper = params.get("upper")
     if upper is not None and upper != st.session_state.get("last_upper"):
         st.session_state['upper_limit_filter'] = (upper == "true")
         st.session_state["last_upper"] = upper
 
-    view = st.query_params.get("view")
+    view = params.get("view")
     if view and view != st.session_state.get("last_view"):
         st.session_state['brag_view_mode'] = view
         st.session_state["last_view"] = view
 
-    post_id = st.query_params.get("post_id")
+    post_id = params.get("post_id")
     if post_id and post_id != st.session_state.get("last_post_id"):
         try:
             st.session_state['brag_selected_post'] = int(post_id)
         except ValueError:
             st.session_state['brag_selected_post'] = post_id
         st.session_state["last_post_id"] = post_id
-    elif "post_id" not in st.query_params and st.session_state.get("last_post_id") is not None:
+    elif "post_id" not in params and st.session_state.get("last_post_id") is not None:
         st.session_state['brag_selected_post'] = None
         st.session_state["last_post_id"] = None
 
-apply_query_params()
+apply_query_params(raw_qs)
 
 # 🔒 [전역 보안 점검] 비회원이 URL 조작이나 로그아웃을 통해 회원 전용 화면에 머무는 것 차단
 # 위젯이 렌더링되기 전이므로 여기서 session_state를 변경해도 StreamlitAPIException이 발생하지 않습니다.
@@ -79,19 +108,7 @@ if not st.session_state.get('authenticated', False):
         st.session_state['search_input_val'] = "" 
         st.query_params.clear()
 
-# 🚀 [브라우저 뒤로가기 강제 새로고침 패치]
-# Streamlit SPA 특성상 뒤로가기 시 URL만 바뀌고 화면이 멈추는 현상을 방지하기 위해
-# popstate 이벤트 감지 시 화면 깜빡임 없이 숨겨진 버튼을 눌러 Streamlit 내부 렌더링만 강제로 유발합니다.
-st.markdown('<div id="popstate_btn_marker" style="display:none;"></div>', unsafe_allow_html=True)
-st.button("TriggerPopStateRerun", key="popstate_btn")
-st.markdown("""
-<style>
-    div[data-testid="stElementContainer"]:has(#popstate_btn_marker) + div[data-testid="stElementContainer"] {
-        display: none !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
+# 🚀 [브라우저 뒤로가기 강제 동기화 패치]
 import streamlit.components.v1 as components
 components.html(
     """
@@ -99,16 +116,14 @@ components.html(
         const parentWindow = window.parent || window;
         if (!parentWindow.hasPopStateListener) {
             parentWindow.addEventListener("popstate", () => {
-                // Streamlit의 내부 상태 업데이트가 끝날 때까지 약간 기다린 후 버튼 클릭
-                setTimeout(() => {
-                    const buttons = parentWindow.document.querySelectorAll('button');
-                    for (let btn of buttons) {
-                        if (btn.innerText.includes("TriggerPopStateRerun")) {
-                            btn.click();
-                            break;
-                        }
-                    }
-                }, 150);
+                const inputs = parentWindow.document.querySelectorAll('input[aria-label="Popstate Sync"]');
+                if (inputs.length > 0) {
+                    const input = inputs[0];
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                    setter.call(input, parentWindow.location.search);
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+                }
             });
             parentWindow.hasPopStateListener = true;
         }
