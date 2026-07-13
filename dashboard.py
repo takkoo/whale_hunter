@@ -36,6 +36,32 @@ def init_supabase_client():
 supabase = init_supabase_client()
 
 # ------------------------------------------------------------------
+# 🗺️ [내비게이션 동기화] 브라우저 뒤로가기(Query Params) 지원 (상단: URL -> State)
+# ------------------------------------------------------------------
+def apply_query_params():
+    page = st.query_params.get("page")
+    if page and page != st.session_state.get("last_page"):
+        st.session_state['scrn_select_radio'] = page
+        st.session_state["last_page"] = page
+
+    view = st.query_params.get("view")
+    if view and view != st.session_state.get("last_view"):
+        st.session_state['brag_view_mode'] = view
+        st.session_state["last_view"] = view
+
+    post_id = st.query_params.get("post_id")
+    if post_id and post_id != st.session_state.get("last_post_id"):
+        try:
+            st.session_state['brag_selected_post'] = int(post_id)
+        except ValueError:
+            st.session_state['brag_selected_post'] = post_id
+        st.session_state["last_post_id"] = post_id
+    elif "post_id" not in st.query_params and st.session_state.get("last_post_id") is not None:
+        st.session_state['brag_selected_post'] = None
+        st.session_state["last_post_id"] = None
+
+apply_query_params()
+# ------------------------------------------------------------------
 # 🎯 [가상 데이터 쾌속 입력 팝업 로직] 상선고 히트맵 셀 클릭 연동
 # ------------------------------------------------------------------
 if "mock_stock" in st.query_params and "mock_date" in st.query_params:
@@ -4368,3 +4394,31 @@ elif choice == "📝 내 정보 수정":
 elif choice == "🛠️ 사용자 관리 사령탑":
     # 👑 최고 관리자 전용 제어반 함수 호출
     render_admin_panel()
+
+# ------------------------------------------------------------------
+# 🗺️ [내비게이션 동기화] 브라우저 뒤로가기(Query Params) 지원 (하단: State -> URL)
+# ------------------------------------------------------------------
+def update_query_params():
+    current_page = st.session_state.get('scrn_select_radio', "체결 로그")
+    if current_page != st.session_state.get("last_page"):
+        st.query_params["page"] = current_page
+        st.session_state["last_page"] = current_page
+        
+    current_view = st.session_state.get('brag_view_mode', "list")
+    if current_view != st.session_state.get("last_view"):
+        st.query_params["view"] = current_view
+        st.session_state["last_view"] = current_view
+        
+    current_post_id = st.session_state.get('brag_selected_post')
+    last_post_id = st.session_state.get("last_post_id")
+    current_post_id_str = str(current_post_id) if current_post_id is not None else None
+    
+    if current_post_id_str != last_post_id:
+        if current_post_id_str is not None:
+            st.query_params["post_id"] = current_post_id_str
+        else:
+            if "post_id" in st.query_params:
+                del st.query_params["post_id"]
+        st.session_state["last_post_id"] = current_post_id_str
+
+update_query_params()
