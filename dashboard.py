@@ -3327,12 +3327,21 @@ if choice == "🏠 홈화면":
             btn_label = "글쓰기 창 닫기 ❌" if st.session_state["show_brag_form"] else "📝 글 쓰기"
             is_auth = st.session_state.get("authenticated", False)
             
-            if st.button(btn_label, use_container_width=False, disabled=not is_auth, help="로그인 후 자랑글을 작성할 수 있습니다." if not is_auth else None):
-                st.session_state["show_brag_form"] = not st.session_state["show_brag_form"]
-                if st.session_state["show_brag_form"]:
-                    import time
-                    st.session_state["brag_mount_id"] = time.time()
-                st.rerun()
+            if "brag_layout_mode_radio" not in st.session_state:
+                st.session_state["brag_layout_mode_radio"] = "바둑판형"
+                
+            col_btn, col_view = st.columns([1.5, 8.5])
+            with col_btn:
+                if st.button(btn_label, use_container_width=True, disabled=not is_auth, help="로그인 후 자랑글을 작성할 수 있습니다." if not is_auth else None):
+                    st.session_state["show_brag_form"] = not st.session_state["show_brag_form"]
+                    if st.session_state["show_brag_form"]:
+                        import time
+                        st.session_state["brag_mount_id"] = time.time()
+                    st.rerun()
+            with col_view:
+                # 수직 정렬을 맞추기 위한 공백
+                st.write("")
+                st.radio("보기 형태", ["목록형", "바둑판형"], horizontal=True, label_visibility="collapsed", key="brag_layout_mode_radio")
 
             if st.session_state["show_brag_form"]:
                 st.html("""
@@ -3580,10 +3589,7 @@ if choice == "🏠 홈화면":
                     st.button("⬅️ 목록으로", type="primary", on_click=back_to_list)
                     render_post(st.session_state["brag_selected_post"])
                 else:
-                    if "brag_layout_mode" not in st.session_state:
-                        st.session_state["brag_layout_mode"] = "목록형"
-                        
-                    view_mode = st.radio("보기 형태", ["목록형", "바둑판형"], horizontal=True, key="brag_layout_mode_radio")
+                    view_mode = st.session_state.get("brag_layout_mode_radio", "바둑판형")
                     
                     if view_mode == "목록형":
                         brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden").order("created_at", desc=True).limit(100).execute()
