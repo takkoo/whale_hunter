@@ -1575,9 +1575,8 @@ if choice == "🏠 홈화면":
     # 2. 당일 데이터 엔진 (오늘만) -> 1분 캐시 적용하여 전체 데이터(최대 15만건) 로드
     @st.cache_data(ttl=60, max_entries=1, show_spinner=False)
     def load_today_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
-        # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 후 가장 최근 영업일로 매핑
-        kst_date = (datetime.utcnow() + timedelta(hours=9)).date()
-        today_str = get_latest_market_open_date(kst_date).strftime('%Y-%m-%d')
+        # 🇰🇷 한국 시간(KST) 기준으로 강제 설정 후 가장 최근 영업일로 매핑 (함수 내부에 구현됨)
+        today_str = get_latest_market_open_date().strftime('%Y-%m-%d')
         
         # 중복 제거를 위해 id 컬럼 추가
         query = supabase.table("whale_log").select("id, date, time, code, name, side, amount_krw, price, volume, asset_type, market_type")
