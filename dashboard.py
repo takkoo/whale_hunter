@@ -2327,6 +2327,9 @@ if choice == "🏠 홈화면":
     st.sidebar.markdown('<div class="btn-style-brag"></div>', unsafe_allow_html=True)
     if st.sidebar.button("💖 수익율 자랑"):
         st.session_state['scrn_select_radio'] = "수익율 자랑"
+        st.session_state["brag_view_mode"] = "list"
+        st.session_state["brag_selected_post"] = None
+        st.session_state["show_brag_form"] = False
         st.rerun()
         
     if st.session_state.get('authenticated', False):
