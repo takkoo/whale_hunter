@@ -3102,7 +3102,7 @@ if choice == "🏠 홈화면":
             with radar_col1:
                 radar_month = st.selectbox("📅 조회할 월 선택", month_options, key="radar_month")
             with radar_col2:
-                radar_week = st.selectbox("📆 주차 선택", ["월 전체", "전달+이달", "1주차", "2주차", "3주차", "4주차", "5주차"], index=1, key="radar_week")
+                radar_week = st.selectbox("📆 주차 선택", ["월 전체", "이전 30일", "1주차", "2주차", "3주차", "4주차", "5주차"], index=1, key="radar_week")
             with radar_col3:
                 radar_filter = st.selectbox("🎯 종목 필터", ["순수 개별종목 (우선주/ETF 제외)", "전체 종목 포함"], key="radar_filter")
             with radar_col4:
@@ -3146,24 +3146,10 @@ if choice == "🏠 홈화면":
                     if radar_week == "월 전체":
                         start_dt = first_day
                         end_dt = last_day
-                    elif radar_week == "전달+이달":
-                        prev_first_day = datetime(yyyy - 1 if mm == 1 else yyyy, 12 if mm == 1 else mm - 1, 1)
-                        prev_first_weekday = prev_first_day.weekday()
-                        if prev_first_weekday <= 4:
-                            prev_w1_monday = prev_first_day - timedelta(days=prev_first_weekday)
-                        else:
-                            prev_w1_monday = prev_first_day + timedelta(days=(7 - prev_first_weekday))
-                        prev_w3_monday = prev_w1_monday + timedelta(weeks=2)
-                        
-                        curr_first_weekday = first_day.weekday()
-                        if curr_first_weekday <= 4:
-                            curr_w1_monday = first_day - timedelta(days=curr_first_weekday)
-                        else:
-                            curr_w1_monday = first_day + timedelta(days=(7 - curr_first_weekday))
-                        curr_w2_friday = curr_w1_monday + timedelta(weeks=1) + timedelta(days=4)
-                        
-                        start_dt = prev_w3_monday
-                        end_dt = curr_w2_friday
+                    elif radar_week == "이전 30일":
+                        today = datetime.utcnow() + timedelta(hours=9)
+                        start_dt = (today - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
+                        end_dt = today.replace(hour=23, minute=59, second=59, microsecond=999999)
                     else:
                         week_num = int(radar_week[0])
                         first_weekday = first_day.weekday()
