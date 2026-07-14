@@ -318,7 +318,7 @@ import base64
 import streamlit as st
 
 def is_market_open_now():
-    now = datetime.now()
+    now = datetime.utcnow() + timedelta(hours=9)
     # 1. 주말 체크 (월=0, 토=5, 일=6)
     if now.weekday() >= 5:
         return False
@@ -340,7 +340,7 @@ def is_market_open_now():
 
 def get_latest_market_open_date(base_date=None):
     if base_date is None:
-        target = datetime.now()
+        target = datetime.utcnow() + timedelta(hours=9)
     else:
         # datetime 객체가 아니라 date 객체면 변환
         if not hasattr(base_date, 'time'):
@@ -2549,7 +2549,7 @@ if choice == "🏠 홈화면":
             ret_col1, ret_col2, ret_col3, ret_col4, ret_col_btn = st.columns([1.5, 1.5, 1.5, 1.5, 1])
             
             # 1. 월 생성 (최근 12개월)
-            today_date = datetime.now()
+            today_date = datetime.utcnow() + timedelta(hours=9)
             month_options = []
             for i in range(12):
                 m_date = today_date.replace(day=1) - timedelta(days=28 * i)
@@ -3092,7 +3092,7 @@ if choice == "🏠 홈화면":
         elif scrn_select == "상선고 화면":
             st.markdown("<h4 style='color:#FF8C00; border-left: 4px solid #FF8C00; padding-left: 10px;'>📡 상한가 선행 고래 포착 레이더 (상선고)</h4>", unsafe_allow_html=True)
             
-            today_date = datetime.now()
+            today_date = datetime.utcnow() + timedelta(hours=9)
             month_options = []
             for i in range(12):
                 m_date = today_date.replace(day=1) - timedelta(days=28 * i)
