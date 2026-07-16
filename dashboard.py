@@ -266,6 +266,55 @@ def fetch_kis_daily_volume(stock_code, start_date):
     except Exception as e:
         return pd.DataFrame()
 # ------------------------------------------------------------------
+# 📊 [투자자별 매매동향] 한투 KIS OpenAPI 연동
+# ------------------------------------------------------------------
+@st.cache_data(ttl=3600)
+def get_kis_access_token():
+    APP_KEY = st.secrets["kis"]["app_key"]
+    APP_SECRET = st.secrets["kis"]["app_secret"]
+    url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
+    headers = {"content-type": "application/json"}
+    body = {"grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET}
+    res = requests.post(url, headers=headers, json=body)
+    if res.status_code == 200:
+        return res.json()["access_token"]
+    return None
+
+@st.cache_data(ttl=600)
+def fetch_investor_net_buying(stock_code):
+    token = get_kis_access_token()
+    if not token:
+        return pd.DataFrame()
+    
+    APP_KEY = st.secrets["kis"]["app_key"]
+    APP_SECRET = st.secrets["kis"]["app_secret"]
+    url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-investor"
+    headers = {
+        "content-type": "application/json; charset=utf-8",
+        "authorization": f"Bearer {token}",
+        "appkey": APP_KEY,
+        "appsecret": APP_SECRET,
+        "tr_id": "FHKST01010900"
+    }
+    params = {
+        "FID_COND_MRKT_DIV_CODE": "J",
+        "FID_INPUT_ISCD": stock_code
+    }
+    res = requests.get(url, headers=headers, params=params)
+    if res.status_code == 200:
+        data = res.json().get("output", [])
+        if not data:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(data)
+        df['date_str'] = pd.to_datetime(df['stck_bsop_date']).dt.strftime('%m-%d')
+        # 단위: 백만원 -> 억원 (나누기 100)
+        df['frgn_net_100m'] = df['frgn_ntby_tr_pbmn'].astype(float) / 100
+        df['orgn_net_100m'] = df['orgn_ntby_tr_pbmn'].astype(float) / 100
+        return df[['date_str', 'frgn_net_100m', 'orgn_net_100m']]
+    return pd.DataFrame()
+
+# ------------------------------------------------------------------
 # (set_page_config는 최상단으로 이동됨)
 
 if 'show_mock_dialog' in st.session_state:
@@ -1162,11 +1211,12 @@ def draw_whale_bar_chart(target_code, target_name, df):
     # 최근 30일 날짜 리스트 생성
     date_list = [today - timedelta(days=x) for x in range(30)]
     
-    # 빈 뼈대 데이터프레임 만들기 (모든 날짜에 대해 매수/매도 0원으로 세팅)
+    # 빈 뼈대 데이터프레임 만들기 (모든 날짜에 대해 매수/매도/방향미상 0원으로 세팅)
     skeleton_data = []
     for d in date_list:
         skeleton_data.append({'date': d, 'side': '매수', 'amount_krw': 0})
         skeleton_data.append({'date': d, 'side': '매도', 'amount_krw': 0})
+        skeleton_data.append({'date': d, 'side': '방향미상', 'amount_krw': 0})
         
     skeleton_df = pd.DataFrame(skeleton_data)
     
@@ -1186,6 +1236,9 @@ def draw_whale_bar_chart(target_code, target_name, df):
     if not kis_df.empty:
         kis_df['date_str'] = pd.to_datetime(kis_df['date']).dt.strftime('%m-%d')
         kis_df['amount_100m'] = kis_df['acml_tr_pbmn'] / 100000000
+
+    # 투자자별 매매동향 (외국인/기관) 가져오기
+    investor_df = fetch_investor_net_buying(target_code)
     
     # 4. 차트 레이아웃 구성 (위: 고래 수급, 중간: 시장 거래대금, 아래: 캔들차트)
     fig_bar = make_subplots(
@@ -1196,9 +1249,10 @@ def draw_whale_bar_chart(target_code, target_name, df):
         subplot_titles=(f"[{target_name}] 고래 수급 누적 (30일)", "시장 전체 일일 거래대금", "주가 흐름 (OHLC)")
     )
     
-    # 상단 막대그래프 (매수/매도)
+    # 상단 막대그래프 (매수/매도/방향미상)
     buy_df = merged_df[merged_df['side'] == '매수']
     sell_df = merged_df[merged_df['side'] == '매도']
+    unknown_df = merged_df[merged_df['side'] == '방향미상']
     
     fig_bar.add_trace(go.Bar(
         x=buy_df['date_str'], y=buy_df['amount_krw_100m'],
@@ -1213,6 +1267,33 @@ def draw_whale_bar_chart(target_code, target_name, df):
         text=sell_df['amount_krw_100m'].apply(lambda x: f"{x:,.0f}억" if x > 0 else ""),
         textposition='outside', textfont=dict(size=11)
     ), row=1, col=1)
+
+    fig_bar.add_trace(go.Bar(
+        x=unknown_df['date_str'], y=unknown_df['amount_krw_100m'],
+        name="방향미상", marker_color='#888888', opacity=0.7,
+        text=unknown_df['amount_krw_100m'].apply(lambda x: f"{x:,.0f}억" if x > 0 else ""),
+        textposition='outside', textfont=dict(size=11, color='#aaaaaa')
+    ), row=1, col=1)
+    
+    if not investor_df.empty:
+        # 외국인 순매수 막대 (가느다랗게)
+        fig_bar.add_trace(go.Bar(
+            x=investor_df['date_str'], y=investor_df['frgn_net_100m'],
+            name="외국인 순매수", marker_color='#FFB000', opacity=0.9,
+            width=0.1,  # 얇은 막대
+            text=investor_df['frgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if abs(x) > 0 else ""),
+            textposition='auto', textfont=dict(size=9, color='#FFB000')
+        ), row=1, col=1)
+        
+        # 기관 순매수 막대 (가느다랗게)
+        fig_bar.add_trace(go.Bar(
+            x=investor_df['date_str'], y=investor_df['orgn_net_100m'],
+            name="기관 순매수", marker_color='#00FA9A', opacity=0.9,
+            width=0.1,  # 얇은 막대
+            text=investor_df['orgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if abs(x) > 0 else ""),
+            textposition='auto', textfont=dict(size=9, color='#00FA9A')
+        ), row=1, col=1)
+
     
     # 중간 막대그래프 (시장 전체 거래대금)
     if 'kis_df' in locals() and not kis_df.empty:
@@ -2346,6 +2427,8 @@ if choice == "🏠 홈화면":
         # 메인 차트용 데이터 필터링
         if not df.empty:
             main_df = df[df['date'] >= start_date.strftime('%Y-%m-%d')]
+            # 🚨 [과거 데이터 오염 방지] 2026-07-17 이전에 기록된 가짜 매수/매도 데이터는 모두 '방향미상'으로 강제 전환
+            main_df.loc[main_df['date'] < '2026-07-17', 'side'] = '방향미상'
         else:
             main_df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime', 'date_parsed'])
 
