@@ -104,7 +104,7 @@ apply_query_params(raw_qs)
 if not st.session_state.get('authenticated', False):
     _scrn = st.session_state.get('scrn_select_radio', "체결 로그")
     _search = st.session_state.get('search_input_val', "")
-    if _scrn in ["TOP 10 화면", "시계열 추적", "수익율 화면", "상선고 화면", "기간 누적 폭주"] or st.session_state.get('upper_limit_filter', False) or _search:
+    if _scrn in ["TOP 10 화면", "수익율 화면", "상선고 화면", "기간 누적 폭주"] or st.session_state.get('upper_limit_filter', False) or _search:
         st.session_state['scrn_select_radio'] = "체결 로그"
         st.session_state['upper_limit_filter'] = False
         st.session_state['last_search_keyword'] = ""
@@ -1528,7 +1528,7 @@ def draw_whale_bar_chart(target_code, target_name, df):
     st.markdown('<div class="jump-btn-wrapper"></div>', unsafe_allow_html=True)
     if st.button(f"📈 차트 보러가기", key=f"jump_btn_{target_code}", help=f"{target_name}의 시계열 차트로 즉시 이동합니다."):
         st.session_state['pending_search'] = target_name
-        st.session_state['scrn_select_radio'] = "시계열 추적"
+        st.session_state['scrn_select_radio'] = "체결 로그"
         st.rerun()
 
 # ------------------------------------------------------------------
@@ -2534,7 +2534,7 @@ if choice == "🏠 홈화면":
     # 체결 로그(목록보기) 상태이고 검색어가 없을 때는 세션에 저장된 limit 만큼 가져옵니다.
     if scrn_select == "체결 로그" and not search_keyword.strip():
         fetch_limit = st.session_state['log_fetch_limit']
-    elif scrn_select in ["TOP 10 화면", "시계열 추적", "수익율 화면"]:
+    elif scrn_select in ["TOP 10 화면", "수익율 화면"]:
         fetch_limit = 0 # 개별 화면은 전역 글로벌 데이터가 필요 없음
     else:
         fetch_limit = None
@@ -2632,7 +2632,7 @@ if choice == "🏠 홈화면":
             st.session_state['current_user'] = ""
             st.rerun()
 
-    if df.empty and scrn_select not in ["TOP 10 화면", "시계열 추적", "수익율 화면", "상선고 화면", "수익율 자랑", "기간 누적 폭주"]:
+    if df.empty and scrn_select not in ["TOP 10 화면", "수익율 화면", "상선고 화면", "수익율 자랑", "기간 누적 폭주"]:
         st.warning("⚠️ 해당 조건의 고래 데이터가 없거나, 아직 수집 전입니다!")
     else:
         # 메인 차트용 데이터 필터링
@@ -3751,7 +3751,7 @@ if choice == "🏠 홈화면":
                             if clicked.startswith("goto___"):
                                 stock = clicked.split("___")[1]
                                 st.session_state['pending_search'] = stock
-                                st.session_state['scrn_select_radio'] = "시계열 추적"
+                                st.session_state['scrn_select_radio'] = "체결 로그"
                                 st.rerun()
                             elif clicked.startswith("summary___"):
                                 stock = clicked.split("___")[1]
@@ -3844,7 +3844,7 @@ if choice == "🏠 홈화면":
                                     if st.session_state.get('search_input_val') != clean_stock:
                                         st.session_state['pending_search'] = clean_stock
                                         st.session_state['last_search_keyword'] = clean_stock
-                                        st.session_state['scrn_select_radio'] = "시계열 추적"
+                                        st.session_state['scrn_select_radio'] = "체결 로그"
                                         st.rerun()
                         else:
                             st.session_state.pop('last_summary_stock_top100', None)
@@ -4358,319 +4358,6 @@ if choice == "🏠 홈화면":
                                 </div>
                                 """, unsafe_allow_html=True)
 
-        elif (scrn_select == "시계열 추적"):
-            # 🟢 [천장 유격 박멸 소자] 스트림릿 고유의 상단 여백 패딩을 강제로 깎아냅니다.
-            st.markdown(
-                """
-                <style>
-                    /* 메인 화면 컨테이너의 상/하단 패딩 극한으로 압축 */
-                    .block-container {
-                        padding-top: 1rem !important;
-                        padding-bottom: 1rem !important;
-                        max-width: 95% !important;
-                    }
-                    /* Subheader 상단 여백 제거 */
-                    h3 {
-                        margin-top: -10px !important;
-                        padding-top: 0 !important;
-                    }
-                </style>
-                """,
-                unsafe_allow_html=True
-            )
-
-            # --- [중단 패널: 고래 저격 차트 스테이션] ---
-            st.subheader("🐋 고래 출몰 저격 차트")
-            
-            # 🎯 [타겟 종목 스나이핑]
-            if search_keyword.strip():
-                selected_stock = search_keyword.strip()
-                st.info(f"🔎 지정된 검색어에 따라 **{selected_stock}** 종목을 분석합니다.")
-            else:
-                # 검색어가 없으면 DB에서 가장 최근에 거래된 종목 1개를 퍼옴
-                res = supabase.table('whale_log').select('name').order('date', desc=True).order('time', desc=True).limit(1).execute()
-                if res.data:
-                    selected_stock = res.data[0]['name']
-                    st.info(f"🔎 검색어가 없어, 가장 최근 포착된 **{selected_stock}** 종목을 자동으로 분석합니다.")
-                else:
-                    selected_stock = None
-                    st.warning("데이터가 없습니다.")
-
-            # 분석 기간 노브 설정 및 필터 배치
-            f_col1, f_col2, f_col_empty = st.columns([1.2, 0.8, 1.2])
-            with f_col1:
-                detail_period = st.segmented_control(
-                    "🎯 차트 타임라인 범위 설정",
-                    options=["1개월", "3개월", "6개월"], # 👈 형님 마스터 스펙 인가!
-                    default="3개월"                       # 👈 직관적으로 가장 이쁜 3개월 디폴트 결선!
-                )
-            with f_col2:
-                st.markdown('<div class="jump-btn-wrapper-chart"></div>', unsafe_allow_html=True)
-                if st.button("📊 막대그래프 보러가기", key=f"jump_bar_btn_{selected_stock}", help=f"{selected_stock}의 일별 수급 막대그래프로 이동합니다."):
-                    st.session_state['pending_search'] = selected_stock
-                    st.session_state['scrn_select_radio'] = "체결 로그"
-                    st.rerun()
-
-            # 🎯 [영점 조절] 노브 안전 가드 회로 구성
-            if detail_period == "1개월":
-                detail_start = today - timedelta(days=30)
-                display_period = "1개월"
-            elif detail_period == "6개월":
-                detail_start = today - timedelta(days=180)
-                display_period = "6개월"
-            else:
-                detail_start = today - timedelta(days=90)
-                display_period = "3개월" 
-
-            # 🔌 선택된 종목 + 기간 조건으로 DB에서 직접 단독 펌핑!
-            target_whale_df = pd.DataFrame()
-            if selected_stock:
-                res = supabase.table('whale_log').select('*').eq('name', selected_stock).gte('date', detail_start.strftime('%Y-%m-%d')).execute()
-                if res.data:
-                    target_whale_df = pd.DataFrame(res.data)
-                    target_whale_df['date_parsed'] = pd.to_datetime(target_whale_df['date']).dt.date
-                    target_whale_df['datetime'] = pd.to_datetime(target_whale_df['date'] + ' ' + target_whale_df['time'])
-                    target_whale_df = target_whale_df.sort_values(by='datetime')
-
-            # 🚨 [최종 안전 퓨즈 장착] 
-            # 오늘 장이 시작 안 했거나, 선택한 기간 내에 체결 데이터가 텅 비어있을 때 쇼트 방지 가드!
-            if target_whale_df.empty:
-                st.info(f"ℹ️ {selected_stock} 종목의 최근 {display_period} 내에 고래 체결 데이터가 없거나 아직 장 시작 전입니다.")
-                # 차트를 그리는 하단 로직들이 에러를 뿜지 않도록 빈 임시 덤프 데이터프레임으로 바이패스 (컬럼은 최소한 맞춰줌)
-                target_whale_df = pd.DataFrame(columns=['date', 'time', 'name', 'code', 'amount_krw', 'side', 'asset_type', 'market_type', 'date_parsed', 'datetime'])
-
-            if selected_stock and not target_whale_df.empty:
-                try:
-                    # ==========================================================
-                    # 📡 [A레일: 정품 주가 캔들 데이터 채집 - fdr소자 활용]
-                    # ==========================================================
-                    with st.spinner(f"🛰️ {selected_stock}의 최근 정밀 주가 차트 수신 중..."):
-                        target_code = target_whale_df['code'].iloc[0]
-                        price_df = fdr.DataReader(target_code, detail_start, today)
-                        price_df.index = pd.to_datetime(price_df.index) 
-
-                    # ==========================================================
-                    # 🐋 [B레일: 밸런싱 데이터 필터링 및 탑 3 감쇠 회로]
-                    # ==========================================================
-                    summary_records = []
-                    for (dt, side), group in target_whale_df.groupby(['date_parsed', 'side']):
-                        sorted_g = group.sort_values(by='amount_krw', ascending=False)
-                        total_amt = group['amount_krw'].sum()
-                        total_count = len(group)
-                        
-                        top_3 = sorted_g.head(3).sort_values(by='time')
-                        
-                        # 🔥 PyArrow 직렬화 충돌 방지: 화면에 그리지 않는 날짜 객체 컬럼 제거 🔥
-                        if 'datetime' in target_whale_df.columns:
-                            target_whale_df.drop(columns=['datetime'], inplace=True)
-                        if 'date_parsed' in target_whale_df.columns:
-                            target_whale_df.drop(columns=['date_parsed'], inplace=True)
-                        
-                        lines = [
-                            f"<b>{side}고래 총 {total_count}건 포착 ({total_amt/100000000:,.1f}억)</b>",
-                            "----------------------------------------"
-                        ]
-                        for _, row in top_3.iterrows():
-                            lines.append(f"⏰ {row['time']} ➡️ <b>{row['amount_krw']/100000000:,.1f}억</b>")
-                            
-                        if total_count > 3:
-                            lines.append(f"• {total_count - 3}건 추가 포착 (하단 로그 참조)")
-                            
-                        details_str = "<br>".join(lines)
-                        
-                        summary_records.append({
-                            'date_parsed': pd.to_datetime(dt), 
-                            'side': side,
-                            'amount_total': total_amt,
-                            'details': details_str
-                        })
-                    
-                    whale_summary = pd.DataFrame(summary_records) if summary_records else pd.DataFrame(columns=['date_parsed', 'side', 'amount_total', 'details'])
-
-                    # ==========================================================
-                    # 🚀 [멀티플렉서: Multi-layer 차트 분리형 고해상도 결선]
-                    # ==========================================================
-                    fig = go.Figure()
-
-                    # ==========================================================
-                    # 🚀 [투명 유령 레이어 엔진]: 텍스트 깨짐/증발 영구 박멸!
-                    # ==========================================================
-                    
-                    # 1️⃣ [사전 작업]: 고래 텍스트 믹싱 (이전과 동일하게 준비)
-                    price_df['hover_custom_text'] = "" 
-                    # 1️⃣ [순수 파이썬 조립기]: 데이터프레임을 거치지 않고 파이썬 딕셔너리로만 텍스트를 만듭니다.
-                    custom_texts = {}
-                    
-                    buy_whales = whale_summary[whale_summary['side'] == '매수'] if not whale_summary.empty else pd.DataFrame()
-                    if not buy_whales.empty:
-                        for _, row in buy_whales.iterrows():
-                            d_key = row['date_parsed']
-                            if d_key in price_df.index:
-                                # 🚨 str() 함수로 순수 문자열로 강제 변환하여 껍데기(dtype)를 벗겨버립니다.
-                                txt = f"<br><b>🔴 매수 고래 포착</b><br>{str(row['details'])}"
-                                custom_texts[d_key] = custom_texts.get(d_key, "") + txt + "<br>"
-                                
-                    sell_whales = whale_summary[whale_summary['side'] == '매도'] if not whale_summary.empty else pd.DataFrame()
-                    if not sell_whales.empty:
-                        for _, row in sell_whales.iterrows():
-                            d_key = row['date_parsed']
-                            if d_key in price_df.index:
-                                # 🚨 str() 함수로 순수 문자열로 강제 변환!
-                                txt = f"<br><b>🔵 매도 고래 포착</b><br>{str(row['details'])}"
-                                custom_texts[d_key] = custom_texts.get(d_key, "") + txt + "<br>"
-
-                    # 🚨 [핵심]: 순수 파이썬 리스트로 분리하여 차트에 던질 준비 완료!
-                    whale_dates = list(custom_texts.keys())
-                    whale_texts = list(custom_texts.values())
-                    whale_y_pos = [price_df['High'].max() * 1.05] * len(whale_dates)
-                    fig = make_subplots(
-                        rows=2, cols=1, 
-                        shared_xaxes=True, 
-                        row_heights=[0.7, 0.3], 
-                        vertical_spacing=0.08
-                    )
-                    # 2️⃣ [1층 레이어]: 순정 주가 캔들
-                    fig.add_trace(go.Candlestick(
-                        x=price_df.index,
-                        open=price_df['Open'], high=price_df['High'],
-                        low=price_df['Low'], close=price_df['Close'],
-                        name='📈 주가 지표', 
-                        increasing_line_color='#ff4b4b', 
-                        decreasing_line_color='#4B89B5',
-                        hovertemplate="<b>📊 %{x|%Y-%m-%d} 주가</b><br>• 시가: %{open:,}원<br>• 고가: %{high:,}원<br>• 저가: %{low:,}원<br>• 종가: %{close:,}원<extra></extra>"
-                    ), row=1, col=1)
-
-                    # 3️⃣ [2층/3층 레이어]: 고래 마커(세모) 시각 레이어
-                    if not buy_whales.empty:
-                        buy_plot_dates = [d for d in buy_whales['date_parsed'] if d in price_df.index]
-                        mapped_y_buys = [price_df.loc[d, 'Low'] for d in buy_plot_dates]
-                        fig.add_trace(go.Scatter(
-                            x=buy_plot_dates, y=mapped_y_buys, mode='markers',
-                            marker=dict(size=14, color='red', symbol='triangle-up', line=dict(width=1.5, color='white')),
-                            hoverinfo='skip', 
-                            name='🔴 매수 마커'
-                        ), row=1, col=1)
-                        
-                    if not sell_whales.empty:
-                        sell_plot_dates = [d for d in sell_whales['date_parsed'] if d in price_df.index]
-                        mapped_y_sells = [price_df.loc[d, 'High'] for d in sell_plot_dates]
-                        fig.add_trace(go.Scatter(
-                            x=sell_plot_dates, y=mapped_y_sells, mode='markers',
-                            marker=dict(size=14, color='blue', symbol='triangle-down', line=dict(width=1.5, color='white')),
-                            hoverinfo='skip', 
-                            name='🔵 매도 마커'
-                        ), row=1, col=1)
-
-                    # 🚨 [투명 유령 엔진 최종 결선]: Pandas를 전혀 거치지 않은 순수 리스트 3총사 투입!
-                    if whale_dates:
-                        fig.add_trace(go.Scatter(
-                            x=whale_dates,
-                            y=whale_y_pos, 
-                            mode='markers',
-                            marker=dict(color='rgba(0,0,0,0)', size=1), 
-                            text=whale_texts, 
-                            hovertemplate="%{text}<extra></extra>",
-                            name='🐋 고래 체결 상세' 
-                        ), row=1, col=1)
-                        
-                    # 4️⃣ [2층 레이어]: 시장 전체 거래대금 막대그래프
-                    kis_df = fetch_kis_daily_volume(target_code, detail_start)
-                    if not kis_df.empty:
-                        kis_df['amount_100m'] = kis_df['acml_tr_pbmn'] / 100000000
-                        fig.add_trace(go.Bar(
-                            x=kis_df['date'], y=kis_df['amount_100m'],
-                            name="전체 거래대금", marker_color='#888888', opacity=0.6,
-                            text=kis_df['amount_100m'].apply(lambda x: f"{x:,.0f}억" if x > 0 else ""),
-                            textposition='outside', textfont=dict(size=10, color='#888888'),
-                            showlegend=False
-                        ), row=2, col=1)
-
-                    # 🎨 [디스플레이 프리셋] 레이아웃 세팅
-                    fig.update_layout(
-                        template='plotly_dark',
-                        plot_bgcolor='#11111b',   
-                        paper_bgcolor='#11111b',  
-                        title=dict(
-                            text=f"📊 {selected_stock} [{display_period}]", 
-                            font=dict(size=20, color='#ffffff'), y=0.96, yanchor='top'
-                        ),
-                        xaxis=dict(
-                            tickfont=dict(color='#e0e0e0'), 
-                            gridcolor='#2a2a2a', 
-                            rangeslider=dict(visible=False),
-                            showticklabels=False
-                        ),
-                        xaxis2=dict(
-                            title=dict(text='날짜', font=dict(color='#ffffff')), 
-                            tickfont=dict(color='#e0e0e0'), 
-                            gridcolor='#2a2a2a', 
-                            rangeslider=dict(visible=False),
-                            tickformatstops=[
-                                dict(dtickrange=[None, 86400000], value="%m월 %d일 %H:%M"),
-                                dict(dtickrange=[86400000, 604800000], value="%m월 %d일"),
-                                dict(dtickrange=[604800000, "M1"], value="%m월 %d일"),
-                                dict(dtickrange=["M1", "M12"], value="%Y년 %m월"),
-                                dict(dtickrange=["M12", None], value="%Y년")
-                            ]
-                        ),
-                        yaxis=dict(
-                            title=dict(text='주가 (원)', font=dict(color='#ffffff')), 
-                            tickfont=dict(color='#e0e0e0'), gridcolor='#2a2a2a', tickformat=','
-                        ),
-                        yaxis2=dict(
-                            title=dict(text='전체 대금 (억원)', font=dict(color='#ffffff')), 
-                            tickfont=dict(color='#e0e0e0'), gridcolor='#2a2a2a', tickformat=','
-                        ),
-                        
-                        # 🚨 [범례 최종 이동]: 좌측 끝으로 밀착! (툴바와의 겹침 방지)
-                        legend=dict(
-                            orientation="h", 
-                            yanchor="bottom", 
-                            y=1.02,           
-                            xanchor="left", 
-                            x=0.0,            
-                            font=dict(color='#ffffff', size=12)
-                        ),
-                        
-                        height=650, margin=dict(l=20, r=20, t=60, b=20),
-                        hovermode='x unified' 
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # 📊 [과거의 증명] 백테스트 리포트 UI 렌더링
-                    backtest_results = calculate_backtest_yield(target_whale_df, kis_df if 'kis_df' in locals() else None)
-                    if backtest_results:
-                        st.markdown("#### 📊 [놀빅 자체 검증] 과거 매수 폭주 시 주가 변화 (수일 내)")
-                        b_cols = st.columns(len(backtest_results))
-                        for idx, b_res in enumerate(backtest_results):
-                            with b_cols[idx]:
-                                y_pct = b_res['yield_pct']
-                                color = "#ff4b4b" if y_pct > 0 else "#4b8bff" if y_pct < 0 else "#a0a0a0"
-                                bg_color = "rgba(255, 75, 75, 0.1)" if y_pct > 0 else "rgba(75, 139, 255, 0.1)" if y_pct < 0 else "rgba(160, 160, 160, 0.1)"
-                                icon = "🚀" if y_pct > 0 else "❄️" if y_pct < 0 else "➖"
-                                sign = "+" if y_pct > 0 else ""
-                                
-                                st.markdown(f"""
-                                <div style="background: {bg_color}; border: 1px solid {color}; border-radius: 8px; padding: 15px; text-align: center;">
-                                    <div style="font-size: 14px; color: #e0e0e0; margin-bottom: 5px;">🔥 <b>{b_res['t_date']}</b> (순매수: {int(b_res['net_buy']//100000000):,}억)</div>
-                                    <div style="font-size: 24px; font-weight: bold; color: {color}; margin: 10px 0;">{icon} {sign}{y_pct:.2f}%</div>
-                                    <div style="font-size: 12px; color: #a0a0a0;">
-                                        {b_res['t_date']} 종가: {int(b_res['t_price']):,}원<br>
-                                        ➔ {b_res['t3_date']} 종가: {int(b_res['t3_price']):,}원
-                                    </div>
-                                </div>
-                                """, unsafe_allow_html=True)
-                        st.write("---")
-                
-                except Exception as e:
-                    st.error(f"❌ 차트 엔진 결선 실패 (사유: {e})")
-            else:
-                st.info(f"⚠️ 선택하신 타겟 종목({selected_stock})은 {display_period} 내에 고래 포착 이력이 없어 차트를 생성하지 않습니다.")
-
-            st.divider()
-
-        
         elif (scrn_select == "체결 로그"):
             # --- [하단 패널: 실시간 로그] ---
             filtered_df = main_df.copy()
