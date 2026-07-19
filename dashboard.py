@@ -205,12 +205,15 @@ def get_gemini_company_summary(stock_name, news_text=""):
 def show_summary_dialog(stock_name, stock_code=""):
     import FinanceDataReader as fdr
     if not stock_code:
-        krx = fdr.StockListing('KRX')
-        matched = krx[krx['Name'] == stock_name]
-        if not matched.empty:
-            stock_code = matched.iloc[0]['Code']
+        try:
+            krx = fdr.StockListing('KRX')
+            matched = krx[krx['Name'] == stock_name]
+            if not matched.empty:
+                stock_code = matched.iloc[0]['Code']
+        except Exception as e:
+            pass # fallback if KRX blocks scraping
             
-    st.markdown(f"### {stock_name} ({stock_code})")
+    st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else ""))
     
     tab1, tab2 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석"])
     
@@ -3817,11 +3820,14 @@ if choice == "🏠 홈화면":
                                 ss = selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
                                 clean_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
                                 
+                                # Retrieve stock code if available
+                                row_stock_code = df_top.iloc[rows[0]]['stock_code'] if 'stock_code' in df_top.columns else ""
+                                
                                 if click_action == "💬 AI 요약 보기 (팝업)":
                                     if st.session_state.get('last_summary_stock_top100') != clean_stock:
                                         st.session_state['show_summary_dialog'] = {
                                             "stock": clean_stock,
-                                            "code": ""
+                                            "code": row_stock_code
                                         }
                                         st.session_state['last_summary_stock_top100'] = clean_stock
                                         st.rerun()
