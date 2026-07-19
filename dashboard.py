@@ -199,6 +199,9 @@ def get_gemini_company_summary(stock_name, news_text=""):
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
+        err_msg = str(e)
+        if "429" in err_msg or "quota" in err_msg.lower():
+            return "⚠️ **Gemini AI 무료 제공량 일시 초과**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 무료 제공량(분당 약 15회)을 초과했습니다. **약 1분 정도 휴식 후** 다시 시도해 주시면 정상적으로 작동합니다! 🕒"
         return f"Gemini AI 호출 중 오류가 발생했습니다: {e}"
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
