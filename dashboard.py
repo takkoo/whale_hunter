@@ -145,6 +145,111 @@ if "mock_stock" in st.query_params and "mock_date" in st.query_params:
     st.query_params.clear()
     st.rerun()
 
+import google.generativeai as genai
+from bs4 import BeautifulSoup
+
+@st.cache_data(ttl=86400)
+def get_naver_company_summary(stock_code):
+    try:
+        url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, 'html.parser')
+        summary_p = soup.select_one('.summary_info p')
+        summary_text = summary_p.text.strip() if summary_p else "네이버 금융에서 기업개요를 찾을 수 없습니다."
+        
+        news_links = soup.select('.news_section ul li a')
+        news_md_items = []
+        news_raw_items = []
+        for a in news_links:
+            title = a.text.strip()
+            if "관련" not in title and title:
+                href = a.get('href', '')
+                if href.startswith('/'):
+                    href = "https://finance.naver.com" + href
+                news_md_items.append(f"- [{title}]({href})")
+                news_raw_items.append(f"- {title}")
+                
+        news_md = "\n".join(news_md_items[:5]) if news_md_items else "최근 관련 뉴스가 없습니다."
+        news_raw = "\n".join(news_raw_items[:5]) if news_raw_items else "최근 관련 뉴스가 없습니다."
+        
+        return summary_text, news_md, news_raw
+    except Exception as e:
+        return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", ""
+
+@st.cache_data(ttl=86400)
+def get_gemini_company_summary(stock_name, news_text=""):
+    try:
+        api_key = st.secrets.get("gemini", {}).get("api_key", None)
+        if not api_key:
+            return "⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.\n\n[gemini]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요."
+            
+        genai.configure(api_key=api_key)
+        # Use gemini-flash-latest as older models might be deprecated
+        model = genai.GenerativeModel('gemini-flash-latest')
+        
+        prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 분석해줘.
+
+1. 기업 개요 (1~2줄): 이 회사의 핵심 기술과 주요 사업 내용을 요약해줘.
+2. 현재 상황 및 평가 (3~4줄): 다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 시장 상황(호재/악재 및 테마)을 분석하고 평가해줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
+
+[최근 뉴스 제목]
+{news_text}
+"""
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Gemini AI 호출 중 오류가 발생했습니다: {e}"
+
+@st.dialog("🏢 기업 요약 및 AI 분석")
+def show_summary_dialog(stock_name, stock_code=""):
+    import FinanceDataReader as fdr
+    if not stock_code:
+        krx = fdr.StockListing('KRX')
+        matched = krx[krx['Name'] == stock_name]
+        if not matched.empty:
+            stock_code = matched.iloc[0]['Code']
+            
+    st.markdown(f"### {stock_name} ({stock_code})")
+    
+    tab1, tab2 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석"])
+    
+    with tab1:
+        with st.spinner("네이버 금융에서 정보를 가져오는 중..."):
+            if stock_code:
+                naver_summary, naver_news_md, naver_news_raw = get_naver_company_summary(stock_code)
+            else:
+                naver_summary, naver_news_md, naver_news_raw = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", ""
+                
+            st.markdown("##### 🏢 기업 개요")
+            st.info(naver_summary)
+            st.markdown("##### 📰 최근 주요 뉴스")
+            st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
+            
+    with tab2:
+        with st.spinner("Gemini AI가 뉴스를 바탕으로 분석 중입니다..."):
+            gemini_summary = get_gemini_company_summary(stock_name, naver_news_raw)
+            st.success(gemini_summary)
+            
+    if st.button("닫기 (확인)", use_container_width=True):
+        st.session_state.pop('show_summary_dialog', None)
+        st.rerun()
+
+# ------------------------------------------------------------------
+# 🎯 [요약 팝업 로직] 상선고 히트맵 등에서 클릭 연동
+# ------------------------------------------------------------------
+if "summary_stock" in st.query_params and "summary_code" in st.query_params:
+    st.session_state['show_summary_dialog'] = {
+        "stock": st.query_params.get("summary_stock"),
+        "code": st.query_params.get("summary_code")
+    }
+    st.query_params.clear()
+    st.rerun()
+    
+if 'show_summary_dialog' in st.session_state:
+    data = st.session_state['show_summary_dialog']
+    show_summary_dialog(data['stock'], data['code'])
+
 @st.dialog("🎯 가상 데이터 (Mock Data) 쾌속 입력")
 def mock_data_dialog(stock, date_str):
     st.write(f"**🔹 종목명**: {stock}")
@@ -1340,6 +1445,23 @@ def draw_whale_bar_chart(target_code, target_name, df):
             increasing_line_color='#ff4b4b', decreasing_line_color='#4B89B5',
             showlegend=False
         ), row=4, col=1)
+        
+        # 🚀 상한가 로켓 아이콘 추가
+        upper_dates_res = supabase.table("upper_limit_stocks").select("recorded_date").eq("name", target_name).gte("recorded_date", thirty_days_ago.strftime('%Y-%m-%d')).execute()
+        if upper_dates_res.data:
+            upper_dates_md = [pd.to_datetime(item['recorded_date']).strftime('%m-%d') for item in upper_dates_res.data]
+            for d in upper_dates_md:
+                if d in kis_df['date_str'].values:
+                    high_price = kis_df[kis_df['date_str'] == d]['High'].max()
+                    fig_bar.add_annotation(
+                        x=d,
+                        y=high_price,
+                        text="🚀",
+                        showarrow=False,
+                        yshift=15,
+                        font=dict(size=18),
+                        row=4, col=1
+                    )
     
     # 5. 차트 영점 조절
     fig_bar.update_layout(
@@ -3523,6 +3645,7 @@ if choice == "🏠 홈화면":
                                     <tr>
                                         <td style="border-bottom: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock}">
                                             <a href="javascript:void(0);" id="goto___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
+                                            <a href="javascript:void(0);" id="summary___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #4b8bff;" title="{stock} 기업 요약(AI) 보기">💬</a>
                                             {stock} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
                                         </td>
                             """)
@@ -3618,6 +3741,13 @@ if choice == "🏠 홈화면":
                                 st.session_state['pending_search'] = stock
                                 st.session_state['scrn_select_radio'] = "시계열 추적"
                                 st.rerun()
+                            elif clicked.startswith("summary___"):
+                                stock = clicked.split("___")[1]
+                                st.session_state['show_summary_dialog'] = {
+                                    "stock": stock,
+                                    "code": ""
+                                }
+                                st.rerun()
                             else:
                                 stock, date_str = clicked.split("___")
                                 st.session_state['show_mock_dialog'] = {
@@ -3662,12 +3792,47 @@ if choice == "🏠 홈화면":
                             "orgn_sell": "기관 매도(억)"
                         })
                         
-                        st.dataframe(
+                        # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼
+                        click_action = st.radio(
+                            "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
+                            ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
+                            horizontal=True,
+                            key="top100_click_action"
+                        )
+                        
+                        event = st.dataframe(
                             df_top[["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]],
                             use_container_width=True,
                             hide_index=True,
-                            height=650
+                            height=650,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key="top100_dataframe"
                         )
+                        
+                        if event and "selection" in event:
+                            rows = event["selection"]["rows"]
+                            if rows and rows[0] < len(df_top):
+                                selected_stock = df_top.iloc[rows[0]]['종목명']
+                                ss = selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
+                                clean_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
+                                
+                                if click_action == "💬 AI 요약 보기 (팝업)":
+                                    if st.session_state.get('last_summary_stock_top100') != clean_stock:
+                                        st.session_state['show_summary_dialog'] = {
+                                            "stock": clean_stock,
+                                            "code": ""
+                                        }
+                                        st.session_state['last_summary_stock_top100'] = clean_stock
+                                        st.rerun()
+                                else:
+                                    if st.session_state.get('search_input_val') != clean_stock:
+                                        st.session_state['pending_search'] = clean_stock
+                                        st.session_state['last_search_keyword'] = clean_stock
+                                        st.session_state['scrn_select_radio'] = "시계열 추적"
+                                        st.rerun()
+                        else:
+                            st.session_state.pop('last_summary_stock_top100', None)
                     else:
                         st.info("해당 날짜의 수급 데이터가 아직 수집되지 않았거나 휴장일입니다. (또는 너무 오래된 과거입니다)")
 
@@ -4605,7 +4770,7 @@ if choice == "🏠 홈화면":
                                 )
                         except Exception as e:
                             pass
-
+                            
                     # 🔥 [데이터프레임 시각화 강화] 핫 시그널 종목에 등급별 뱃지 부여
                     if 'hot_signals' in locals() and hot_signals:
                         hot_dict = {s['name']: s['icon'] for s in hot_signals}
@@ -4674,6 +4839,13 @@ if choice == "🏠 홈화면":
                     styled_df = display_df.style \
                         .apply(style_rows, axis=1)
                     
+                    # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼
+                    click_action = st.radio(
+                        "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
+                        ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
+                        horizontal=True
+                    )
+                    
                     # 📊 최종 전광판 디스플레이 표출
                     event = st.dataframe(
                         styled_df, 
@@ -4727,15 +4899,26 @@ if choice == "🏠 홈화면":
                                     selected_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
                                     
                                     needs_rerun = False
-                                    if st.session_state.get('search_input_val') != selected_stock:
-                                        st.session_state['pending_search'] = selected_stock
-                                        st.session_state['last_search_keyword'] = selected_stock
-                                        needs_rerun = True
+                                    
+                                    if click_action == "💬 AI 요약 보기 (팝업)":
+                                        if st.session_state.get('last_summary_stock') != selected_stock:
+                                            st.session_state['show_summary_dialog'] = {
+                                                "stock": selected_stock,
+                                                "code": ""
+                                            }
+                                            st.session_state['last_summary_stock'] = selected_stock
+                                            needs_rerun = True
+                                    else:
+                                        if st.session_state.get('search_input_val') != selected_stock:
+                                            st.session_state['pending_search'] = selected_stock
+                                            st.session_state['last_search_keyword'] = selected_stock
+                                            needs_rerun = True
                                         
                                     if needs_rerun:
                                         st.rerun()
                         else:
                             # 선택이 해제되거나 비어있을 때 플래그 리셋 (정상 렌더링 확인)
+                            st.session_state.pop('last_summary_stock', None)
                             if st.session_state.get('ignore_next_selection', False):
                                 st.session_state['ignore_next_selection'] = False
             else:
