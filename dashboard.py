@@ -206,12 +206,21 @@ def show_summary_dialog(stock_name, stock_code=""):
     import FinanceDataReader as fdr
     if not stock_code:
         try:
-            krx = fdr.StockListing('KRX')
-            matched = krx[krx['Name'] == stock_name]
-            if not matched.empty:
-                stock_code = matched.iloc[0]['Code']
-        except Exception as e:
-            pass # fallback if KRX blocks scraping
+            # 1. 자체 DB(upper_limit_stocks)에서 먼저 조회 시도 (KRX IP 차단 우회 및 속도 향상)
+            db_res = supabase.table("upper_limit_stocks").select("code").eq("name", stock_name).limit(1).execute()
+            if db_res.data:
+                stock_code = db_res.data[0]['code']
+        except Exception:
+            pass
+            
+        if not stock_code:
+            try:
+                krx = fdr.StockListing('KRX')
+                matched = krx[krx['Name'] == stock_name]
+                if not matched.empty:
+                    stock_code = matched.iloc[0]['Code']
+            except Exception as e:
+                pass # fallback if KRX blocks scraping
             
     st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else ""))
     
@@ -4908,9 +4917,10 @@ if choice == "🏠 홈화면":
                                     
                                     if click_action == "💬 AI 요약 보기 (팝업)":
                                         if st.session_state.get('last_summary_stock') != selected_stock:
+                                            row_code = display_df.iloc[selected_idx]['code'] if 'code' in display_df.columns else ""
                                             st.session_state['show_summary_dialog'] = {
                                                 "stock": selected_stock,
-                                                "code": ""
+                                                "code": row_code
                                             }
                                             st.session_state['last_summary_stock'] = selected_stock
                                             needs_rerun = True
