@@ -1525,11 +1525,7 @@ def draw_whale_bar_chart(target_code, target_name, df):
                 </div>
                 """, unsafe_allow_html=True)
 
-    st.markdown('<div class="jump-btn-wrapper"></div>', unsafe_allow_html=True)
-    if st.button(f"📈 차트 보러가기", key=f"jump_btn_{target_code}", help=f"{target_name}의 시계열 차트로 즉시 이동합니다."):
-        st.session_state['pending_search'] = target_name
-        st.session_state['scrn_select_radio'] = "체결 로그"
-        st.rerun()
+
 
 # ------------------------------------------------------------------
 # 🎛️ 로그인 상태 제어반 (Session State 인터럽트 플래그)
