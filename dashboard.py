@@ -2,6 +2,9 @@ import streamlit as st
 st.set_page_config(page_title="know-lbig radar", page_icon="🐳", layout="wide")
 import pandas as pd
 pd.set_option("styler.render.max_elements", 10000000)  # 대용량 데이터프레임 스타일링 렌더링 허용 (Styler 제한 해제)
+
+# 🔥 [무적의 스크롤 리셋 꼼수] 메뉴를 이동하면 스크롤이 리셋되는 원리를 이용한 강제 화면 전환!
+# (사용자 요청으로 제거됨 - 수동 스크롤 방식으로 변경)
 import plotly.express as px
 from supabase import create_client
 import datetime
@@ -142,6 +145,111 @@ if "mock_stock" in st.query_params and "mock_date" in st.query_params:
     st.query_params.clear()
     st.rerun()
 
+import google.generativeai as genai
+from bs4 import BeautifulSoup
+
+@st.cache_data(ttl=86400)
+def get_naver_company_summary(stock_code):
+    try:
+        url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, 'html.parser')
+        summary_p = soup.select_one('.summary_info p')
+        summary_text = summary_p.text.strip() if summary_p else "네이버 금융에서 기업개요를 찾을 수 없습니다."
+        
+        news_links = soup.select('.news_section ul li a')
+        news_md_items = []
+        news_raw_items = []
+        for a in news_links:
+            title = a.text.strip()
+            if "관련" not in title and title:
+                href = a.get('href', '')
+                if href.startswith('/'):
+                    href = "https://finance.naver.com" + href
+                news_md_items.append(f"- [{title}]({href})")
+                news_raw_items.append(f"- {title}")
+                
+        news_md = "\n".join(news_md_items[:5]) if news_md_items else "최근 관련 뉴스가 없습니다."
+        news_raw = "\n".join(news_raw_items[:5]) if news_raw_items else "최근 관련 뉴스가 없습니다."
+        
+        return summary_text, news_md, news_raw
+    except Exception as e:
+        return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", ""
+
+@st.cache_data(ttl=86400)
+def get_gemini_company_summary(stock_name, news_text=""):
+    try:
+        api_key = st.secrets.get("gemini", {}).get("api_key", None)
+        if not api_key:
+            return "⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.\n\n[gemini]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요."
+            
+        genai.configure(api_key=api_key)
+        # Use gemini-flash-latest as older models might be deprecated
+        model = genai.GenerativeModel('gemini-flash-latest')
+        
+        prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 분석해줘.
+
+1. 기업 개요 (1~2줄): 이 회사의 핵심 기술과 주요 사업 내용을 요약해줘.
+2. 현재 상황 및 평가 (3~4줄): 다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 시장 상황(호재/악재 및 테마)을 분석하고 평가해줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
+
+[최근 뉴스 제목]
+{news_text}
+"""
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Gemini AI 호출 중 오류가 발생했습니다: {e}"
+
+@st.dialog("🏢 기업 요약 및 AI 분석")
+def show_summary_dialog(stock_name, stock_code=""):
+    import FinanceDataReader as fdr
+    if not stock_code:
+        krx = fdr.StockListing('KRX')
+        matched = krx[krx['Name'] == stock_name]
+        if not matched.empty:
+            stock_code = matched.iloc[0]['Code']
+            
+    st.markdown(f"### {stock_name} ({stock_code})")
+    
+    tab1, tab2 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석"])
+    
+    with tab1:
+        with st.spinner("네이버 금융에서 정보를 가져오는 중..."):
+            if stock_code:
+                naver_summary, naver_news_md, naver_news_raw = get_naver_company_summary(stock_code)
+            else:
+                naver_summary, naver_news_md, naver_news_raw = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", ""
+                
+            st.markdown("##### 🏢 기업 개요")
+            st.info(naver_summary)
+            st.markdown("##### 📰 최근 주요 뉴스")
+            st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
+            
+    with tab2:
+        with st.spinner("Gemini AI가 뉴스를 바탕으로 분석 중입니다..."):
+            gemini_summary = get_gemini_company_summary(stock_name, naver_news_raw)
+            st.success(gemini_summary)
+            
+    if st.button("닫기 (확인)", use_container_width=True):
+        st.session_state.pop('show_summary_dialog', None)
+        st.rerun()
+
+# ------------------------------------------------------------------
+# 🎯 [요약 팝업 로직] 상선고 히트맵 등에서 클릭 연동
+# ------------------------------------------------------------------
+if "summary_stock" in st.query_params and "summary_code" in st.query_params:
+    st.session_state['show_summary_dialog'] = {
+        "stock": st.query_params.get("summary_stock"),
+        "code": st.query_params.get("summary_code")
+    }
+    st.query_params.clear()
+    st.rerun()
+    
+if 'show_summary_dialog' in st.session_state:
+    data = st.session_state['show_summary_dialog']
+    show_summary_dialog(data['stock'], data['code'])
+
 @st.dialog("🎯 가상 데이터 (Mock Data) 쾌속 입력")
 def mock_data_dialog(stock, date_str):
     st.write(f"**🔹 종목명**: {stock}")
@@ -258,6 +366,11 @@ def fetch_kis_daily_volume(stock_code, start_date):
         df = fdr.DataReader(stock_code, start_date)
         if df.empty:
             return pd.DataFrame()
+            
+        # 거래정지(단기과열 등)로 인해 거래량이 아예 없는 날(Open=0 등)은 차트에서 제외
+        df = df[df['Volume'] > 0]
+        if df.empty:
+            return pd.DataFrame()
         
         # 거래대금 = 거래량 * 종가 (근사치이지만 매우 정확함)
         df['acml_tr_pbmn'] = df['Volume'] * df['Close']
@@ -308,10 +421,12 @@ def fetch_investor_net_buying(stock_code):
         
         df = pd.DataFrame(data)
         df['date_str'] = pd.to_datetime(df['stck_bsop_date']).dt.strftime('%m-%d')
-        # 단위: 백만원 -> 억원 (나누기 100)
-        df['frgn_net_100m'] = df['frgn_ntby_tr_pbmn'].astype(float) / 100
-        df['orgn_net_100m'] = df['orgn_ntby_tr_pbmn'].astype(float) / 100
-        return df[['date_str', 'frgn_net_100m', 'orgn_net_100m']]
+        # 단위: 백만원 -> 억원 (나누기 100), 빈 문자열 대비 pd.to_numeric 처리
+        df['frgn_buy_100m'] = pd.to_numeric(df['frgn_shnu_tr_pbmn'], errors='coerce').fillna(0) / 100
+        df['frgn_sell_100m'] = (pd.to_numeric(df['frgn_seln_tr_pbmn'], errors='coerce').fillna(0) / 100) * -1
+        df['orgn_buy_100m'] = pd.to_numeric(df['orgn_shnu_tr_pbmn'], errors='coerce').fillna(0) / 100
+        df['orgn_sell_100m'] = (pd.to_numeric(df['orgn_seln_tr_pbmn'], errors='coerce').fillna(0) / 100) * -1
+        return df[['date_str', 'frgn_buy_100m', 'frgn_sell_100m', 'orgn_buy_100m', 'orgn_sell_100m']]
     return pd.DataFrame()
 
 # ------------------------------------------------------------------
@@ -1077,13 +1192,10 @@ def get_hot_signals(df):
     
     summary['net_buy'] = summary['buy_amount'] - summary['sell_amount']
     
-    # 5억 이상 순매수가 있는 종목 중 (세력 기준 강화)
-    hot_df = summary[summary['net_buy'] >= 500_000_000].copy()
+    # 순매수(net_buy)가 0보다 큰(양수) 종목 전체를 대상으로 함 (빈 화면 방지)
+    hot_df = summary[summary['net_buy'] > 0].copy()
     if hot_df.empty:
-        # 시장이 조용해서 5억 이상이 없으면 1억 이상으로 기준 완화
-        hot_df = summary[summary['net_buy'] >= 100_000_000].copy()
-        if hot_df.empty:
-            return []
+        return []
         
     import math
     # 점수화 (로그 스케일 적용): 10억(log 9) = 50점, 1조(log 12) = 90점 기준
@@ -1094,7 +1206,7 @@ def get_hot_signals(df):
     hot_df['score'] = hot_df['score'].apply(lambda x: max(0.0, min(float(x), 99.9)))
     
     # 30점 미만의 자잘한 신호는 취급하지 않음 ("우린 짜잔한거 취급 안한다!")
-    hot_df = hot_df[hot_df['score'] >= 30.0]
+    # hot_df = hot_df[hot_df['score'] >= 30.0]
     
     # 상위 3개 추출
     top3 = hot_df.sort_values(by=['score', 'net_buy'], ascending=False).head(3)
@@ -1145,12 +1257,10 @@ def get_accumulated_hot_signals(df):
     
     summary['net_buy'] = summary['buy_amount'] - summary['sell_amount']
     
-    # 5억 이상 순매수가 있는 종목 중
-    hot_df = summary[summary['net_buy'] >= 500_000_000].copy()
+    # 순매수(net_buy)가 0보다 큰(양수) 종목 전체를 대상으로 함 (빈 화면 방지)
+    hot_df = summary[summary['net_buy'] > 0].copy()
     if hot_df.empty:
-        hot_df = summary[summary['net_buy'] >= 100_000_000].copy()
-        if hot_df.empty:
-            return []
+        return []
             
     import math
     hot_df['log_buy'] = hot_df['net_buy'].apply(lambda x: math.log10(x) if x > 0 else 0)
@@ -1159,7 +1269,7 @@ def get_accumulated_hot_signals(df):
     hot_df['score'] = hot_df['score'].apply(lambda x: max(0.0, min(float(x), 99.9)))
     
     # 30점 미만 필터링
-    hot_df = hot_df[hot_df['score'] >= 30.0]
+    # hot_df = hot_df[hot_df['score'] >= 30.0]
     
     # 상위 10개 추출
     top10 = hot_df.sort_values(by=['score', 'net_buy'], ascending=False).head(10)
@@ -1239,14 +1349,18 @@ def draw_whale_bar_chart(target_code, target_name, df):
 
     # 투자자별 매매동향 (외국인/기관) 가져오기
     investor_df = fetch_investor_net_buying(target_code)
+    valid_dates = merged_df['date_str'].unique()
+    if not investor_df.empty:
+        # 30일(달력기준) 이내의 데이터만 남기기 (주말 등 제외로 데이터가 많아지는 현상 방지)
+        investor_df = investor_df[investor_df['date_str'].isin(valid_dates)]
     
-    # 4. 차트 레이아웃 구성 (위: 고래 수급, 중간: 시장 거래대금, 아래: 캔들차트)
+    # 4. 차트 레이아웃 구성 (위: 고래 수급, 2: 시장 거래대금, 3: 외인/기관 수급, 4: 캔들차트)
     fig_bar = make_subplots(
-        rows=3, cols=1, 
+        rows=4, cols=1, 
         shared_xaxes=True, 
-        row_heights=[0.5, 0.25, 0.25], 
-        vertical_spacing=0.08,
-        subplot_titles=(f"[{target_name}] 고래 수급 누적 (30일)", "시장 전체 일일 거래대금", "주가 흐름 (OHLC)")
+        row_heights=[0.35, 0.15, 0.25, 0.25], 
+        vertical_spacing=0.06,
+        subplot_titles=(f"[{target_name}] 고래 수급 누적 (30일)", "시장 전체 일일 거래대금", "외국인/기관 상세 수급", "주가 흐름 (OHLC)")
     )
     
     # 상단 막대그래프 (매수/매도/방향미상)
@@ -1275,27 +1389,7 @@ def draw_whale_bar_chart(target_code, target_name, df):
         textposition='outside', textfont=dict(size=11, color='#aaaaaa')
     ), row=1, col=1)
     
-    if not investor_df.empty:
-        # 외국인 순매수 막대 (가느다랗게)
-        fig_bar.add_trace(go.Bar(
-            x=investor_df['date_str'], y=investor_df['frgn_net_100m'],
-            name="외국인 순매수", marker_color='#FFB000', opacity=0.9,
-            width=0.1,  # 얇은 막대
-            text=investor_df['frgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if abs(x) > 0 else ""),
-            textposition='auto', textfont=dict(size=9, color='#FFB000')
-        ), row=1, col=1)
-        
-        # 기관 순매수 막대 (가느다랗게)
-        fig_bar.add_trace(go.Bar(
-            x=investor_df['date_str'], y=investor_df['orgn_net_100m'],
-            name="기관 순매수", marker_color='#00FA9A', opacity=0.9,
-            width=0.1,  # 얇은 막대
-            text=investor_df['orgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if abs(x) > 0 else ""),
-            textposition='auto', textfont=dict(size=9, color='#00FA9A')
-        ), row=1, col=1)
-
-    
-    # 중간 막대그래프 (시장 전체 거래대금)
+    # 2번째: 시장 전체 거래대금
     if 'kis_df' in locals() and not kis_df.empty:
         fig_bar.add_trace(go.Bar(
             x=kis_df['date_str'], y=kis_df['amount_100m'],
@@ -1304,6 +1398,42 @@ def draw_whale_bar_chart(target_code, target_name, df):
             textposition='outside', textfont=dict(size=10, color='#888888'),
             showlegend=False
         ), row=2, col=1)
+    
+    # 3번째: 외국인/기관 상세 수급 (manual offset/width를 사용하여 겹치게 강제 설정)
+    if not investor_df.empty:
+        # 외국인 매수 (양수) - 왼쪽 막대
+        fig_bar.add_trace(go.Bar(
+            x=investor_df['date_str'], y=investor_df['frgn_buy_100m'],
+            name="외국인 매수", marker_color='#FFB000', opacity=0.9,
+            offset=-0.4, width=0.4,
+            text=investor_df['frgn_buy_100m'].apply(lambda x: f"{x:,.0f}억" if x > 0 else ""),
+            textposition='auto', textfont=dict(size=10, color='white')
+        ), row=3, col=1)
+        # 외국인 매도 (음수) - 왼쪽 막대 (매수와 같은 offset으로 상하 겹침)
+        fig_bar.add_trace(go.Bar(
+            x=investor_df['date_str'], y=investor_df['frgn_sell_100m'],
+            name="외국인 매도", marker_color='#FFB000', opacity=0.9,
+            offset=-0.4, width=0.4,
+            text=investor_df['frgn_sell_100m'].apply(lambda x: f"{abs(x):,.0f}억" if x < 0 else ""),
+            textposition='auto', textfont=dict(size=10, color='white')
+        ), row=3, col=1)
+        
+        # 기관 매수 (양수) - 오른쪽 막대
+        fig_bar.add_trace(go.Bar(
+            x=investor_df['date_str'], y=investor_df['orgn_buy_100m'],
+            name="기관 매수", marker_color='#00FA9A', opacity=0.9,
+            offset=0.0, width=0.4,
+            text=investor_df['orgn_buy_100m'].apply(lambda x: f"{x:,.0f}억" if x > 0 else ""),
+            textposition='auto', textfont=dict(size=10, color='black')
+        ), row=3, col=1)
+        # 기관 매도 (음수) - 오른쪽 막대 (매수와 같은 offset으로 상하 겹침)
+        fig_bar.add_trace(go.Bar(
+            x=investor_df['date_str'], y=investor_df['orgn_sell_100m'],
+            name="기관 매도", marker_color='#00FA9A', opacity=0.9,
+            offset=0.0, width=0.4,
+            text=investor_df['orgn_sell_100m'].apply(lambda x: f"{abs(x):,.0f}억" if x < 0 else ""),
+            textposition='auto', textfont=dict(size=10, color='white')
+        ), row=3, col=1)
 
     # 하단 캔들스틱 차트 (주가)
     if 'kis_df' in locals() and not kis_df.empty:
@@ -1314,28 +1444,48 @@ def draw_whale_bar_chart(target_code, target_name, df):
             name="주가",
             increasing_line_color='#ff4b4b', decreasing_line_color='#4B89B5',
             showlegend=False
-        ), row=3, col=1)
+        ), row=4, col=1)
+        
+        # 🚀 상한가 로켓 아이콘 추가
+        upper_dates_res = supabase.table("upper_limit_stocks").select("recorded_date").eq("name", target_name).gte("recorded_date", thirty_days_ago.strftime('%Y-%m-%d')).execute()
+        if upper_dates_res.data:
+            upper_dates_md = [pd.to_datetime(item['recorded_date']).strftime('%m-%d') for item in upper_dates_res.data]
+            for d in upper_dates_md:
+                if d in kis_df['date_str'].values:
+                    high_price = kis_df[kis_df['date_str'] == d]['High'].max()
+                    fig_bar.add_annotation(
+                        x=d,
+                        y=high_price,
+                        text="🚀",
+                        showarrow=False,
+                        yshift=15,
+                        font=dict(size=18),
+                        row=4, col=1
+                    )
     
     # 5. 차트 영점 조절
     fig_bar.update_layout(
         template='plotly_dark',
         plot_bgcolor='#11111b', paper_bgcolor='#11111b',
-        barmode='group',
-        legend=dict(title="", orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1.0),
-        height=750, margin=dict(l=20, r=20, t=60, b=40),
+        barmode='group', # 다시 group으로 복구 (각 row가 독립적인 막대 너비를 가짐)
+        legend=dict(title="", orientation="h", yanchor="bottom", y=1.05, xanchor="left", x=0.0),
+        height=850, margin=dict(l=20, r=20, t=60, b=40),
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
-        xaxis3_rangeslider_visible=False
+        xaxis3_rangeslider_visible=False,
+        xaxis4_rangeslider_visible=False
     )
     
     # 축 설정
-    fig_bar.update_xaxes(title_text="날짜", type='category', categoryorder='category descending', tickangle=45, gridcolor='#2a2a2a', rangeslider=dict(visible=False), row=3, col=1)
+    fig_bar.update_xaxes(title_text="날짜", type='category', categoryorder='category descending', tickangle=45, gridcolor='#2a2a2a', rangeslider=dict(visible=False), row=4, col=1)
     fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, gridcolor='#2a2a2a', row=1, col=1)
     fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, gridcolor='#2a2a2a', row=2, col=1)
+    fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, gridcolor='#2a2a2a', row=3, col=1)
     
     fig_bar.update_yaxes(title_text="고래 수급 (억원)", gridcolor='#2a2a2a', tickformat=",.0f", row=1, col=1)
     fig_bar.update_yaxes(title_text="전체 대금 (억원)", gridcolor='#2a2a2a', tickformat=",.0f", row=2, col=1)
-    fig_bar.update_yaxes(title_text="주가 (원)", gridcolor='#2a2a2a', tickformat=",.0f", row=3, col=1)
+    fig_bar.update_yaxes(title_text="외인/기관 (억원)", gridcolor='#2a2a2a', tickformat=",.0f", row=3, col=1)
+    fig_bar.update_yaxes(title_text="주가 (원)", gridcolor='#2a2a2a', tickformat=",.0f", row=4, col=1)
     
     st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -1401,18 +1551,18 @@ if choice == "🔐 로그인/가입":
     st.write("---")
     
     # 로그인 / 신규 신청 탭 분할 선택기
-    mode = st.radio("[ "+"&nbsp;" * 0 + "관제 센터 진입 모드 선택 ]", ["🔐 기존 사용자 로그인", "📝 신규 가입 신청"])
+    mode = st.radio("[ "+"&nbsp;" * 0 + "사용 모드 선택 ]", ["🔐 기존 사용자 로그인", "📝 신규 가입 신청"])
     
     if mode == "🔐 기존 사용자 로그인":
         st.markdown("🔑 LOG IN")
         
         # 🎯 [크롬 연동용 폼 버퍼 개통] form 내부로 입력 소자들을 묶어줍니다.
         with st.form("login_form", clear_on_submit=False):
-            login_id = st.text_input("관제 ID", placeholder="아이디를 입력하세요.")
+            login_id = st.text_input("아이디 (ID)", placeholder="아이디를 입력하세요.")
             login_pw = st.text_input("보안 패스워드", type="password", placeholder="비밀번호를 입력하세요.")
             
             # 🎯 일반 button 대신 반드시 form_submit_button을 써야 크롬이 팝업을 끕니다!
-            submit_login = st.form_submit_button("레이더 기지 접속", use_container_width=True)
+            submit_login = st.form_submit_button("로그인", use_container_width=True)
         
         if submit_login:
             if login_id and login_pw:
@@ -1433,7 +1583,7 @@ if choice == "🔐 로그인/가입":
                     else:
                         st.error("❌ 비밀번호가 일치하지 않습니다.")
                 else:
-                    st.error("❌ 등록되지 않은 관제 ID입니다.")
+                    st.error("❌ 등록되지 않은 아이디 (ID)입니다.")
             else:
                 st.warning("⚠️ ID와 비밀번호를 모두 입력해 주십시오.")
 
@@ -1442,10 +1592,13 @@ if choice == "🔐 로그인/가입":
         
         # 🎯 회원가입 구역도 크롬이 감지할 수 있게 form으로 묶어줍니다.
         with st.form("register_form"):
-            new_name = st.text_input("닉네임")
-            new_id = st.text_input("희망 관제 ID")
-            new_phone = st.text_input("비상 연락처 (전화번호)", placeholder="010-XXXX-XXXX")
-            new_pw = st.text_input("비밀번호 설정", type="password", help="간편하게 5자 이상 문자, 숫자, [!, #, &]를 사용해 입력하세요!")
+            # 💡 크롬 자동완성 방지용 미끼(Dummy) 필드 (display:none은 크롬이 무시하므로 화면 밖으로 숨김)
+            st.html('<div style="position: absolute; opacity: 0; top: -9999px; left: -9999px;"><input type="text" autocomplete="username" tabindex="-1"><input type="password" autocomplete="current-password" tabindex="-1"></div>')
+            
+            new_name = st.text_input("닉네임", autocomplete="off")
+            new_id = st.text_input("아이디 (ID)", autocomplete="off")
+            new_phone = st.text_input("비상 연락처 (전화번호)", placeholder="010-XXXX-XXXX", autocomplete="off")
+            new_pw = st.text_input("비밀번호 설정", help="간편하게 5자 이상 문자, 숫자, [!, #, &]를 사용해 입력하세요!", autocomplete="off")
             
             submit_register = st.form_submit_button("권한 신청서 제출", use_container_width=True)
         
@@ -1495,6 +1648,9 @@ if choice == "🏠 홈화면":
     # ------------------------------------------------------------------
 
     # 디지털 시계 및 대시보드 본체 시작.
+    
+    # 전역 화면 스타일 설정 (모든 하위 화면에서 메인 컨테이너 상단 여백 제거)
+    st.html("<style>.block-container { padding-top: 1rem !important; max-width: 95% !important; }</style>")
 
     # ⏱️ 60초(60000ms)마다 화면 전체를 자동으로 새로고침 (초지능형 조건식 가동)
     scrn_select = st.session_state.get('scrn_select_radio', '체결 로그')
@@ -2165,6 +2321,34 @@ if choice == "🏠 홈화면":
         div.element-container:has(.btn-style-brag) + div.element-container button:hover p {
             color: #FF1493 !important;
         }
+
+        /* 외기 탑백 버튼용 스타일 */
+        div.element-container:has(.btn-style-top100) { display: none; }
+        div.element-container:has(.btn-style-top100) + div.element-container button { 
+            background-color: transparent !important;
+            border: 1px solid rgba(212, 0, 0, 1) !important;
+            padding-left: 10px !important; 
+            padding-right: 10px !important; 
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important; 
+            margin-bottom: 5px !important; 
+        }
+        div.element-container:has(.btn-style-top100) + div.element-container button p { 
+            font-size: 14px !important; 
+            color: rgba(212, 0, 0, 1) !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+            margin-bottom: 0px !important;
+            padding-bottom: 2px !important;
+        }
+        div.element-container:has(.btn-style-top100) + div.element-container button:hover {
+            border-color: #FF0000 !important;
+            background-color: rgba(212, 0, 0, 0.1) !important;
+        }
+        div.element-container:has(.btn-style-top100) + div.element-container button:hover p {
+            color: #FF0000 !important;
+        }
     </style>""", unsafe_allow_html=True)
     
     guest_msg = st.sidebar.empty()
@@ -2405,13 +2589,28 @@ if choice == "🏠 홈화면":
 
     # --- [ SideBar: Personal Selectors ] ---
     st.sidebar.markdown('<div class="spacer-logout"></div>', unsafe_allow_html=True)
-    st.sidebar.markdown('<div class="btn-style-brag"></div>', unsafe_allow_html=True)
-    if st.sidebar.button("💖 수익율 자랑"):
-        st.session_state['scrn_select_radio'] = "수익율 자랑"
-        st.session_state["brag_view_mode"] = "list"
-        st.session_state["brag_selected_post"] = None
-        st.session_state["show_brag_form"] = False
-        st.rerun()
+    
+    brag_col, top200_col = st.sidebar.columns([1, 1])
+    with brag_col:
+        st.markdown('<div class="btn-style-brag"></div>', unsafe_allow_html=True)
+        if st.button("💖 수익율 자랑", use_container_width=True):
+            st.session_state['scrn_select_radio'] = "수익율 자랑"
+            st.session_state["brag_view_mode"] = "list"
+            st.session_state["brag_selected_post"] = None
+            st.session_state["show_brag_form"] = False
+            st.rerun()
+    with top200_col:
+        st.markdown('<div class="btn-style-top100"></div>', unsafe_allow_html=True)
+        if st.button("📊 외/기 탑백", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if st.session_state.get('scrn_select_radio') != "외기 TOP 100 화면":
+                    st.session_state['scrn_select_radio'] = "외기 TOP 100 화면"
+                    st.rerun()
         
     if st.session_state.get('authenticated', False):
         st.sidebar.markdown('<div class="btn-style-logout"></div>', unsafe_allow_html=True)
@@ -2427,8 +2626,6 @@ if choice == "🏠 홈화면":
         # 메인 차트용 데이터 필터링
         if not df.empty:
             main_df = df[df['date'] >= start_date.strftime('%Y-%m-%d')]
-            # 🚨 [과거 데이터 오염 방지] 2026-07-17 이전에 기록된 가짜 매수/매도 데이터는 모두 '방향미상'으로 강제 전환
-            main_df.loc[main_df['date'] < '2026-07-17', 'side'] = '방향미상'
         else:
             main_df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime', 'date_parsed'])
 
@@ -2634,12 +2831,11 @@ if choice == "🏠 홈화면":
 
             st.divider()
 
-
         elif scrn_select == "수익율 화면":
-            st.markdown("<h4 style='color:#8A2BE2; border-left: 4px solid #8A2BE2; padding-left: 10px;'>📈 고래 매수 종목 수익율 TOP 20</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:#8A2BE2; border-left: 4px solid #8A2BE2; padding-left: 10px; margin-top: 0;'>📈 고래 매수 종목 수익율 TOP 20</h4>", unsafe_allow_html=True)
             
             # UI: 월, 주차, 기준금액 드롭다운
-            ret_col1, ret_col2, ret_col3, ret_col4, ret_col_btn = st.columns([1.5, 1.5, 1.5, 1.5, 1])
+            ret_col1, ret_col2, ret_col3, ret_col4, ret_col_btn = st.columns([1.5, 0.8, 1.5, 1.5, 1.4])
             
             # 1. 월 생성 (최근 12개월)
             today_date = datetime.utcnow() + timedelta(hours=9)
@@ -2694,64 +2890,59 @@ if choice == "🏠 홈화면":
             if end_dt.date() > today_kr: end_dt = now_kst
             
             is_currently_cached = False
+            is_cache_stale = False
             cached_data_pre = []
             try:
                 check_combo = supabase.table('return_rate_cache').select('*').eq('period_month', pure_month).eq('period_week', sel_week).eq('min_amount', min_krw).execute()
                 if check_combo.data:
-                    # 만료 검사
+                    is_currently_cached = True
+                    cached_data_pre = check_combo.data
+                    # 만료 검사 (관리자의 업데이트 용도)
                     if start_dt.date() <= today_kr <= end_dt.date():
                         cache_dt_kr = datetime.fromisoformat(check_combo.data[0]['updated_at'].replace('Z', '+00:00')) + timedelta(hours=9)
                         if cache_dt_kr.date() == today_kr:
                             market_close_time = datetime.combine(today_kr, datetime.strptime("15:30", "%H:%M").time())
                             if cache_dt_kr < market_close_time and now_kst >= market_close_time:
-                                is_currently_cached = False
-                            else:
-                                is_currently_cached = True
-                                cached_data_pre = check_combo.data
+                                is_cache_stale = True
                         else:
-                            is_currently_cached = False
-                    else:
-                        is_currently_cached = True
-                        cached_data_pre = check_combo.data
+                            is_cache_stale = True
             except Exception:
                 pass
             # -------------------------------------------------------------
-                
+            
+            is_admin_view = st.session_state.get('is_admin', False)
+            actual_use_cache = False
+            
             with ret_col_btn:
                 if is_currently_cached:
                     st.html("""
                     <div class='search-btn-wrapper' style='display:none;'></div>
                     <style>
-                        div.element-container:has(.search-btn-wrapper) {
-                            display: none !important;
-                        }
-                        div.element-container:has(.search-btn-wrapper) + div.element-container {
-                            margin-top: 28px !important;
-                        }
+                        div.element-container:has(.search-btn-wrapper) { display: none !important; }
+                        div.element-container:has(.search-btn-wrapper) + div.element-container { margin-top: 28px !important; }
                         div.element-container:has(.search-btn-wrapper) + div.element-container button {
-                            background-color: #198754 !important; 
-                            color: white !important; 
-                            border-color: #198754 !important;
+                            background-color: #198754 !important; color: white !important; border-color: #198754 !important;
                         }
                     </style>""")
                     search_ret = st.button("🚀 바로 조회 (캐시됨)", use_container_width=True)
+                    actual_use_cache = True
                 else:
                     st.html("""
                     <div class='search-btn-wrapper' style='display:none;'></div>
                     <style>
-                        div.element-container:has(.search-btn-wrapper) {
-                            display: none !important;
-                        }
-                        div.element-container:has(.search-btn-wrapper) + div.element-container {
-                            margin-top: 28px !important;
-                        }
+                        div.element-container:has(.search-btn-wrapper) { display: none !important; }
+                        div.element-container:has(.search-btn-wrapper) + div.element-container { margin-top: 28px !important; }
                         div.element-container:has(.search-btn-wrapper) + div.element-container button {
-                            background-color: #fd7e14 !important; 
-                            color: white !important; 
-                            border-color: #fd7e14 !important;
+                            background-color: #fd7e14 !important; color: white !important; border-color: #fd7e14 !important;
                         }
                     </style>""")
                     search_ret = st.button("🚀 신규 계산 (대기중)", use_container_width=True)
+                    actual_use_cache = False
+            
+            if st.session_state.get('force_recalc_ret', False):
+                st.session_state['force_recalc_ret'] = False
+                actual_use_cache = False
+                search_ret = True
             
             if search_ret or st.session_state.get('force_show_graph', False):
                 st.session_state['force_show_graph'] = False
@@ -2768,13 +2959,27 @@ if choice == "🏠 홈화면":
                     st.markdown(f"<div style='background-color: rgba(23, 42, 69, 0.7); color: #64d2ff; padding: 8px 15px; border-radius: 5px; font-size: 13px; margin-bottom: 5px;'><span style='margin-right: 5px;'>🔎</span> 조회 기간: {str_start} ~ {str_end} | 기준금액: {sel_amt}</div>", unsafe_allow_html=True)
                     
                     # 이미 위에서 검증한 공통 로직 결과 재사용
-                    use_cache = is_currently_cached
+                    use_cache = actual_use_cache
+                    if st.session_state.get('force_show_graph', False):
+                        use_cache = is_currently_cached # 하단 표에서 클릭 시 강제 캐시 조회
+                        
                     cached_data = cached_data_pre
                     
                     res_df = pd.DataFrame()
                     
                     if use_cache and cached_data:
-                        st.markdown("<div style='background-color: rgba(15, 61, 31, 0.7); color: #5bc27b; padding: 8px 15px; border-radius: 5px; font-size: 13px; margin-bottom: 5px;'><span style='margin-right: 5px;'>💾</span> DB에서 고속으로 캐시 데이터를 가져왔습니다!</div>", unsafe_allow_html=True)
+                        is_admin = st.session_state.get('is_admin', False)
+                        if is_admin:
+                            col_msg, col_btn = st.columns([7, 3])
+                            with col_msg:
+                                st.markdown("<div style='background-color: rgba(15, 61, 31, 0.7); color: #5bc27b; padding: 8px 15px; border-radius: 5px; font-size: 13px; margin-bottom: 5px;'><span style='margin-right: 5px;'>💾</span> DB에서 고속으로 캐시 데이터를 가져왔습니다!</div>", unsafe_allow_html=True)
+                            with col_btn:
+                                if st.button("🔄 캐시 강제 업데이트 실행", use_container_width=True):
+                                    st.session_state['force_recalc_ret'] = True
+                                    st.rerun()
+                        else:
+                            st.markdown("<div style='background-color: rgba(15, 61, 31, 0.7); color: #5bc27b; padding: 8px 15px; border-radius: 5px; font-size: 13px; margin-bottom: 5px;'><span style='margin-right: 5px;'>💾</span> DB에서 고속으로 캐시 데이터를 가져왔습니다!</div>", unsafe_allow_html=True)
+                            
                         res_df = pd.DataFrame(cached_data)
                     else:
                         is_admin = st.session_state.get('is_admin', False)
@@ -2866,6 +3071,20 @@ if choice == "🏠 홈화면":
                                     try:
                                         supabase.table('return_rate_cache').delete().eq('period_month', pure_month).eq('period_week', sel_week).eq('min_amount', min_krw).execute()
                                         supabase.table('return_rate_cache').upsert(cache_records).execute()
+                                        
+                                        # 요약본(이정표) 생성 및 system_settings 에 저장
+                                        summary_key = f"cache_summary_{pure_month}_{sel_week}_{min_krw}"
+                                        summary_val = {
+                                            'month': pure_month,
+                                            'week': sel_week,
+                                            'amt': min_krw,
+                                            'count': len(final_cache_df),
+                                            'updated_at': datetime.utcnow().isoformat()
+                                        }
+                                        supabase.table('system_settings').upsert({
+                                            'key': summary_key,
+                                            'value': json.dumps(summary_val, ensure_ascii=False)
+                                        }).execute()
                                         
                                         st.session_state['force_show_graph'] = True
                                         st.rerun()
@@ -3019,7 +3238,7 @@ if choice == "🏠 홈화면":
                         
             # --- [데이터 추출 요청 게시판] ---
             st.divider()
-            st.markdown("### 📝 데이터 추출 요청 게시판")
+            st.markdown("<div style='font-size: 18px; font-weight: bold; margin-bottom: 15px;'>📝 데이터 추출 요청 게시판</div>", unsafe_allow_html=True)
             st.markdown("새로운 조건의 데이터 추출은 서버 부하 방지를 위해 관리자만 실행할 수 있습니다. 필요하신 자료를 아래에서 요청해 주세요.")
             
             is_admin_view = st.session_state.get('is_admin', False)
@@ -3059,7 +3278,7 @@ if choice == "🏠 홈화면":
                             except Exception as e:
                                 st.error(f"요청 실패: {e}")
                             
-            # 요청 목록 불러오기
+            # 요청 목록 및 캐시된 목록 불러오기
             try:
                 req_res = supabase.table("system_settings").select("*").like("key", "yield_req_%").execute()
                 req_list = []
@@ -3071,115 +3290,167 @@ if choice == "🏠 홈화면":
                     except Exception:
                         pass
                 
-                if req_list:
-                    # 최신 요청 순 정렬
-                    req_list.sort(key=lambda x: x.get('req_time', ''), reverse=True)
+                def set_req_conditions(month, week, amt):
+                    st.session_state['ret_month'] = month
+                    st.session_state['ret_week'] = week
+                    st.session_state['ret_amt'] = amt
                     
-                    # 일반 사용자는 본인 것만, 관리자는 전체 보기
-                    if not is_admin_view:
-                        my_reqs = [r for r in req_list if r.get('user') == current_user]
-                    else:
-                        my_reqs = req_list
-                        
-                    if my_reqs:
-                        st.markdown(f"#### {'전체 요청 내역 (관리자용)' if is_admin_view else '나의 요청 내역'}")
-                        
-                        st.html("""
-                        <style>
-                            /* 마커 자체 숨김 */
-                            div.element-container:has(.req-flex-marker) {
-                                display: none !important;
-                            }
-                            /* 마커를 품은 부모 컨테이너(가로 정렬 컨테이너)를 row로 변경 */
-                            div:has(> div.element-container .req-flex-marker) {
-                                display: flex !important;
-                                flex-direction: row !important;
-                                align-items: center !important;
-                                gap: 50px !important;
-                            }
-                            /* 내부 자식들이 100% 너비를 가지지 않도록 auto로 축소 */
-                            div:has(> div.element-container .req-flex-marker) > div.element-container {
-                                width: auto !important;
-                                flex: 0 0 auto !important;
-                            }
-                            /* st.markdown p 태그의 위아래 기본 여백 완벽 제거 (중앙 정렬 방해 요소 제거) */
-                            div:has(> div.element-container .req-flex-marker) p {
-                                margin: 0 !important;
-                            }
-                            /* 버튼 높이 20% 축소 (약 40px -> 32px) 및 미세 위치 조정 */
-                            div:has(> div.element-container .req-flex-marker) button {
-                                min-height: 32px !important;
-                                height: 32px !important;
-                                padding-top: 0 !important;
-                                padding-bottom: 0 !important;
-                                margin-top: 4px !important; /* 위에서 살짝만 눌러줌 */
-                            }
-                            /* 버튼 내부 텍스트 정렬 */
-                            div:has(> div.element-container .req-flex-marker) button p {
-                                line-height: 1 !important;
-                                font-size: 14px !important;
-                            }
-                        </style>
-                        """)
-                        
-                        def set_req_conditions(month, week, amt):
-                            st.session_state['ret_month'] = month
-                            st.session_state['ret_week'] = week
-                            st.session_state['ret_amt'] = amt
+                if is_admin_view:
+                    admin_tab = st.segmented_control(
+                        "관리자 메뉴 선택",
+                        options=["⚙️ 데이터 추출 요청 관리 (관리자용)", "⚡ 분석 완료된 수익율 차트 목록 (일반용)"],
+                        default="⚙️ 데이터 추출 요청 관리 (관리자용)",
+                        key="admin_req_tab",
+                        label_visibility="collapsed"
+                    )
+                    
+                    if admin_tab == "⚙️ 데이터 추출 요청 관리 (관리자용)":
+                        if req_list:
+                            req_list.sort(key=lambda x: x.get('req_time', ''), reverse=True)
+                            st.markdown("#### 전체 요청 내역 (관리자용)")
                             
-                        for r in my_reqs:
-                            with st.container():
-                                status_color = "#FFA500" if r.get('status') == "대기 중" else "#5bc27b"
-                                
-                                # 가로 정렬을 위한 내부 컨테이너
-                                req_row = st.container()
-                                with req_row:
-                                    st.html("<div class='req-flex-marker' style='display:none;'></div>")
-                                    st.markdown(f"**요청자:** {r.get('user')} | **조건:** {r.get('month')} / {r.get('week')} / {r.get('amt')} | **상태:** <span style='color:{status_color}; font-weight:bold;'>{r.get('status')}</span>", unsafe_allow_html=True)
-                                    st.button("✔ 설정", key=f"set_{r['db_key']}", on_click=set_req_conditions, args=(r.get('month'), r.get('week'), r.get('amt')), help="이 조건으로 상단 메뉴를 자동 설정합니다")
-                                
-                                if r.get('reply'):
-                                    st.markdown(f"<div style='background-color:rgba(255,255,255,0.05); padding:10px; border-left:3px solid #8A2BE2; margin-top:5px; margin-bottom:10px;'>↳ <b>관리자 답변:</b> {r.get('reply')}</div>", unsafe_allow_html=True)
+                            st.html("""
+                            <style>
+                                div.element-container:has(.req-flex-marker) { display: none !important; }
+                                div:has(> div.element-container .req-flex-marker) { display: flex !important; flex-direction: row !important; align-items: center !important; gap: 50px !important; }
+                                div:has(> div.element-container .req-flex-marker) > div.element-container { width: auto !important; flex: 0 0 auto !important; }
+                                div:has(> div.element-container .req-flex-marker) p { margin: 0 !important; }
+                                div:has(> div.element-container .req-flex-marker) button { min-height: 32px !important; height: 32px !important; padding-top: 0 !important; padding-bottom: 0 !important; margin-top: 4px !important; }
+                                div:has(> div.element-container .req-flex-marker) button p { line-height: 1 !important; font-size: 14px !important; }
+                            </style>
+                            """)
+                            
+                            for r in req_list:
+                                with st.container():
+                                    status_color = "#FFA500" if r.get('status') == "대기 중" else "#5bc27b"
+                                    req_row = st.container()
+                                    with req_row:
+                                        st.html("<div class='req-flex-marker' style='display:none;'></div>")
+                                        st.markdown(f"**요청자:** {r.get('user')} | **조건:** {r.get('month')} / {r.get('week')} / {r.get('amt')} | **상태:** <span style='color:{status_color}; font-weight:bold;'>{r.get('status')}</span>", unsafe_allow_html=True)
+                                        st.button("✔ 설정", key=f"set_{r['db_key']}", on_click=set_req_conditions, args=(r.get('month'), r.get('week'), r.get('amt')), help="이 조건으로 상단 메뉴를 자동 설정합니다")
                                     
-                                if is_admin_view and r.get('status') == "대기 중":
-                                    # 해당 조건이 실제로 추출(캐시)되었는지 검증
-                                    req_month = r.get('month')
-                                    req_week = r.get('week')
-                                    req_amt_str = r.get('amt')
-                                    if "천만원" in req_amt_str:
-                                        req_min_krw = int(req_amt_str.split("천만원")[0]) * 10000000
-                                    else:
-                                        req_min_krw = int(req_amt_str.split("억")[0]) * 100000000
+                                    if r.get('reply'):
+                                        st.markdown(f"<div style='background-color:rgba(255,255,255,0.05); padding:10px; border-left:3px solid #8A2BE2; margin-top:5px; margin-bottom:10px;'>↳ <b>관리자 답변:</b> {r.get('reply')}</div>", unsafe_allow_html=True)
                                         
-                                    check_res = supabase.table('return_rate_cache').select('period_month').eq('period_month', req_month).eq('period_week', req_week).eq('min_amount', req_min_krw).limit(1).execute()
-                                    is_req_cached = len(check_res.data) > 0
-
-                                    with st.form(key=f"form_{r['db_key']}"):
-                                        reply_text = st.text_input("답변 내용 (추출 완료 후 작성해주세요)", key=f"reply_{r['db_key']}")
-                                        col_btn1, col_btn2 = st.columns([1, 4])
-                                        with col_btn1:
-                                            # Streamlit 고질적 폼 제출 씹힘 방지: 버튼을 동적으로 disabled 하거나 라벨을 바꾸지 않음
-                                            submit_btn = st.form_submit_button("완료 처리")
+                                    if r.get('status') == "대기 중":
+                                        req_month = r.get('month')
+                                        req_week = r.get('week')
+                                        req_amt_str = r.get('amt')
+                                        if "천만원" in req_amt_str:
+                                            req_min_krw = int(req_amt_str.split("천만원")[0]) * 10000000
+                                        else:
+                                            req_min_krw = int(req_amt_str.split("억")[0]) * 100000000
                                             
-                                        if submit_btn:
-                                            if not is_req_cached:
-                                                st.error("❌ 먼저 상단 메뉴에서 해당 조건의 데이터를 추출(캐싱)해주세요.")
-                                            else:
-                                                r['reply'] = reply_text
-                                                r['status'] = "완료됨"
-                                                db_key = r.pop('db_key')
-                                                try:
-                                                    supabase.table("system_settings").upsert({
-                                                        "key": db_key,
-                                                        "value": json.dumps(r, ensure_ascii=False)
-                                                    }).execute()
-                                                    st.success("✅ 처리 완료!")
-                                                    import time
-                                                    time.sleep(0.5)
-                                                    st.rerun()
-                                                except Exception as e:
-                                                    st.error(f"업데이트 실패: {e}")
-                                st.markdown("---")
+                                        check_res = supabase.table('return_rate_cache').select('period_month').eq('period_month', req_month).eq('period_week', req_week).eq('min_amount', req_min_krw).limit(1).execute()
+                                        is_req_cached = len(check_res.data) > 0
+                                        
+                                        with st.form(key=f"form_{r['db_key']}"):
+                                            reply_text = st.text_input("답변 내용 (추출 완료 후 작성해주세요)", key=f"reply_{r['db_key']}")
+                                            col_btn1, col_btn2 = st.columns([1, 4])
+                                            with col_btn1:
+                                                submit_btn = st.form_submit_button("완료 처리")
+                                            if submit_btn:
+                                                if not is_req_cached:
+                                                    st.error("❌ 먼저 상단 메뉴에서 해당 조건의 데이터를 추출(캐싱)해주세요.")
+                                                else:
+                                                    r['reply'] = reply_text
+                                                    r['status'] = "완료됨"
+                                                    db_key = r.pop('db_key')
+                                                    try:
+                                                        supabase.table("system_settings").upsert({"key": db_key, "value": json.dumps(r, ensure_ascii=False)}).execute()
+                                                        st.success("✅ 처리 완료!")
+                                                        import time
+                                                        time.sleep(0.5)
+                                                        st.rerun()
+                                                    except Exception as e:
+                                                        st.error(f"업데이트 실패: {e}")
+                                    st.markdown("---")
+
+                def render_user_cache_list():
+                    with st.expander("⚡ 분석 완료된 수익율 차트 목록 (클릭하여 열람/닫기)", expanded=True):
+                        st.markdown("아래 목록은 서버에서 이미 분석이 완료된 데이터입니다. 원하시는 종목 필터를 체크한 뒤 **⚙️ 옵션 세팅하기**를 누르시고, **화면 상단으로 이동하여 조회 버튼을 클릭**해주세요.")
+                        
+                        cached_combos = []
+                        try:
+                            # 캐시 요약(이정표) 테이블에서만 가볍게 읽어오기
+                            c_res = supabase.table('system_settings').select('*').like('key', 'cache_summary_%').execute()
+                            if c_res.data:
+                                summary_list = []
+                                for row in c_res.data:
+                                    try:
+                                        val = json.loads(row['value'])
+                                        summary_list.append(val)
+                                    except:
+                                        pass
+                                
+                                if summary_list:
+                                    cdf = pd.DataFrame(summary_list)
+                                    cdf = cdf.sort_values(by=['month', 'week', 'amt'], ascending=[False, False, False])
+                                    for _, row in cdf.iterrows():
+                                        amt_str = f"{int(row['amt'])//10000000}천만원 이상" if row['amt'] < 100000000 else f"{int(row['amt'])//100000000}억 이상"
+                                        cached_combos.append({
+                                            'month': row['month'],
+                                            'week': row['week'],
+                                            'amt': amt_str
+                                        })
+                        except Exception as e:
+                            st.error(f"캐시 목록 로드 실패: {e}")
+                        
+                        if cached_combos:
+                            st.html("""
+                            <style>
+                                .cache-table { width: 100%; border-collapse: collapse; margin-top: 10px; color: white; text-align: center; }
+                                .cache-table th { background-color: #262730; padding: 6px; border-bottom: 2px solid #8A2BE2; font-size: 14px; }
+                            </style>
+                            """)
+                            
+                            st.markdown("""
+                            <table class="cache-table">
+                                <thead>
+                                    <tr>
+                                        <th>분석 월</th>
+                                        <th>주차</th>
+                                        <th>기준 금액</th>
+                                        <th>종목 필터</th>
+                                        <th style="width: 140px;">차트 보기</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                            """, unsafe_allow_html=True)
+                            
+                            def set_req_combo(idx, m, w, a):
+                                st.session_state['ret_month'] = m
+                                st.session_state['ret_week'] = w
+                                st.session_state['ret_amt'] = a
+                                is_pure = st.session_state.get(f"chk_{idx}", True)
+                                st.session_state['ret_filter'] = "순수 개별종목 (우선주/ETF 제외)" if is_pure else "전체 종목 포함"
+                                st.toast("✅ 옵션 설정 완료! 화면 상단으로 스크롤하여 [🚀 바로 조회] 버튼을 눌러주세요.", icon="⬆️")
+                            
+                            for i, combo in enumerate(cached_combos):
+                                col1, col2, col3, col4, col5 = st.columns([1.2, 1.2, 1.5, 2.0, 1.5])
+                                with col1:
+                                    st.markdown(f"<div style='text-align:center; padding: 5px 0; font-size: 13px;'>{combo['month']}</div>", unsafe_allow_html=True)
+                                with col2:
+                                    st.markdown(f"<div style='text-align:center; padding: 5px 0; font-size: 13px;'>{combo['week']}</div>", unsafe_allow_html=True)
+                                with col3:
+                                    st.markdown(f"<div style='text-align:center; padding: 5px 0; font-size: 13px;'>{combo['amt']}</div>", unsafe_allow_html=True)
+                                with col4:
+                                    st.checkbox("순수 개별종목 한정", value=True, key=f"chk_{i}")
+                                with col5:
+                                    st.button("⚙️ 옵션 세팅하기", key=f"btn_cache_tbl_{i}", use_container_width=True, on_click=set_req_combo, args=(i, combo['month'], combo['week'], combo['amt']))
+                                st.html("<hr style='margin:2px 0; border:0; border-bottom:1px solid #333;'>")
+                                
+                            st.markdown("</tbody></table>", unsafe_allow_html=True)
+                            
+                        else:
+                            st.info("현재 분석이 완료되어 서버에 저장된 캐시 데이터가 없습니다.")
+
+                if is_admin_view:
+                    if admin_tab == "⚡ 분석 완료된 수익율 차트 목록 (일반용)":
+                        render_user_cache_list()
+                else:
+                    render_user_cache_list()
+
             except Exception as e:
                 st.error(f"요청 게시판 처리 중 오류 발생: {e}")
         elif scrn_select == "상선고 화면":
@@ -3302,6 +3573,10 @@ if choice == "🏠 홈화면":
                         else:
                             # 종목별로 상한가 날짜들을 모두 리스트로 수집 (중복 상한가 허용)
                             upper_grouped = upper_df.groupby('name')['recorded_date'].apply(list).reset_index()
+                            # 상한가 횟수 기준으로 내림차순 정렬 추가
+                            upper_grouped['upper_cnt'] = upper_grouped['recorded_date'].apply(len)
+                            upper_grouped = upper_grouped.sort_values(by='upper_cnt', ascending=False).reset_index(drop=True)
+                            
                             stock_names = upper_grouped['name'].tolist()
                         
                         # 3. 고래 체결 내역 쿼리 (페이징 & 청크 처리)
@@ -3370,6 +3645,7 @@ if choice == "🏠 홈화면":
                                     <tr>
                                         <td style="border-bottom: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock}">
                                             <a href="javascript:void(0);" id="goto___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
+                                            <a href="javascript:void(0);" id="summary___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #4b8bff;" title="{stock} 기업 요약(AI) 보기">💬</a>
                                             {stock} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
                                         </td>
                             """)
@@ -3389,8 +3665,8 @@ if choice == "🏠 홈화면":
                                     img_b64 = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAIKUlEQVR42u2Zf2yVVxnHP885772UH6Ut7b39AaZkbqBrxCjGP5wRYUOIOMBM6h/LtjDYWJhODdk/M/O2RE0Ws0TjVigwui10SJERgUwdiUUlWWKsClJMYMggDii0FChtoe/7nsc/7g9uaXvpLZ0S5UlO7s1933vOeZ7n+/w43wN35a78f4uM52QKQgKhBqEd4cupBweAGpR2VOpxd5wVtAWrCbxRv5/A0wTmv+4BbcFKLeGg37ZVVOPcLJAZIMWEGmK1yw/c6YjIcVl54VyWIoYa5OY5PnIFNIGhDhVBAbQp9oAz5nEjsoSITMcAAwoBCghRwBPwgdAdB36Fc82y8sLfAFQxcGO+j1SBbKtrU3w5nqlnsplDj7sM+g6OdwnDQ6g5g4R99KpQRCFhZAZGPoPoIoRFTDITXb/7o/HDF2VV5+9H8ui4KqAJPKkn0FeKqymeuJGpZjHdwd9Rfoh27JGVXBvVPFtKC7HmEYz5PlPtvVwNmznf/5ysu3IxXyUk781vjD/IVLsb1SjXda082bE12zu0I9Th2ISFuUAblKQyTztCDZrxIAivlz9L1Pwc9EOu+Mvlma4/p9cavyyTyjDaGHtEd1WpNpe36YaimSn8irZgNR9jKKIJvPR/tKF0tr5V2a47KkPdGH8wY4zxSpEAuiG+UN+uUm0u368JJgFo69DUqZrclN8UX67bK7+j2yse0y0V1dnPBr2fmkOfLy3U5oqDuqMy1A3TPj9aJcwts80KnG6pqKbYvk1f+FfOdSyVevq0BSvzh3FzXXKTntgXmGJ/SqH3JtZ9I1XQhmxI5hNoC1Z+0tXDGV1EoEcpmrBPGyvLaEdvVS9yF5M6EEGx+iao7e8cWC7r6B9doMklelzAVRcQci5TkYd7s5ZQW7DyfEcv5/sfxlBERF+Tehw1uaFpcqZLwelr5bXEvC9xJfjWpO92n9ZWvNFlCbUIXnKYW0JBagm1FU++d/kDLoXfJmaXalNscVq5/D2wAqcJPDx5iU7/qKzp3DoibEaR6BSEs4gyeAx6dX7KE8+c38TF8DiYlxWE9pELnMlhfWVm7CFK7EycW59Jg2MRgwoo3Tgh+T09blJVM2sEbj0l9n42lX1R6nEjeeEWDZVZxaXwKn5kbyomwrx60/SnU09b53l8tTqirfM8bZ3naePciCbmecPEXXKNiOymJ+zDs6tzGc8M1xJLLaE2EgFZhO/elTVn+zJeyQc6RuCahlj5MaeOtSMDhzh1rN2dOtZOwdnDzD52RDeXzc3qhxBBtQUrj3f04uvvgCXagpV6guFqzVAPJFIvRUs/TqEUYtivIMTGBh8XApNtBSV2VnqYEjuLIvMJpnmzA0s5ADuz5o+l40N+yxRbSk+8etDesmSoC9Npy3n3YkRRPSygeiH/ThEFExWhN/gNVzmKiEFVnYIRo0TAs5Ej6aSR+d+FZHyoCQ9jrSJ6H/DP4VLqUAXSWBOZjq+CDpxL/T4mBYiK4ZrbIqsv7MoJuGx4ptcKoh2ECGqqRoqDoRBKHwPVTSFQ6Pf7bvecGYqZqq142kSBtuINGpoLmn3XcArWTB60t5weuBGDAUYgWuDB7elgkVDmE2gCZGUedSQaiWAE0IGRKvlQDxzIQmJUIGLL0m3F2CXPE2Ma674pxQIu6Bx9IatJ4c/I+wgg8smUAuZ2fJCXZLAus5MJRU8O2ltOCKWzQRD8g6sS4FgIbB9Cn7RiR2jOjCZwCKlCK2DUpM4UniZG2HQ94c2VGWE+V0OfqD02JFONpIAIqooR6eoJt1YcxMoybSFKLf6gkn+Lnkib1EdMsvSErid1whod/uuTjR2n9GuEelCePN+bKqTh6II4CRdnxG2hNLKNzvhi4fwebZwbkTVtvm6OlzNBfoDDQ1CGZBIHcD++OkTBk7Xh6+VfSamjWRZOukj1OpGChDx6ulsbibCGgBOxBcS9Mi76W3O1Et6IFgBhwO6mO+wCqQP2ZJ5HpJqSyFrCHKfqfpeKXYHCyALjyYJh64Qk+wguXW8EumEuQpuqtQkuh5cwsju9p1ErIKT6kdqzfcHm2It2+oQG3RxbKU+1NakibA4vcVHex2FA1SFiJGl3c+NsaTPqDUhIVqFymdBAU7HiIwM9qohIm6+b4l8nbr/AWX+drD7fm+uQLzl5TkWoA+6peI8J8imuuBp5uuOkJjBUYbk2PvQgBTjOEEo9ThsmxymZetT5rtMUdMyhnSCbRMufgQN0Q9l9+ovKPm2uPKSJ2JTsZ+NCHKRiSBNEdVvFH3RnlerG0s+NCzuRYSVeLVuiu6erbis/oC+VFiZpFiKqQ09Zox6KJNt20JeZqNsq9um+6aqNsSfGl1pJ80Kby76pu6pU36o8rA2lswexzZoHL0SKS0pbviF+jzaX/0n3Tld9LfZs9prjz8w1THuI4uhOVIrw3XOc7GhIc/4ZZg4cdTdhNkm3mGxmLlkvylcRlVcR8ej1H5WnOnfkw8yNjRv92bQZlERfodgu43J4AtUfMRD8UlZ39YxqniYK8MqXgrxAif003cF79Aw8LWu7j+RLK94mO122BGvXU2g/S4/rB/bh9NeE7i8UeB9y7mwvH5sB3eFkJroKVOeAWYiwjCJbwuXwAzSskycuvPEfYaczp84Epg7IQKcp9gDWPAbyMFGpQoABIHA+ihAxHtFkn0K/u+LQ/UaCN9jb9Y7sTBkjgRnL9dNt39CwApedo7WpaCYSnQUyE5VinDOIvYJx/0KC40y8eEJqGch1y3Pn35G1YPNltO+YW8oxV9W7clfuyv+m/Bs2lfaVP2FA8QAAAABJRU5ErkJggg=="
                                     inner_html += f'<div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 1.0; pointer-events: none; z-index: 1;"><img src="data:image/png;base64,{img_b64}" width="35" height="35" /></div>'
                                     
-                                if amt >= 30_000_000:
-                                    # 3천만원 기준 5단계 절대 산출
+                                if amt >= 10_000_000:
+                                    # 1천만원(0.1억) 이상일 경우 표시
                                     if amt >= 1_000_000_000:
                                         level = 5
                                     elif amt >= 500_000_000:
@@ -3465,6 +3741,13 @@ if choice == "🏠 홈화면":
                                 st.session_state['pending_search'] = stock
                                 st.session_state['scrn_select_radio'] = "시계열 추적"
                                 st.rerun()
+                            elif clicked.startswith("summary___"):
+                                stock = clicked.split("___")[1]
+                                st.session_state['show_summary_dialog'] = {
+                                    "stock": stock,
+                                    "code": ""
+                                }
+                                st.rerun()
                             else:
                                 stock, date_str = clicked.split("___")
                                 st.session_state['show_mock_dialog'] = {
@@ -3474,6 +3757,85 @@ if choice == "🏠 홈화면":
                                 st.rerun()
 
                 
+        elif scrn_select == "외기 TOP 100 화면":
+            # 일반 사용자 이상 접근 가능
+            if not st.session_state.get('authenticated', False):
+                st.markdown("<h4 style='color:#FFD700; border-left: 4px solid #FFD700; padding-left: 10px;'>📊 일별 외국인/기관 TOP 100</h4>", unsafe_allow_html=True)
+                st.warning("⚠️ 정회원 이상만 접근 가능한 고급 수급 분석 화면입니다. 가입 및 등업 후 이용해 주세요.")
+            else:
+                st.markdown("<h4 style='color:#00BFFF; border-left: 4px solid #00BFFF; padding-left: 10px;'>📊 일별 외국인/기관 순매수 TOP 100</h4>", unsafe_allow_html=True)
+                st.write("시장 주도 세력(외국인/기관)의 일일 순매수 상위 핵심 종목을 확인합니다.")
+                
+                # 달력 선택기 (오늘 ~ 3개월 전)
+                today_kor = datetime.utcnow().date() + timedelta(hours=9)
+                min_date = today_kor - timedelta(days=90)
+                selected_date = st.date_input("📅 조회할 날짜 선택", value=today_kor, min_value=min_date, max_value=today_kor)
+                
+                # 해당 날짜 데이터 가져오기
+                with st.spinner("수급 데이터를 불러오고 있습니다..."):
+                    res = supabase.table("daily_whale_top200").select("*").eq("trade_date", selected_date.strftime("%Y-%m-%d")).execute()
+                    if res.data:
+                        df_top = pd.DataFrame(res.data)
+                        
+                        # 합산 필드 만들어서 정렬 (합산 순매수 기준)
+                        df_top['외/기 합산 순매수(억)'] = (df_top["frgn_buy"] - df_top["frgn_sell"]) + (df_top["orgn_buy"] - df_top["orgn_sell"])
+                        df_top = df_top.sort_values(by="외/기 합산 순매수(억)", ascending=False)
+                        
+                        # 컬럼명 예쁘게 매핑
+                        df_top = df_top.rename(columns={
+                            "trade_date": "날짜",
+                            "market": "시장",
+                            "stock_name": "종목명",
+                            "frgn_buy": "외국인 매수(억)",
+                            "frgn_sell": "외국인 매도(억)",
+                            "orgn_buy": "기관 매수(억)",
+                            "orgn_sell": "기관 매도(억)"
+                        })
+                        
+                        # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼
+                        click_action = st.radio(
+                            "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
+                            ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
+                            horizontal=True,
+                            key="top100_click_action"
+                        )
+                        
+                        event = st.dataframe(
+                            df_top[["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]],
+                            use_container_width=True,
+                            hide_index=True,
+                            height=650,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key="top100_dataframe"
+                        )
+                        
+                        if event and "selection" in event:
+                            rows = event["selection"]["rows"]
+                            if rows and rows[0] < len(df_top):
+                                selected_stock = df_top.iloc[rows[0]]['종목명']
+                                ss = selected_stock.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "")
+                                clean_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
+                                
+                                if click_action == "💬 AI 요약 보기 (팝업)":
+                                    if st.session_state.get('last_summary_stock_top100') != clean_stock:
+                                        st.session_state['show_summary_dialog'] = {
+                                            "stock": clean_stock,
+                                            "code": ""
+                                        }
+                                        st.session_state['last_summary_stock_top100'] = clean_stock
+                                        st.rerun()
+                                else:
+                                    if st.session_state.get('search_input_val') != clean_stock:
+                                        st.session_state['pending_search'] = clean_stock
+                                        st.session_state['last_search_keyword'] = clean_stock
+                                        st.session_state['scrn_select_radio'] = "시계열 추적"
+                                        st.rerun()
+                        else:
+                            st.session_state.pop('last_summary_stock_top100', None)
+                    else:
+                        st.info("해당 날짜의 수급 데이터가 아직 수집되지 않았거나 휴장일입니다. (또는 너무 오래된 과거입니다)")
+
         elif scrn_select == "수익율 자랑":
             is_admin_view = st.session_state.get('is_admin', False)
             st.markdown("<h4 style='color:#FF69B4; border-left: 4px solid #FF69B4; padding-left: 10px;'>💖 수익율 자랑</h4>", unsafe_allow_html=True)
@@ -3934,10 +4296,19 @@ if choice == "🏠 홈화면":
             st.write("---")
             
             with st.spinner("🚀 기간 누적 폭주 종목을 분석하고 있습니다... 잠시만 기다려주세요 (최대 1~2분 소요)"):
-                hot_signals = get_accumulated_hot_signals(main_df)
+                # 검색어에 의해 main_df가 1개 종목으로 필터링되어 있을 수 있으므로, 원본 전체 데이터를 강제로 불러옵니다.
+                today_df_full = load_today_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
+                if global_period == "당일 데이터만":
+                    full_df = today_df_full
+                else:
+                    historical_df_full = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
+                    full_df = pd.concat([historical_df_full, today_df_full], ignore_index=True) if not historical_df_full.empty else today_df_full
+                
+                target_df = full_df[full_df['date'] >= start_date.strftime('%Y-%m-%d')] if not full_df.empty else full_df
+                hot_signals = get_accumulated_hot_signals(target_df)
             
             if not hot_signals:
-                st.info(f"해당 기간({global_period}) 내에 파워 스코어 30점 이상의 폭주 종목이 없습니다.")
+                st.info(f"해당 기간({global_period}) 내에 폭주 종목이 없습니다.")
             else:
                 # 2줄, 5칸 씩 출력 (총 10개)
                 for row_idx in range(2):
@@ -3979,7 +4350,7 @@ if choice == "🏠 홈화면":
                 <style>
                     /* 메인 화면 컨테이너의 상/하단 패딩 극한으로 압축 */
                     .block-container {
-                        padding-top: 3rem !important;
+                        padding-top: 1rem !important;
                         padding-bottom: 1rem !important;
                         max-width: 95% !important;
                     }
@@ -4236,13 +4607,13 @@ if choice == "🏠 홈화면":
                             tickfont=dict(color='#e0e0e0'), gridcolor='#2a2a2a', tickformat=','
                         ),
                         
-                        # 🚨 [범례 최종 이동]: 오른쪽 끝으로 완전히 밀착!
+                        # 🚨 [범례 최종 이동]: 좌측 끝으로 밀착! (툴바와의 겹침 방지)
                         legend=dict(
                             orientation="h", 
                             yanchor="bottom", 
                             y=1.02,           
-                            xanchor="right", 
-                            x=1.0,            
+                            xanchor="left", 
+                            x=0.0,            
                             font=dict(color='#ffffff', size=12)
                         ),
                         
@@ -4311,7 +4682,7 @@ if choice == "🏠 홈화면":
                 else:
                     filtered_df = filtered_df.sort_values(by='amount_krw', ascending=False)
             if not search_keyword:
-                log_col1, log_col2, log_col3, log_empty = st.columns([2.5, 1.4, 1.1, 1.5])
+                log_col1, log_empty, log_col2, log_col3 = st.columns([3.0, 1.0, 1.4, 1.1])
                 with log_col1:
                     if show_only_upper_limit:
                         st.subheader(f"📋 놀빅 상한가 종목 고래 체결 목록")
@@ -4374,7 +4745,7 @@ if choice == "🏠 홈화면":
                             <div style="background: linear-gradient(135deg, #0a150e 0%, #050a06 100%); border: 1px dashed #2a4a35; border-radius: 8px; padding: 15px; text-align: center; box-shadow: none; opacity: 0.8;">
                                 <div style="font-size: 18px; font-weight: bold; color: #5a8a6a;">탐지 대기 중...</div>
                                 <div style="font-size: 15px; color: #2a4a35; font-weight: bold; margin-top: 8px;">🌱 파워 스코어: - </div>
-                                <div style="font-size: 13px; color: #4a5a4a; margin-top: 5px;">현재 기준치(30점) 이상 폭주 종목 없음</div>
+                                <div style="font-size: 13px; color: #4a5a4a; margin-top: 5px;">현재 폭주 종목 없음</div>
                             </div>
                             """, unsafe_allow_html=True)
                 st.write("---")
@@ -4399,7 +4770,7 @@ if choice == "🏠 홈화면":
                                 )
                         except Exception as e:
                             pass
-
+                            
                     # 🔥 [데이터프레임 시각화 강화] 핫 시그널 종목에 등급별 뱃지 부여
                     if 'hot_signals' in locals() and hot_signals:
                         hot_dict = {s['name']: s['icon'] for s in hot_signals}
@@ -4413,10 +4784,15 @@ if choice == "🏠 홈화면":
                     # 1️⃣ 체결금액 단위를 '원' -> '백만원' 단위로 전압 다운 및 분기
                     display_df['buy_amount'] = display_df.apply(
                         lambda r: r['amount_krw'] / 1_000_000 if r['side'] == '매수' else 0, axis=1
-                    )
+                    ).fillna(0).astype(int)
+                    
                     display_df['sell_amount'] = display_df.apply(
                         lambda r: r['amount_krw'] / 1_000_000 if r['side'] == '매도' else 0, axis=1
-                    )
+                    ).fillna(0).astype(int)
+                    
+                    display_df['unknown_amount'] = display_df.apply(
+                        lambda r: r['amount_krw'] / 1_000_000 if r['side'] == '방향미상' else 0, axis=1
+                    ).fillna(0).astype(int)
 
                     # 🔥 PyArrow 에러 방지용: 화면에 그리지 않는 날짜 컬럼 제거 🔥
                     if 'datetime' in display_df.columns:
@@ -4435,18 +4811,24 @@ if choice == "🏠 홈화면":
                         if total_amt_raw >= 1_000_000_000: # 10억 이상 레드 LED
                             if row['side'] == '매수':
                                 styles[row.index.get_loc('buy_amount')] = 'background-color: #801a1a; color: white; font-weight: bold;'
-                            else:
+                            elif row['side'] == '매도':
                                 styles[row.index.get_loc('sell_amount')] = 'background-color: #2B4980; color: white; font-weight: bold;'
+                            else:
+                                styles[row.index.get_loc('unknown_amount')] = 'background-color: #666666; color: white; font-weight: bold;'
                         elif total_amt_raw >= 100_000_000: # 5억 이상 오렌지 LED
                             if row['side'] == '매수':
                                 styles[row.index.get_loc('buy_amount')] = 'background-color: #c35b00; color: white; font-weight: bold;'
-                            else:
+                            elif row['side'] == '매도':
                                 styles[row.index.get_loc('sell_amount')] = 'background-color: #4B89b5; color: white; font-weight: bold;'
+                            else:
+                                styles[row.index.get_loc('unknown_amount')] = 'background-color: #555555; color: white; font-weight: bold;'
                         else:
                             if row['side'] == '매수':
                                 styles[row.index.get_loc('buy_amount')] = 'background-color: #ff7b00; color: white; font-weight: bold;'
-                            else:
+                            elif row['side'] == '매도':
                                 styles[row.index.get_loc('sell_amount')] = 'background-color: #7B99e5; color: white; font-weight: bold;'
+                            else:
+                                styles[row.index.get_loc('unknown_amount')] = 'background-color: #444444; color: white; font-weight: bold;'
                                 
                         return styles
                     
@@ -4455,19 +4837,20 @@ if choice == "🏠 홈화면":
                     
                     # 🛠️ [교정 1 & 2] 스타일러 대상을 display_df로 바꾸고, 신형 style_rows 칩을 장착합니다!
                     styled_df = display_df.style \
-                        .apply(style_rows, axis=1) \
-                        .format({
-                            "price": "{:,}",
-                            "volume": "{:,}",
-                            "buy_amount": "{:,.0f}",  # 콤마만 찍고 소수점 절삭
-                            "sell_amount": "{:,.0f}"   # 콤마만 찍고 소수점 절삭
-                        })
+                        .apply(style_rows, axis=1)
+                    
+                    # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼
+                    click_action = st.radio(
+                        "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
+                        ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
+                        horizontal=True
+                    )
                     
                     # 📊 최종 전광판 디스플레이 표출
                     event = st.dataframe(
                         styled_df, 
                         # 🛠️ [교정 3] 출력 전광판 순서에서 amount_krw를 폐기하고, 신형 듀얼 레일을 배치합니다!
-                        column_order=["No.", "date", "time", "name", "price", "volume", "buy_amount", "sell_amount", "market_type"],
+                        column_order=["No.", "date", "time", "name", "price", "volume", "buy_amount", "sell_amount", "unknown_amount", "market_type"],
                         
                         column_config={
                             "No.": st.column_config.NumberColumn("순번", format="%d"),
@@ -4476,8 +4859,9 @@ if choice == "🏠 홈화면":
                             "name": "종목명",
                             "price": st.column_config.NumberColumn(("\u00A0" * 16) + "체결가 (원)"),
                             "volume": st.column_config.NumberColumn(("\u00A0" * 16) + "체결량 (주)"),
-                            "buy_amount": st.column_config.NumberColumn("매수금액 (백만)"), # 우측정렬 및 이름표 변경
-                            "sell_amount": st.column_config.NumberColumn("매도금액 (백만)"), # 우측정렬 및 이름표 변경
+                            "buy_amount": st.column_config.NumberColumn("매수금액 (백만)"), 
+                            "sell_amount": st.column_config.NumberColumn("매도금액 (백만)"), 
+                            "unknown_amount": st.column_config.NumberColumn("방미금액 (백만)"),
                             "market_type": "시장구분"
                         },
                         hide_index=True,  
@@ -4515,15 +4899,26 @@ if choice == "🏠 홈화면":
                                     selected_stock = ss.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
                                     
                                     needs_rerun = False
-                                    if st.session_state.get('search_input_val') != selected_stock:
-                                        st.session_state['pending_search'] = selected_stock
-                                        st.session_state['last_search_keyword'] = selected_stock
-                                        needs_rerun = True
+                                    
+                                    if click_action == "💬 AI 요약 보기 (팝업)":
+                                        if st.session_state.get('last_summary_stock') != selected_stock:
+                                            st.session_state['show_summary_dialog'] = {
+                                                "stock": selected_stock,
+                                                "code": ""
+                                            }
+                                            st.session_state['last_summary_stock'] = selected_stock
+                                            needs_rerun = True
+                                    else:
+                                        if st.session_state.get('search_input_val') != selected_stock:
+                                            st.session_state['pending_search'] = selected_stock
+                                            st.session_state['last_search_keyword'] = selected_stock
+                                            needs_rerun = True
                                         
                                     if needs_rerun:
                                         st.rerun()
                         else:
                             # 선택이 해제되거나 비어있을 때 플래그 리셋 (정상 렌더링 확인)
+                            st.session_state.pop('last_summary_stock', None)
                             if st.session_state.get('ignore_next_selection', False):
                                 st.session_state['ignore_next_selection'] = False
             else:
