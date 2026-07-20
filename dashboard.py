@@ -3764,11 +3764,14 @@ if choice == "🏠 홈화면":
                             else:
                                 badge = f"({u_dates_sorted[0][-5:]})"
                                 
+                            # 고유 렌더링 ID 생성 (반복 클릭 감지용, 매번 바뀌면 전체가 깜빡이므로 클릭 시에만 변경)
+                            render_id = str(st.session_state.get('sangseongo_reset', 0))
+                            
                             html_parts.append(f"""
                                     <tr>
                                         <td style="border-bottom: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock}">
-                                            <a href="javascript:void(0);" id="goto___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
-                                            <a href="javascript:void(0);" id="summary___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #4b8bff;" title="{stock} 기업 요약(AI) 보기">💬</a>
+                                            <a href="javascript:void(0);" id="goto___{stock}___{render_id}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
+                                            <a href="javascript:void(0);" id="summary___{stock}___{render_id}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #4b8bff;" title="{stock} 기업 요약(AI) 보기">💬</a>
                                             {stock} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
                                         </td>
                             """)
@@ -3839,7 +3842,7 @@ if choice == "🏠 홈화면":
                                     
                                 html_parts.append(f"""
                                         <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
-                                            <a href="javascript:void(0);" id="{stock}___{d}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
+                                            <a href="javascript:void(0);" id="{stock}___{d}___{render_id}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
                                                 {inner_html}
                                             </a>
                                         </td>
@@ -3863,6 +3866,7 @@ if choice == "🏠 홈화면":
                                 stock = clicked.split("___")[1]
                                 st.session_state['pending_search'] = stock
                                 st.session_state['scrn_select_radio'] = "체결 로그"
+                                st.session_state['sangseongo_reset'] = st.session_state.get('sangseongo_reset', 0) + 1
                                 st.rerun()
                             elif clicked.startswith("summary___"):
                                 stock = clicked.split("___")[1]
@@ -3873,6 +3877,7 @@ if choice == "🏠 홈화면":
                                     "code": "",
                                     "trigger_id": trigger
                                 }
+                                st.session_state['sangseongo_reset'] = st.session_state.get('sangseongo_reset', 0) + 1
                                 st.rerun()
                             else:
                                 stock, date_str = clicked.split("___")
