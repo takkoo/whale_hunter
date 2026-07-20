@@ -215,15 +215,8 @@ def get_naver_company_summary(stock_code):
 
 def get_chatgpt_company_summary(stock_name, news_text=""):
     gpt_stock_key = f"[GPT]{stock_name}"
-    # 1. DB에서 캐시 조회
-    try:
-        db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", gpt_stock_key).eq("news_text", news_text).limit(1).execute()
-        if db_res.data:
-            return db_res.data[0]['summary']
-    except Exception:
-        pass  # DB 조회가 실패하거나 테이블이 아직 생성 안 된 경우 무시하고 API 호출 진행
 
-    # 2. 캐시가 없으면 오픈AI API 호출
+    # 2. 오픈AI API 호출
     api_key = st.secrets.get("openai", {}).get("api_key", None)
     if not api_key:
         raise ValueError("OPENAI_API_KEY_MISSING")
@@ -252,8 +245,12 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
     )
     summary = response.choices[0].message.content
     
-    # 3. DB에 결과 저장
+    # 3. 기존 캐시 삭제 후 새로운 결과 저장
     try:
+        gpt_stock_key = f"[GPT]{stock_name}"
+        # 같은 종목의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다
+        supabase.table("gemini_summaries").delete().eq("stock_name", gpt_stock_key).execute()
+        
         supabase.table("gemini_summaries").insert({
             "stock_name": gpt_stock_key,
             "news_text": news_text,
@@ -265,13 +262,10 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
     return summary
 
 def get_gemini_company_summary(stock_name, news_text=""):
-    # 1. DB에서 캐시 조회
-    try:
-        db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", news_text).limit(1).execute()
-        if db_res.data:
-            return db_res.data[0]['summary']
-    except Exception:
-        pass  # DB 조회가 실패하거나 테이블이 아직 생성 안 된 경우 무시하고 API 호출 진행
+    import google.generativeai as genai
+    import toml
+    import os
+    from supabase import create_client
 
     # 2. 캐시가 없으면 구글 API 호출
     api_key = st.secrets.get("gemini", {}).get("api_key", None)
@@ -302,8 +296,11 @@ def get_gemini_company_summary(stock_name, news_text=""):
     )
     summary = response.text
     
-    # 3. DB에 결과 저장
+    # 3. 기존 캐시 삭제 후 새로운 결과 저장
     try:
+        # 같은 종목의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다
+        supabase.table("gemini_summaries").delete().eq("stock_name", stock_name).execute()
+        
         supabase.table("gemini_summaries").insert({
             "stock_name": stock_name,
             "news_text": news_text,
@@ -382,8 +379,9 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     with tab2:
         # 1. 먼저 DB에 캐시된 요약본이 있는지 빠르게 확인 (UI 블로킹 방지)
         db_summary = None
+        thirty_days_ago = (datetime.utcnow() - timedelta(days=30)).isoformat()
         try:
-            db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", naver_news_raw).limit(1).execute()
+            db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", naver_news_raw).gte("created_at", thirty_days_ago).limit(1).execute()
             if db_res.data:
                 db_summary = db_res.data[0]['summary']
         except Exception:
@@ -392,7 +390,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
         if db_summary:
             st.success(db_summary)
         else:
-            st.info("💡 처음 조회하는 뉴스/종목입니다. 아래 버튼을 눌러 AI 분석을 생성하세요.")
+            st.info("💡 처음 조회하는 뉴스이거나 기존 분석이 만료(30일 경과)되었습니다. 아래 버튼을 눌러 AI 분석을 갱신하세요.")
             if st.button("🤖 Gemini AI 분석 시작", key=f"gemini_btn_{stock_name}"):
                 with st.spinner("Gemini AI가 뉴스를 바탕으로 분석 중입니다..."):
                     try:
@@ -411,22 +409,23 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                         else:
                             st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
 
-    with tab3:
-        db_summary_gpt = None
-        gpt_stock_key = f"[GPT]{stock_name}"
-        try:
-            db_res_gpt = supabase.table("gemini_summaries").select("summary").eq("stock_name", gpt_stock_key).eq("news_text", naver_news_raw).limit(1).execute()
-            if db_res_gpt.data:
-                db_summary_gpt = db_res_gpt.data[0]['summary']
-        except Exception:
-            pass
+        with tab3:
+            db_summary_gpt = None
+            gpt_stock_key = f"[GPT]{stock_name}"
+            thirty_days_ago = (datetime.utcnow() - timedelta(days=30)).isoformat()
+            try:
+                db_res_gpt = supabase.table("gemini_summaries").select("summary").eq("stock_name", gpt_stock_key).eq("news_text", naver_news_raw).gte("created_at", thirty_days_ago).limit(1).execute()
+                if db_res_gpt.data:
+                    db_summary_gpt = db_res_gpt.data[0]['summary']
+            except Exception:
+                pass
 
-        if db_summary_gpt:
-            st.success(db_summary_gpt)
-        else:
-            st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 분석을 시작하세요.")
-            if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
-                with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
+            if db_summary_gpt:
+                st.success(db_summary_gpt)
+            else:
+                st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
+                if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
+                    with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
                     try:
                         chatgpt_summary = get_chatgpt_company_summary(stock_name, naver_news_raw)
                         st.success(chatgpt_summary)
@@ -2013,9 +2012,9 @@ if choice == "🏠 홈화면":
             query = query.lt('time', '15:20:00')
         return query
 
-    # 1. 과거 데이터 엔진 (35일 전 ~ 어제) -> 캐시 1시간
-    @st.cache_data(ttl=3600, max_entries=1, show_spinner="⏳ 클라우드에서 대규모 과거 데이터를 불러오는 중입니다...")
-    def load_historical_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
+    # 1. 과거 데이터 엔진 (35일 전 ~ 어제) -> 캐시 24시간 (자정 지나면 cache_date 변경으로 자동 갱신)
+    @st.cache_data(ttl=86400, max_entries=1, show_spinner="⏳ 클라우드에서 대규모 과거 데이터를 불러오는 중입니다...")
+    def load_historical_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True, cache_date=""):
         latest_date = get_latest_market_open_date()
         target_start = latest_date - timedelta(days=35)
         yesterday = latest_date - timedelta(days=1)
@@ -2797,7 +2796,8 @@ if choice == "🏠 홈화면":
                 if is_realtime_log or (global_period == "당일 데이터만"):
                     df = today_df
                 else:
-                    historical_df = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
+                    _cache_date = get_latest_market_open_date().strftime('%Y-%m-%d')
+                    historical_df = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction, cache_date=_cache_date)
                     df = pd.concat([historical_df, today_df], ignore_index=True)
         else:
             # 검색어가 있으면 검색 전용 1분 캐시 엔진 가동
@@ -3208,9 +3208,14 @@ if choice == "🏠 홈화면":
                             df_all = pd.DataFrame() # 빈 데이터프레임으로 하위 로직 패스
                         else:
                             with st.spinner("캐시가 없거나 만료되었습니다. 주가를 실시간 계산 중입니다... 🐳"):
-                                historical_df = load_historical_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True)
-                                today_df = load_today_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True)
-                                df_all = pd.concat([historical_df, today_df], ignore_index=True)
+                                if global_period != "당일 데이터만":
+                                    _cache_date = get_latest_market_open_date().strftime('%Y-%m-%d')
+                                    historical_df = load_historical_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True, cache_date=_cache_date)
+                                    today_df = load_today_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True)
+                                    df_all = pd.concat([historical_df, today_df], ignore_index=True)
+                                else:
+                                    today_df = load_today_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True)
+                                    df_all = today_df
 
                         if df_all.empty:
                             if is_admin:
@@ -4647,7 +4652,8 @@ if choice == "🏠 홈화면":
                 if global_period == "당일 데이터만":
                     full_df = today_df_full
                 else:
-                    historical_df_full = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
+                    _cache_date = get_latest_market_open_date().strftime('%Y-%m-%d')
+                    historical_df_full = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction, cache_date=_cache_date)
                     full_df = pd.concat([historical_df_full, today_df_full], ignore_index=True) if not historical_df_full.empty else today_df_full
                 
                 target_df = full_df[full_df['date'] >= start_date.strftime('%Y-%m-%d')] if not full_df.empty else full_df
