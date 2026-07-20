@@ -508,8 +508,25 @@ def fetch_kis_daily_volume(stock_code, start_date):
 # ------------------------------------------------------------------
 # 📊 [투자자별 매매동향] 한투 KIS OpenAPI 연동
 # ------------------------------------------------------------------
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=82800) # 23시간 (82,800초) 메모리 캐싱
 def get_kis_access_token():
+    import json
+    import time
+    import os
+    
+    token_file = "kis_token.json"
+    
+    # 1. 로컬 파일에서 유효한 토큰 읽기 시도 (서버 재시작으로 인한 재발급 방지)
+    if os.path.exists(token_file):
+        try:
+            with open(token_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if time.time() - data.get("timestamp", 0) < 82800:
+                    return data["token"]
+        except Exception:
+            pass
+
+    # 2. 토큰이 없거나 만료된 경우 API로 새로 발급
     APP_KEY = st.secrets["kis"]["app_key"]
     APP_SECRET = st.secrets["kis"]["app_secret"]
     url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
@@ -517,7 +534,14 @@ def get_kis_access_token():
     body = {"grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET}
     res = requests.post(url, headers=headers, json=body)
     if res.status_code == 200:
-        return res.json()["access_token"]
+        new_token = res.json()["access_token"]
+        # 새 토큰을 파일에 저장
+        try:
+            with open(token_file, "w", encoding="utf-8") as f:
+                json.dump({"token": new_token, "timestamp": time.time()}, f)
+        except Exception:
+            pass
+        return new_token
     return None
 
 @st.cache_data(ttl=600)
