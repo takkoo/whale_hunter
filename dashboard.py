@@ -25,6 +25,7 @@ import uuid
 import io
 from PIL import Image
 from streamlit_paste_button import paste_image_button
+import openai
 # ------------------------------------------------------------------
 # 📡 Supabase 접속 장치 인가 (Streamlit Secrets 사용!)
 # ------------------------------------------------------------------
@@ -212,6 +213,57 @@ def get_naver_company_summary(stock_code):
     except Exception as e:
         return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", "", {}
 
+def get_chatgpt_company_summary(stock_name, news_text=""):
+    gpt_stock_key = f"[GPT]{stock_name}"
+    # 1. DB에서 캐시 조회
+    try:
+        db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", gpt_stock_key).eq("news_text", news_text).limit(1).execute()
+        if db_res.data:
+            return db_res.data[0]['summary']
+    except Exception:
+        pass  # DB 조회가 실패하거나 테이블이 아직 생성 안 된 경우 무시하고 API 호출 진행
+
+    # 2. 캐시가 없으면 오픈AI API 호출
+    api_key = st.secrets.get("openai", {}).get("api_key", None)
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY_MISSING")
+        
+    client = openai.OpenAI(api_key=api_key)
+    
+    prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 다음 두 가지 항목으로 나누어 분석해줘.
+주의: 답변 내용에 '(1~2줄)', '(3~4줄)' 같은 분량 지시어는 절대 출력하지 마.
+
+**1. 🏢 기업 개요**
+이 회사의 핵심 기술과 주요 사업 내용을 1~2줄로 요약해줘.
+
+**2. 📊 현재 상황 및 평가**
+다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 시장 상황(호재/악재 및 테마)을 3~4줄로 분석하고 평가해줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
+
+[최근 뉴스 제목]
+{news_text}
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "당신은 증권가 최고의 주식 애널리스트입니다."},
+            {"role": "user", "content": prompt}
+        ],
+        timeout=30.0 # 빠른 응답을 위해 30초 타임아웃
+    )
+    summary = response.choices[0].message.content
+    
+    # 3. DB에 결과 저장
+    try:
+        supabase.table("gemini_summaries").insert({
+            "stock_name": gpt_stock_key,
+            "news_text": news_text,
+            "summary": summary
+        }).execute()
+    except Exception as e:
+        return f"ChatGPT 요약 저장 중 오류 발생: {e}"
+    
+    return summary
+
 def get_gemini_company_summary(stock_name, news_text=""):
     # 1. DB에서 캐시 조회
     try:
@@ -227,7 +279,7 @@ def get_gemini_company_summary(stock_name, news_text=""):
         raise ValueError("API_KEY_MISSING")
         
     genai.configure(api_key=api_key)
-    # Use gemini-flash-latest as older models might be deprecated
+    # 원래 작동했던 gemini-flash-latest 모델명으로 원복
     model = genai.GenerativeModel('gemini-flash-latest')
     
     prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 다음 두 가지 항목으로 나누어 분석해줘.
@@ -242,10 +294,11 @@ def get_gemini_company_summary(stock_name, news_text=""):
 [최근 뉴스 제목]
 {news_text}
 """
-    # SDK의 자동 재시도로 인한 50~70초 지연 방지를 위해 timeout 설정 (최대 15초)
+    # 504 타임아웃 방지를 위해 timeout을 60초로 넉넉하게 설정하되,
+    # SDK 자체의 무한 재시도(2~3분 대기)를 막기 위해 retry=None 설정
     response = model.generate_content(
         prompt,
-        request_options={"timeout": 15.0}
+        request_options={"timeout": 60.0, "retry": None}
     )
     summary = response.text
     
@@ -318,13 +371,14 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     else:
         st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 10px;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>", unsafe_allow_html=True)
     
-    tab1, tab2 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석"])
+    tab1, tab2, tab3 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석", "💡 ChatGPT AI 분석"])
     
     with tab1:
         st.markdown("##### 🏢 기업 개요")
         st.info(naver_summary)
         st.markdown("##### 📰 최근 주요 뉴스")
         st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
+        
     with tab2:
         # 1. 먼저 DB에 캐시된 요약본이 있는지 빠르게 확인 (UI 블로킹 방지)
         db_summary = None
@@ -352,8 +406,38 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                             st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 **분당 제공량(15회)** 또는 **일일 총 제공량**을 초과했습니다.\n\n만약 1~2분 정도 쉬었다가 다시 시도했는데도 계속 이 에러가 뜬다면, **오늘 하루 치 무료 한도를 전부 다 쓰신 겁니다!** (이 경우 내일 다시 시도하셔야 합니다.) 😭\n\n상세 에러 원문: `" + err_msg.replace('\n', ' ')[:200] + "...`")
                         elif "504" in err_msg or "deadline" in err_msg.lower():
                             st.error("⚠️ **구글 AI 서버 응답 지연 (504 Timeout)**\n\n구글 서버가 분석을 완료하는 데 시간이 너무 오래 걸려 연결이 끊어졌습니다. 잠시 후 버튼을 다시 눌러주세요.")
+                        elif "503" in err_msg or "high demand" in err_msg.lower():
+                            st.warning("⚠️ **구글 AI 서버 과부하 (503 Service Unavailable)**\n\n현재 전 세계적으로 구글 AI 서버에 요청이 폭주하고 있어 일시적으로 처리가 지연되고 있습니다. 1~2분 정도 후에 다시 시도해 주세요.")
                         else:
                             st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
+
+    with tab3:
+        db_summary_gpt = None
+        gpt_stock_key = f"[GPT]{stock_name}"
+        try:
+            db_res_gpt = supabase.table("gemini_summaries").select("summary").eq("stock_name", gpt_stock_key).eq("news_text", naver_news_raw).limit(1).execute()
+            if db_res_gpt.data:
+                db_summary_gpt = db_res_gpt.data[0]['summary']
+        except Exception:
+            pass
+
+        if db_summary_gpt:
+            st.success(db_summary_gpt)
+        else:
+            st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 분석을 시작하세요.")
+            if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
+                with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
+                    try:
+                        chatgpt_summary = get_chatgpt_company_summary(stock_name, naver_news_raw)
+                        st.success(chatgpt_summary)
+                    except Exception as e:
+                        err_msg = str(e)
+                        if "OPENAI_API_KEY_MISSING" in err_msg:
+                            st.warning("⚠️ `.streamlit/secrets.toml` 파일에 OpenAI API Key가 설정되지 않았습니다.\n\n[openai]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요.")
+                        elif "429" in err_msg or "quota" in err_msg.lower() or "insufficient_quota" in err_msg.lower():
+                            st.warning("⚠️ **ChatGPT API 잔액 부족 또는 한도 초과**\n\nOpenAI 계정에 결제 수단이 등록되어 있는지 또는 충전된 잔액($)이 있는지 확인해주세요.")
+                        else:
+                            st.error(f"ChatGPT API 호출 중 오류가 발생했습니다: {e}")
             
     if st.button("닫기 (확인)", use_container_width=True):
         st.session_state.pop('show_summary_dialog', None)
@@ -4038,9 +4122,24 @@ if choice == "🏠 홈화면":
                         
                         # (라디오 버튼은 레이아웃 조정을 위해 위쪽 col_left로 이동됨)
 
+                        display_cols = ["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]
+                        display_df = df_top[display_cols]
+                        
+                        def get_col_color(col_name):
+                            if col_name == "외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
+                            elif col_name == "외국인 매도(억)": return "color: #1e90ff;"     # 파랑
+                            elif col_name == "기관 매수(억)": return "color: #ff7f50;"       # 주홍
+                            elif col_name == "기관 매도(억)": return "color: #2e8b57;"       # 진녹
+                            elif col_name == "외/기 합산 순매수(억)": return "color: #d8bfd8;" # 밝은보라 (Thistle)
+                            return ""
+                            
+                        styled_df = display_df.style.apply(
+                            lambda col: [get_col_color(col.name)] * len(col), axis=0
+                        ).format("{:.2f}", subset=["외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"])
+
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         event = st.dataframe(
-                            df_top[["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]],
+                            styled_df,
                             use_container_width=True,
                             hide_index=True,
                             height=650,
