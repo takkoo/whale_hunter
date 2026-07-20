@@ -4135,7 +4135,7 @@ if choice == "🏠 홈화면":
                             
                         styled_df = display_df.style.apply(
                             lambda col: [get_col_color(col.name)] * len(col), axis=0
-                        )
+                        ).format("{:.2f}", subset=["외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"])
 
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         event = st.dataframe(
