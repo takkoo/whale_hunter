@@ -207,10 +207,10 @@ def get_gemini_company_summary(stock_name, news_text=""):
 [최근 뉴스 제목]
 {news_text}
 """
-    # SDK의 자동 재시도로 인한 50~70초 지연 방지를 위해 timeout 설정 (최대 5초)
+    # SDK의 자동 재시도로 인한 50~70초 지연 방지를 위해 timeout 설정 (최대 15초)
     response = model.generate_content(
         prompt,
-        request_options={"timeout": 5.0}
+        request_options={"timeout": 15.0}
     )
     summary = response.text
     
