@@ -269,7 +269,7 @@ def show_summary_dialog(stock_name, stock_code=""):
                 if "API_KEY_MISSING" in err_msg:
                     st.warning("⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.\n\n[gemini]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요.")
                 elif "429" in err_msg or "quota" in err_msg.lower():
-                    st.warning("⚠️ **Gemini AI 무료 제공량 일시 초과**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 무료 제공량(분당 약 15회) 또는 일일 제공량을 초과했습니다. **일정 시간(약 1분) 휴식 후** 다시 시도해 주시면 정상적으로 작동합니다! 🕒")
+                    st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 **분당 제공량(15회)** 또는 **일일 총 제공량**을 초과했습니다.\n\n만약 1~2분 정도 쉬었다가 다시 시도했는데도 계속 이 에러가 뜬다면, **오늘 하루 치 무료 한도를 전부 다 쓰신 겁니다!** (이 경우 내일 다시 시도하셔야 합니다.) 😭\n\n상세 에러 원문: `" + err_msg.replace('\n', ' ')[:200] + "...`")
                 else:
                     st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
             
