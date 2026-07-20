@@ -242,10 +242,11 @@ def get_gemini_company_summary(stock_name, news_text=""):
 [최근 뉴스 제목]
 {news_text}
 """
-    # 504 타임아웃 방지를 위해 timeout을 60초로 넉넉하게 설정
+    # 504 타임아웃 방지를 위해 timeout을 60초로 넉넉하게 설정하되,
+    # SDK 자체의 무한 재시도(2~3분 대기)를 막기 위해 retry=None 설정
     response = model.generate_content(
         prompt,
-        request_options={"timeout": 60.0}
+        request_options={"timeout": 60.0, "retry": None}
     )
     summary = response.text
     
