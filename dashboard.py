@@ -173,9 +173,30 @@ def get_naver_company_summary(stock_code):
         news_md = "\n".join(news_md_items[:5]) if news_md_items else "최근 관련 뉴스가 없습니다."
         news_raw = "\n".join(news_raw_items[:5]) if news_raw_items else "최근 관련 뉴스가 없습니다."
         
-        return summary_text, news_md, news_raw
+        fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A'}
+        try:
+            price_tag = soup.select_one('.no_today .blind')
+            if price_tag: fin_info['price'] = price_tag.text.strip()
+            
+            for th in soup.select('th'):
+                if '52주최고l최저' in th.text:
+                    td = th.find_parent('tr').select_one('td')
+                    if td:
+                        parts = td.text.strip().split('l')
+                        if len(parts) >= 2:
+                            fin_info['high52'] = parts[0].strip()
+                            fin_info['low52'] = parts[1].strip()
+                    break
+                    
+            per_tag = soup.select_one('#_per')
+            if per_tag: fin_info['per'] = per_tag.text.strip()
+            pbr_tag = soup.select_one('#_pbr')
+            if pbr_tag: fin_info['pbr'] = pbr_tag.text.strip()
+        except Exception: pass
+        
+        return summary_text, news_md, news_raw, fin_info
     except Exception as e:
-        return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", ""
+        return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", "", {}
 
 def get_gemini_company_summary(stock_name, news_text=""):
     # 1. DB에서 캐시 조회
@@ -252,18 +273,28 @@ def show_summary_dialog(stock_name, stock_code=""):
             except Exception as e:
                 pass # fallback if KRX blocks scraping
             
-    st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else ""))
+    # 렌더링 전 정보 가져오기
+    with st.spinner("정보를 가져오는 중..."):
+        if stock_code:
+            naver_summary, naver_news_md, naver_news_raw, fin_info = get_naver_company_summary(stock_code)
+        else:
+            naver_summary, naver_news_md, naver_news_raw, fin_info = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", "", {}
+
+    if fin_info:
+        per = fin_info.get('per', 'N/A')
+        pbr = fin_info.get('pbr', 'N/A')
+        high52 = fin_info.get('high52', 'N/A')
+        low52 = fin_info.get('low52', 'N/A')
+        price = fin_info.get('price', 'N/A')
+        metrics_html = f"<span style='font-size:0.6em; color:#888; margin-left:10px; font-weight:normal;'>[ PER {per} / PBR {pbr} ] &nbsp;[ 52주고/저 {high52} / {low52} ] &nbsp;[ 현재가 {price} ]</span>"
+        st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else "") + metrics_html, unsafe_allow_html=True)
+    else:
+        st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else ""))
     
     tab1, tab2 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석"])
     
     with tab1:
-        with st.spinner("네이버 금융에서 정보를 가져오는 중..."):
-            if stock_code:
-                naver_summary, naver_news_md, naver_news_raw = get_naver_company_summary(stock_code)
-            else:
-                naver_summary, naver_news_md, naver_news_raw = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", ""
-                
-            st.markdown("##### 🏢 기업 개요")
+        st.markdown("##### 🏢 기업 개요")
             st.info(naver_summary)
             st.markdown("##### 📰 최근 주요 뉴스")
             st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
