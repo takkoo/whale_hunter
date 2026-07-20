@@ -269,18 +269,34 @@ def show_summary_dialog(stock_name, stock_code=""):
             st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
             
     with tab2:
-        with st.spinner("Gemini AI가 뉴스를 바탕으로 분석 중입니다..."):
-            try:
-                gemini_summary = get_gemini_company_summary(stock_name, naver_news_raw)
-                st.success(gemini_summary)
-            except Exception as e:
-                err_msg = str(e)
-                if "API_KEY_MISSING" in err_msg:
-                    st.warning("⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.\n\n[gemini]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요.")
-                elif "429" in err_msg or "quota" in err_msg.lower():
-                    st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 **분당 제공량(15회)** 또는 **일일 총 제공량**을 초과했습니다.\n\n만약 1~2분 정도 쉬었다가 다시 시도했는데도 계속 이 에러가 뜬다면, **오늘 하루 치 무료 한도를 전부 다 쓰신 겁니다!** (이 경우 내일 다시 시도하셔야 합니다.) 😭\n\n상세 에러 원문: `" + err_msg.replace('\n', ' ')[:200] + "...`")
-                else:
-                    st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
+        # 1. 먼저 DB에 캐시된 요약본이 있는지 빠르게 확인 (UI 블로킹 방지)
+        db_summary = None
+        try:
+            db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", naver_news_raw).limit(1).execute()
+            if db_res.data:
+                db_summary = db_res.data[0]['summary']
+        except Exception:
+            pass
+
+        if db_summary:
+            st.success(db_summary)
+        else:
+            st.info("💡 처음 조회하는 뉴스/종목입니다. 아래 버튼을 눌러 AI 분석을 생성하세요.")
+            if st.button("🤖 Gemini AI 분석 시작", key=f"gemini_btn_{stock_name}"):
+                with st.spinner("Gemini AI가 뉴스를 바탕으로 분석 중입니다..."):
+                    try:
+                        gemini_summary = get_gemini_company_summary(stock_name, naver_news_raw)
+                        st.success(gemini_summary)
+                    except Exception as e:
+                        err_msg = str(e)
+                        if "API_KEY_MISSING" in err_msg:
+                            st.warning("⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.\n\n[gemini]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요.")
+                        elif "429" in err_msg or "quota" in err_msg.lower():
+                            st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 **분당 제공량(15회)** 또는 **일일 총 제공량**을 초과했습니다.\n\n만약 1~2분 정도 쉬었다가 다시 시도했는데도 계속 이 에러가 뜬다면, **오늘 하루 치 무료 한도를 전부 다 쓰신 겁니다!** (이 경우 내일 다시 시도하셔야 합니다.) 😭\n\n상세 에러 원문: `" + err_msg.replace('\n', ' ')[:200] + "...`")
+                        elif "504" in err_msg or "deadline" in err_msg.lower():
+                            st.error("⚠️ **구글 AI 서버 응답 지연 (504 Timeout)**\n\n구글 서버가 분석을 완료하는 데 시간이 너무 오래 걸려 연결이 끊어졌습니다. 잠시 후 버튼을 다시 눌러주세요.")
+                        else:
+                            st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
             
     if st.button("닫기 (확인)", use_container_width=True):
         st.session_state.pop('show_summary_dialog', None)
