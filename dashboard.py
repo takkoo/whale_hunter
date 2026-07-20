@@ -4014,7 +4014,16 @@ if choice == "🏠 홈화면":
                 
                 with col_right:
                     # 달력 선택기 (오늘 ~ 3개월 전)
-                    today_kor = datetime.utcnow().date() + timedelta(hours=9)
+                    # 탑백 데이터는 매일 오후 4시에 수집되므로, 4시 이전에는 전날 데이터를 기본으로 보여주도록 설정합니다.
+                    now_kst = datetime.utcnow() + timedelta(hours=9)
+                    if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
+                        # 오후 4시 이전이면 전날 기준
+                        base_date_for_top100 = (now_kst - timedelta(days=1)).date()
+                    else:
+                        base_date_for_top100 = now_kst.date()
+                        
+                    # 휴일/주말을 건너뛰고 가장 최근 유효한 장 마감일을 가져옵니다.
+                    today_kor = get_latest_market_open_date(base_date_for_top100)
                     min_date = today_kor - timedelta(days=90)
                     
                     import calendar
