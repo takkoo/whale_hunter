@@ -353,6 +353,8 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                             st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 **분당 제공량(15회)** 또는 **일일 총 제공량**을 초과했습니다.\n\n만약 1~2분 정도 쉬었다가 다시 시도했는데도 계속 이 에러가 뜬다면, **오늘 하루 치 무료 한도를 전부 다 쓰신 겁니다!** (이 경우 내일 다시 시도하셔야 합니다.) 😭\n\n상세 에러 원문: `" + err_msg.replace('\n', ' ')[:200] + "...`")
                         elif "504" in err_msg or "deadline" in err_msg.lower():
                             st.error("⚠️ **구글 AI 서버 응답 지연 (504 Timeout)**\n\n구글 서버가 분석을 완료하는 데 시간이 너무 오래 걸려 연결이 끊어졌습니다. 잠시 후 버튼을 다시 눌러주세요.")
+                        elif "503" in err_msg or "high demand" in err_msg.lower():
+                            st.warning("⚠️ **구글 AI 서버 과부하 (503 Service Unavailable)**\n\n현재 전 세계적으로 구글 AI 서버에 요청이 폭주하고 있어 일시적으로 처리가 지연되고 있습니다. 1~2분 정도 후에 다시 시도해 주세요.")
                         else:
                             st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
             
