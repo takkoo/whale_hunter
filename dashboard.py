@@ -4123,15 +4123,16 @@ if choice == "🏠 홈화면":
                             "trade_date": "날짜",
                             "market": "시장",
                             "stock_name": "종목명",
-                            "frgn_buy": "외국인 매수(억)",
-                            "frgn_sell": "외국인 매도(억)",
-                            "orgn_buy": "기관 매수(억)",
-                            "orgn_sell": "기관 매도(억)"
+                            "frgn_buy": "🔴외국인 매수(억)",
+                            "frgn_sell": "🔵외국인 매도(억)",
+                            "orgn_buy": "🟠기관 매수(억)",
+                            "orgn_sell": "🟢기관 매도(억)"
                         })
                         
-                        # (라디오 버튼은 레이아웃 조정을 위해 위쪽 col_left로 이동됨)
+                        # 합산 필드 이름도 이모지 추가
+                        df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 합산(억)"}, inplace=True)
 
-                        display_cols = ["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]
+                        display_cols = ["날짜", "시장", "종목명", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟣외/기 합산(억)"]
                         display_df = df_top[display_cols]
                         
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
@@ -4148,11 +4149,11 @@ if choice == "🏠 홈화면":
                             selection_mode="single-row",
                             key=top100_key,
                             column_config={
-                                "외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "외/기 합산 순매수(억)": st.column_config.NumberColumn(format="%.2f")
+                                "🔴외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🔵외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟠기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟢기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟣외/기 합산(억)": st.column_config.NumberColumn(format="%.2f")
                             }
                         )
                         
