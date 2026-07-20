@@ -305,10 +305,18 @@ def show_summary_dialog(stock_name, stock_code=""):
         high52 = fin_info.get('high52', 'N/A')
         low52 = fin_info.get('low52', 'N/A')
         price = fin_info.get('price', 'N/A')
-        metrics_html = f"<div style='font-size:0.85em; color:#e0e0e0; margin-top:8px; line-height:1.4; font-weight:normal;'>[ PER {per} / PBR {pbr} ]<br>[ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]</div>"
-        st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else "") + metrics_html, unsafe_allow_html=True)
+        metrics_html = f"""
+        <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
+            <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
+            <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
+                [ PER {per} / PBR {pbr} ]<br>
+                [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
+            </div>
+        </div>
+        """
+        st.markdown(metrics_html, unsafe_allow_html=True)
     else:
-        st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else ""))
+        st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 10px;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>", unsafe_allow_html=True)
     
     tab1, tab2 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석"])
     
