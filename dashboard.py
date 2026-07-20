@@ -227,8 +227,8 @@ def get_gemini_company_summary(stock_name, news_text=""):
         raise ValueError("API_KEY_MISSING")
         
     genai.configure(api_key=api_key)
-    # Use gemini-1.5-flash as the stable fast model
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 원래 작동했던 gemini-flash-latest 모델명으로 원복
+    model = genai.GenerativeModel('gemini-flash-latest')
     
     prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 다음 두 가지 항목으로 나누어 분석해줘.
 주의: 답변 내용에 '(1~2줄)', '(3~4줄)' 같은 분량 지시어는 절대 출력하지 마.
