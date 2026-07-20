@@ -305,7 +305,7 @@ def show_summary_dialog(stock_name, stock_code=""):
         high52 = fin_info.get('high52', 'N/A')
         low52 = fin_info.get('low52', 'N/A')
         price = fin_info.get('price', 'N/A')
-        metrics_html = f"<span style='font-size:0.6em; color:#888; margin-left:10px; font-weight:normal;'>[ PER {per} / PBR {pbr} ] &nbsp;[ 52주고/저 {high52} / {low52} ] &nbsp;[ 현재가 {price} ]</span>"
+        metrics_html = f"<span style='font-size:0.6em; color:#e0e0e0; margin-left:10px; font-weight:normal;'>[ PER {per} / PBR {pbr} ] &nbsp;[ 52주고/저 {high52} / {low52} ] &nbsp;[ 현재가 {price} ]</span>"
         st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else "") + metrics_html, unsafe_allow_html=True)
     else:
         st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else ""))
