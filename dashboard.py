@@ -267,7 +267,7 @@ def get_cached_krx_listing():
     return fdr.StockListing('KRX')
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
-def show_summary_dialog(stock_name, stock_code=""):
+def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     import FinanceDataReader as fdr
     if not stock_code:
         try:
@@ -363,16 +363,19 @@ def show_summary_dialog(stock_name, stock_code=""):
 # 🎯 [요약 팝업 로직] 상선고 히트맵 등에서 클릭 연동
 # ------------------------------------------------------------------
 if "summary_stock" in st.query_params and "summary_code" in st.query_params:
+    trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+    st.session_state['dialog_trigger_id'] = trigger
     st.session_state['show_summary_dialog'] = {
         "stock": st.query_params.get("summary_stock"),
-        "code": st.query_params.get("summary_code")
+        "code": st.query_params.get("summary_code"),
+        "trigger_id": trigger
     }
     st.query_params.clear()
     st.rerun()
     
 if 'show_summary_dialog' in st.session_state:
     data = st.session_state['show_summary_dialog']
-    show_summary_dialog(data['stock'], data['code'])
+    show_summary_dialog(data['stock'], data.get('code', ''), data.get('trigger_id', 0))
 
 @st.dialog("🎯 가상 데이터 (Mock Data) 쾌속 입력")
 def mock_data_dialog(stock, date_str):
@@ -3863,9 +3866,12 @@ if choice == "🏠 홈화면":
                                 st.rerun()
                             elif clicked.startswith("summary___"):
                                 stock = clicked.split("___")[1]
+                                trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                                st.session_state['dialog_trigger_id'] = trigger
                                 st.session_state['show_summary_dialog'] = {
                                     "stock": stock,
-                                    "code": ""
+                                    "code": "",
+                                    "trigger_id": trigger
                                 }
                                 st.rerun()
                             else:
@@ -3941,9 +3947,12 @@ if choice == "🏠 홈화면":
                                 row_stock_code = df_top.iloc[rows[0]]['stock_code'] if 'stock_code' in df_top.columns else ""
                                 
                                 if click_action == "💬 AI 요약 보기 (팝업)":
+                                    trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                                    st.session_state['dialog_trigger_id'] = trigger
                                     st.session_state['show_summary_dialog'] = {
                                         "stock": clean_stock,
-                                        "code": row_stock_code
+                                        "code": row_stock_code,
+                                        "trigger_id": trigger
                                     }
                                     st.session_state["top100_dataframe"] = {"selection": {"rows": [], "columns": []}}
                                     st.rerun()
@@ -4712,9 +4721,12 @@ if choice == "🏠 홈화면":
                                     
                                     if click_action == "💬 AI 요약 보기 (팝업)":
                                         row_code = display_df.iloc[selected_idx]['code'] if 'code' in display_df.columns else ""
+                                        trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                                        st.session_state['dialog_trigger_id'] = trigger
                                         st.session_state['show_summary_dialog'] = {
                                             "stock": selected_stock,
-                                            "code": row_code
+                                            "code": row_code,
+                                            "trigger_id": trigger
                                         }
                                         st.session_state[grid_key] = {"selection": {"rows": [], "columns": []}}
                                         needs_rerun = True
