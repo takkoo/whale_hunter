@@ -179,16 +179,15 @@ def get_naver_company_summary(stock_code):
 
 @st.cache_data(ttl=86400)
 def get_gemini_company_summary(stock_name, news_text=""):
-    try:
-        api_key = st.secrets.get("gemini", {}).get("api_key", None)
-        if not api_key:
-            return "⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.\n\n[gemini]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요."
-            
-        genai.configure(api_key=api_key)
-        # Use gemini-flash-latest as older models might be deprecated
-        model = genai.GenerativeModel('gemini-flash-latest')
+    api_key = st.secrets.get("gemini", {}).get("api_key", None)
+    if not api_key:
+        raise ValueError("API_KEY_MISSING")
         
-        prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 분석해줘.
+    genai.configure(api_key=api_key)
+    # Use gemini-flash-latest as older models might be deprecated
+    model = genai.GenerativeModel('gemini-flash-latest')
+    
+    prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 분석해줘.
 
 1. 기업 개요 (1~2줄): 이 회사의 핵심 기술과 주요 사업 내용을 요약해줘.
 2. 현재 상황 및 평가 (3~4줄): 다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 시장 상황(호재/악재 및 테마)을 분석하고 평가해줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
@@ -196,13 +195,8 @@ def get_gemini_company_summary(stock_name, news_text=""):
 [최근 뉴스 제목]
 {news_text}
 """
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        err_msg = str(e)
-        if "429" in err_msg or "quota" in err_msg.lower():
-            return "⚠️ **Gemini AI 무료 제공량 일시 초과**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 무료 제공량(분당 약 15회)을 초과했습니다. **약 1분 정도 휴식 후** 다시 시도해 주시면 정상적으로 작동합니다! 🕒"
-        return f"Gemini AI 호출 중 오류가 발생했습니다: {e}"
+    response = model.generate_content(prompt)
+    return response.text
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code=""):
@@ -243,8 +237,17 @@ def show_summary_dialog(stock_name, stock_code=""):
             
     with tab2:
         with st.spinner("Gemini AI가 뉴스를 바탕으로 분석 중입니다..."):
-            gemini_summary = get_gemini_company_summary(stock_name, naver_news_raw)
-            st.success(gemini_summary)
+            try:
+                gemini_summary = get_gemini_company_summary(stock_name, naver_news_raw)
+                st.success(gemini_summary)
+            except Exception as e:
+                err_msg = str(e)
+                if "API_KEY_MISSING" in err_msg:
+                    st.warning("⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.\n\n[gemini]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요.")
+                elif "429" in err_msg or "quota" in err_msg.lower():
+                    st.warning("⚠️ **Gemini AI 무료 제공량 일시 초과**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 무료 제공량(분당 약 15회) 또는 일일 제공량을 초과했습니다. **일정 시간(약 1분) 휴식 후** 다시 시도해 주시면 정상적으로 작동합니다! 🕒")
+                else:
+                    st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
             
     if st.button("닫기 (확인)", use_container_width=True):
         st.session_state.pop('show_summary_dialog', None)
