@@ -4138,10 +4138,23 @@ if choice == "🏠 홈화면":
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         t2 = time.time()
                         
-                        st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas가공: {t2-t1:.2f}초 | (색상 렌더링 제거 완료, 0.1초 컷!)")
+                        # 형님이 원하셨던 '글자 색상' 스크립트 복원!
+                        def get_col_color(col_name):
+                            if col_name == "🔴외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
+                            elif col_name == "🔵외국인 매도(억)": return "color: #1e90ff;"     # 파랑
+                            elif col_name == "🟠기관 매수(억)": return "color: #ff7f50;"       # 주홍
+                            elif col_name == "🟢기관 매도(억)": return "color: #2e8b57;"       # 진녹
+                            elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;" # 밝은보라 (Thistle)
+                            return ""
+                            
+                        styled_df = display_df.style.apply(
+                            lambda col: [get_col_color(col.name)] * len(col), axis=0
+                        )
+                        
+                        st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas가공: {t2-t1:.2f}초 | (색상 렌더링 복구 완료!)")
                         
                         event = st.dataframe(
-                            display_df,
+                            styled_df,
                             use_container_width=True,
                             hide_index=True,
                             height=650,
