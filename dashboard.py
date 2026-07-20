@@ -314,10 +314,9 @@ def show_summary_dialog(stock_name, stock_code=""):
     
     with tab1:
         st.markdown("##### 🏢 기업 개요")
-            st.info(naver_summary)
-            st.markdown("##### 📰 최근 주요 뉴스")
-            st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
-            
+        st.info(naver_summary)
+        st.markdown("##### 📰 최근 주요 뉴스")
+        st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
     with tab2:
         # 1. 먼저 DB에 캐시된 요약본이 있는지 빠르게 확인 (UI 블로킹 방지)
         db_summary = None
