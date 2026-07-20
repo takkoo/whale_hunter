@@ -215,15 +215,8 @@ def get_naver_company_summary(stock_code):
 
 def get_chatgpt_company_summary(stock_name, news_text=""):
     gpt_stock_key = f"[GPT]{stock_name}"
-    # 1. DB에서 캐시 조회
-    try:
-        db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", gpt_stock_key).eq("news_text", news_text).limit(1).execute()
-        if db_res.data:
-            return db_res.data[0]['summary']
-    except Exception:
-        pass  # DB 조회가 실패하거나 테이블이 아직 생성 안 된 경우 무시하고 API 호출 진행
 
-    # 2. 캐시가 없으면 오픈AI API 호출
+    # 2. 오픈AI API 호출
     api_key = st.secrets.get("openai", {}).get("api_key", None)
     if not api_key:
         raise ValueError("OPENAI_API_KEY_MISSING")
@@ -252,8 +245,12 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
     )
     summary = response.choices[0].message.content
     
-    # 3. DB에 결과 저장
+    # 3. 기존 캐시 삭제 후 새로운 결과 저장
     try:
+        gpt_stock_key = f"[GPT]{stock_name}"
+        # 같은 종목의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다
+        supabase.table("gemini_summaries").delete().eq("stock_name", gpt_stock_key).execute()
+        
         supabase.table("gemini_summaries").insert({
             "stock_name": gpt_stock_key,
             "news_text": news_text,
@@ -265,13 +262,10 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
     return summary
 
 def get_gemini_company_summary(stock_name, news_text=""):
-    # 1. DB에서 캐시 조회
-    try:
-        db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", news_text).limit(1).execute()
-        if db_res.data:
-            return db_res.data[0]['summary']
-    except Exception:
-        pass  # DB 조회가 실패하거나 테이블이 아직 생성 안 된 경우 무시하고 API 호출 진행
+    import google.generativeai as genai
+    import toml
+    import os
+    from supabase import create_client
 
     # 2. 캐시가 없으면 구글 API 호출
     api_key = st.secrets.get("gemini", {}).get("api_key", None)
@@ -302,8 +296,11 @@ def get_gemini_company_summary(stock_name, news_text=""):
     )
     summary = response.text
     
-    # 3. DB에 결과 저장
+    # 3. 기존 캐시 삭제 후 새로운 결과 저장
     try:
+        # 같은 종목의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다
+        supabase.table("gemini_summaries").delete().eq("stock_name", stock_name).execute()
+        
         supabase.table("gemini_summaries").insert({
             "stock_name": stock_name,
             "news_text": news_text,
