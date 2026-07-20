@@ -382,8 +382,9 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     with tab2:
         # 1. 먼저 DB에 캐시된 요약본이 있는지 빠르게 확인 (UI 블로킹 방지)
         db_summary = None
+        thirty_days_ago = (datetime.utcnow() - timedelta(days=30)).isoformat()
         try:
-            db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", naver_news_raw).limit(1).execute()
+            db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", naver_news_raw).gte("created_at", thirty_days_ago).limit(1).execute()
             if db_res.data:
                 db_summary = db_res.data[0]['summary']
         except Exception:
@@ -392,7 +393,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
         if db_summary:
             st.success(db_summary)
         else:
-            st.info("💡 처음 조회하는 뉴스/종목입니다. 아래 버튼을 눌러 AI 분석을 생성하세요.")
+            st.info("💡 처음 조회하는 뉴스이거나 기존 분석이 만료(30일 경과)되었습니다. 아래 버튼을 눌러 AI 분석을 갱신하세요.")
             if st.button("🤖 Gemini AI 분석 시작", key=f"gemini_btn_{stock_name}"):
                 with st.spinner("Gemini AI가 뉴스를 바탕으로 분석 중입니다..."):
                     try:
@@ -411,22 +412,23 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                         else:
                             st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
 
-    with tab3:
-        db_summary_gpt = None
-        gpt_stock_key = f"[GPT]{stock_name}"
-        try:
-            db_res_gpt = supabase.table("gemini_summaries").select("summary").eq("stock_name", gpt_stock_key).eq("news_text", naver_news_raw).limit(1).execute()
-            if db_res_gpt.data:
-                db_summary_gpt = db_res_gpt.data[0]['summary']
-        except Exception:
-            pass
+        with tab3:
+            db_summary_gpt = None
+            gpt_stock_key = f"[GPT]{stock_name}"
+            thirty_days_ago = (datetime.utcnow() - timedelta(days=30)).isoformat()
+            try:
+                db_res_gpt = supabase.table("gemini_summaries").select("summary").eq("stock_name", gpt_stock_key).eq("news_text", naver_news_raw).gte("created_at", thirty_days_ago).limit(1).execute()
+                if db_res_gpt.data:
+                    db_summary_gpt = db_res_gpt.data[0]['summary']
+            except Exception:
+                pass
 
-        if db_summary_gpt:
-            st.success(db_summary_gpt)
-        else:
-            st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 분석을 시작하세요.")
-            if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
-                with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
+            if db_summary_gpt:
+                st.success(db_summary_gpt)
+            else:
+                st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
+                if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
+                    with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
                     try:
                         chatgpt_summary = get_chatgpt_company_summary(stock_name, naver_news_raw)
                         st.success(chatgpt_summary)
