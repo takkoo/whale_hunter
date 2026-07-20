@@ -177,8 +177,16 @@ def get_naver_company_summary(stock_code):
     except Exception as e:
         return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", ""
 
-@st.cache_data(ttl=86400)
 def get_gemini_company_summary(stock_name, news_text=""):
+    # 1. DB에서 캐시 조회
+    try:
+        db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", news_text).limit(1).execute()
+        if db_res.data:
+            return db_res.data[0]['summary']
+    except Exception:
+        pass  # DB 조회가 실패하거나 테이블이 아직 생성 안 된 경우 무시하고 API 호출 진행
+
+    # 2. 캐시가 없으면 구글 API 호출
     api_key = st.secrets.get("gemini", {}).get("api_key", None)
     if not api_key:
         raise ValueError("API_KEY_MISSING")
@@ -200,7 +208,19 @@ def get_gemini_company_summary(stock_name, news_text=""):
 {news_text}
 """
     response = model.generate_content(prompt)
-    return response.text
+    summary = response.text
+    
+    # 3. DB에 결과 저장
+    try:
+        supabase.table("gemini_summaries").insert({
+            "stock_name": stock_name,
+            "news_text": news_text,
+            "summary": summary
+        }).execute()
+    except Exception:
+        pass  # 저장 실패 시에도 정상적으로 요약본 반환
+
+    return summary
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code=""):
@@ -249,7 +269,7 @@ def show_summary_dialog(stock_name, stock_code=""):
                 if "API_KEY_MISSING" in err_msg:
                     st.warning("⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.\n\n[gemini]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요.")
                 elif "429" in err_msg or "quota" in err_msg.lower():
-                    st.warning("⚠️ **Gemini AI 무료 제공량 일시 초과**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 무료 제공량(분당 약 15회) 또는 일일 제공량을 초과했습니다. **일정 시간(약 1분) 휴식 후** 다시 시도해 주시면 정상적으로 작동합니다! 🕒")
+                    st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)**\n\n단기간에 너무 많은 분석을 요청하여 구글 AI 서버의 **분당 제공량(15회)** 또는 **일일 총 제공량**을 초과했습니다.\n\n만약 1~2분 정도 쉬었다가 다시 시도했는데도 계속 이 에러가 뜬다면, **오늘 하루 치 무료 한도를 전부 다 쓰신 겁니다!** (이 경우 내일 다시 시도하셔야 합니다.) 😭\n\n상세 에러 원문: `" + err_msg.replace('\n', ' ')[:200] + "...`")
                 else:
                     st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
             
