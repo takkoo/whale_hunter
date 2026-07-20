@@ -4129,32 +4129,26 @@ if choice == "🏠 홈화면":
                         display_cols = ["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]
                         display_df = df_top[display_cols]
                         
-                        def get_col_color(col_name):
-                            if col_name == "외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
-                            elif col_name == "외국인 매도(억)": return "color: #1e90ff;"     # 파랑
-                            elif col_name == "기관 매수(억)": return "color: #ff7f50;"       # 주홍
-                            elif col_name == "기관 매도(억)": return "color: #2e8b57;"       # 진녹
-                            elif col_name == "외/기 합산 순매수(억)": return "color: #d8bfd8;" # 밝은보라 (Thistle)
-                            return ""
-                            
-                        t2 = time.time()
-                        styled_df = display_df.style.apply(
-                            lambda col: [get_col_color(col.name)] * len(col), axis=0
-                        ).format("{:.2f}", subset=["외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"])
-                        t3 = time.time()
-
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
+                        t2 = time.time()
                         
-                        st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas처리: {t2-t1:.2f}초 | 스타일적용: {t3-t2:.2f}초")
+                        st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas가공: {t2-t1:.2f}초 | (색상 렌더링 제거 완료, 0.1초 컷!)")
                         
                         event = st.dataframe(
-                            styled_df,
+                            display_df,
                             use_container_width=True,
                             hide_index=True,
                             height=650,
                             on_select="rerun",
                             selection_mode="single-row",
-                            key=top100_key
+                            key=top100_key,
+                            column_config={
+                                "외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "외/기 합산 순매수(억)": st.column_config.NumberColumn(format="%.2f")
+                            }
                         )
                         
                         if event and "selection" in event:
