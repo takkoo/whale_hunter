@@ -577,7 +577,12 @@ def fetch_investor_net_buying(stock_code):
         df['frgn_sell_100m'] = (pd.to_numeric(df['frgn_seln_tr_pbmn'], errors='coerce').fillna(0) / 100) * -1
         df['orgn_buy_100m'] = pd.to_numeric(df['orgn_shnu_tr_pbmn'], errors='coerce').fillna(0) / 100
         df['orgn_sell_100m'] = (pd.to_numeric(df['orgn_seln_tr_pbmn'], errors='coerce').fillna(0) / 100) * -1
-        return df[['date_str', 'frgn_buy_100m', 'frgn_sell_100m', 'orgn_buy_100m', 'orgn_sell_100m']]
+        
+        # 순매수(Net) 계산
+        df['frgn_net_100m'] = df['frgn_buy_100m'] + df['frgn_sell_100m']
+        df['orgn_net_100m'] = df['orgn_buy_100m'] + df['orgn_sell_100m']
+        
+        return df[['date_str', 'frgn_buy_100m', 'frgn_sell_100m', 'orgn_buy_100m', 'orgn_sell_100m', 'frgn_net_100m', 'orgn_net_100m']]
     return pd.DataFrame()
 
 # ------------------------------------------------------------------
@@ -1550,40 +1555,24 @@ def draw_whale_bar_chart(target_code, target_name, df):
             showlegend=False
         ), row=2, col=1)
     
-    # 3번째: 외국인/기관 상세 수급 (manual offset/width를 사용하여 겹치게 강제 설정)
+    # 3번째: 외국인/기관 상세 수급 (순매수로 변경)
     if not investor_df.empty:
-        # 외국인 매수 (양수) - 왼쪽 막대
+        # 외국인 순매수
         fig_bar.add_trace(go.Bar(
-            x=investor_df['date_str'], y=investor_df['frgn_buy_100m'],
-            name="외국인 매수", marker_color='#FFB000', opacity=0.9,
-            offset=-0.4, width=0.4,
-            text=investor_df['frgn_buy_100m'].apply(lambda x: f"{x:,.0f}억" if x > 0 else ""),
-            textposition='auto', textfont=dict(size=10, color='white')
-        ), row=3, col=1)
-        # 외국인 매도 (음수) - 왼쪽 막대 (매수와 같은 offset으로 상하 겹침)
-        fig_bar.add_trace(go.Bar(
-            x=investor_df['date_str'], y=investor_df['frgn_sell_100m'],
-            name="외국인 매도", marker_color='#FFB000', opacity=0.9,
-            offset=-0.4, width=0.4,
-            text=investor_df['frgn_sell_100m'].apply(lambda x: f"{abs(x):,.0f}억" if x < 0 else ""),
+            x=investor_df['date_str'], y=investor_df['frgn_net_100m'],
+            name="외국인 순매수", marker_color='#FFB000', opacity=0.9,
+            offset=-0.2, width=0.4,
+            text=investor_df['frgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if x != 0 else ""),
             textposition='auto', textfont=dict(size=10, color='white')
         ), row=3, col=1)
         
-        # 기관 매수 (양수) - 오른쪽 막대
+        # 기관 순매수
         fig_bar.add_trace(go.Bar(
-            x=investor_df['date_str'], y=investor_df['orgn_buy_100m'],
-            name="기관 매수", marker_color='#00FA9A', opacity=0.9,
-            offset=0.0, width=0.4,
-            text=investor_df['orgn_buy_100m'].apply(lambda x: f"{x:,.0f}억" if x > 0 else ""),
+            x=investor_df['date_str'], y=investor_df['orgn_net_100m'],
+            name="기관 순매수", marker_color='#00FA9A', opacity=0.9,
+            offset=0.2, width=0.4,
+            text=investor_df['orgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if x != 0 else ""),
             textposition='auto', textfont=dict(size=10, color='black')
-        ), row=3, col=1)
-        # 기관 매도 (음수) - 오른쪽 막대 (매수와 같은 offset으로 상하 겹침)
-        fig_bar.add_trace(go.Bar(
-            x=investor_df['date_str'], y=investor_df['orgn_sell_100m'],
-            name="기관 매도", marker_color='#00FA9A', opacity=0.9,
-            offset=0.0, width=0.4,
-            text=investor_df['orgn_sell_100m'].apply(lambda x: f"{abs(x):,.0f}억" if x < 0 else ""),
-            textposition='auto', textfont=dict(size=10, color='white')
         ), row=3, col=1)
 
     # 하단 캔들스틱 차트 (주가)
