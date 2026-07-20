@@ -4018,12 +4018,15 @@ if choice == "🏠 홈화면":
                     now_kst = datetime.utcnow() + timedelta(hours=9)
                     if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
                         # 오후 4시 이전이면 전날 기준
-                        base_date_for_top100 = (now_kst - timedelta(days=1)).date()
+                        target_dt = now_kst - timedelta(days=1)
                     else:
-                        base_date_for_top100 = now_kst.date()
+                        target_dt = now_kst
+                        
+                    # get_latest_market_open_date 내부의 '오전 9시 이전이면 하루 빼기' 로직을 회피하기 위해 시간을 정오로 고정합니다.
+                    target_dt = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
                         
                     # 휴일/주말을 건너뛰고 가장 최근 유효한 장 마감일을 가져옵니다.
-                    today_kor = get_latest_market_open_date(base_date_for_top100)
+                    today_kor = get_latest_market_open_date(target_dt)
                     min_date = today_kor - timedelta(days=90)
                     
                     import calendar
