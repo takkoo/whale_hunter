@@ -3931,6 +3931,7 @@ if choice == "🏠 홈화면":
                             key="top100_click_action"
                         )
                         
+                        top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         event = st.dataframe(
                             df_top[["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]],
                             use_container_width=True,
@@ -3938,7 +3939,7 @@ if choice == "🏠 홈화면":
                             height=650,
                             on_select="rerun",
                             selection_mode="single-row",
-                            key="top100_dataframe"
+                            key=top100_key
                         )
                         
                         if event and "selection" in event:
@@ -3959,14 +3960,14 @@ if choice == "🏠 홈화면":
                                         "code": row_stock_code,
                                         "trigger_id": trigger
                                     }
-                                    st.session_state["top100_dataframe"] = {"selection": {"rows": [], "columns": []}}
+                                    st.session_state['top100_reset_counter'] = st.session_state.get('top100_reset_counter', 0) + 1
                                     st.rerun()
                                 else:
-                                    if st.session_state.get('search_input_val') != clean_stock:
-                                        st.session_state['pending_search'] = clean_stock
-                                        st.session_state['last_search_keyword'] = clean_stock
-                                        st.session_state['scrn_select_radio'] = "체결 로그"
-                                        st.rerun()
+                                    st.session_state['pending_search'] = clean_stock
+                                    st.session_state['last_search_keyword'] = clean_stock
+                                    st.session_state['scrn_select_radio'] = "체결 로그"
+                                    st.session_state['top100_reset_counter'] = st.session_state.get('top100_reset_counter', 0) + 1
+                                    st.rerun()
                         else:
                             st.session_state.pop('last_summary_stock_top100', None)
                     else:
@@ -4733,13 +4734,13 @@ if choice == "🏠 홈화면":
                                             "code": row_code,
                                             "trigger_id": trigger
                                         }
-                                        st.session_state[grid_key] = {"selection": {"rows": [], "columns": []}}
+                                        st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
                                         needs_rerun = True
                                     else:
-                                        if st.session_state.get('search_input_val') != selected_stock:
-                                            st.session_state['pending_search'] = selected_stock
-                                            st.session_state['last_search_keyword'] = selected_stock
-                                            needs_rerun = True
+                                        st.session_state['pending_search'] = selected_stock
+                                        st.session_state['last_search_keyword'] = selected_stock
+                                        st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
+                                        needs_rerun = True
                                         
                                     if needs_rerun:
                                         st.rerun()
