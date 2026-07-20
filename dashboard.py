@@ -4100,14 +4100,18 @@ if choice == "🏠 홈화면":
                         st.rerun()
                 
                 # 해당 날짜 데이터 가져오기
+                import time
+                t0 = time.time()
                 with st.spinner("수급 데이터를 불러오고 있습니다..."):
                     res = supabase.table("daily_whale_top200").select("*").eq("trade_date", selected_date.strftime("%Y-%m-%d")).execute()
+                    t1 = time.time()
                     if res.data:
                         df_top = pd.DataFrame(res.data)
                         
                         # 합산 필드 만들어서 정렬 (합산 순매수 기준)
                         df_top['외/기 합산 순매수(억)'] = (df_top["frgn_buy"] - df_top["frgn_sell"]) + (df_top["orgn_buy"] - df_top["orgn_sell"])
                         df_top = df_top.sort_values(by="외/기 합산 순매수(억)", ascending=False)
+
                         
                         # 컬럼명 예쁘게 매핑
                         df_top = df_top.rename(columns={
@@ -4133,11 +4137,16 @@ if choice == "🏠 홈화면":
                             elif col_name == "외/기 합산 순매수(억)": return "color: #d8bfd8;" # 밝은보라 (Thistle)
                             return ""
                             
+                        t2 = time.time()
                         styled_df = display_df.style.apply(
                             lambda col: [get_col_color(col.name)] * len(col), axis=0
                         ).format("{:.2f}", subset=["외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"])
+                        t3 = time.time()
 
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
+                        
+                        st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas처리: {t2-t1:.2f}초 | 스타일적용: {t3-t2:.2f}초")
+                        
                         event = st.dataframe(
                             styled_df,
                             use_container_width=True,
