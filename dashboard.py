@@ -426,17 +426,17 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                 st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
                 if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
                     with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
-                    try:
-                        chatgpt_summary = get_chatgpt_company_summary(stock_name, naver_news_raw)
-                        st.success(chatgpt_summary)
-                    except Exception as e:
-                        err_msg = str(e)
-                        if "OPENAI_API_KEY_MISSING" in err_msg:
-                            st.warning("⚠️ `.streamlit/secrets.toml` 파일에 OpenAI API Key가 설정되지 않았습니다.\n\n[openai]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요.")
-                        elif "429" in err_msg or "quota" in err_msg.lower() or "insufficient_quota" in err_msg.lower():
-                            st.warning("⚠️ **ChatGPT API 잔액 부족 또는 한도 초과**\n\nOpenAI 계정에 결제 수단이 등록되어 있는지 또는 충전된 잔액($)이 있는지 확인해주세요.")
-                        else:
-                            st.error(f"ChatGPT API 호출 중 오류가 발생했습니다: {e}")
+                        try:
+                            chatgpt_summary = get_chatgpt_company_summary(stock_name, naver_news_raw)
+                            st.success(chatgpt_summary)
+                        except Exception as e:
+                            err_msg = str(e)
+                            if "OPENAI_API_KEY_MISSING" in err_msg:
+                                st.warning("⚠️ `.streamlit/secrets.toml` 파일에 OpenAI API Key가 설정되지 않았습니다.\n\n[openai]\napi_key = \"당신의_API_KEY\" 형태로 추가해주세요.")
+                            elif "429" in err_msg or "quota" in err_msg.lower() or "insufficient_quota" in err_msg.lower():
+                                st.warning("⚠️ **ChatGPT API 잔액 부족 또는 한도 초과**\n\nOpenAI 계정에 결제 수단이 등록되어 있는지 또는 충전된 잔액($)이 있는지 확인해주세요.")
+                            else:
+                                st.error(f"ChatGPT API 호출 중 오류가 발생했습니다: {e}")
             
     if st.button("닫기 (확인)", use_container_width=True):
         st.session_state.pop('show_summary_dialog', None)
