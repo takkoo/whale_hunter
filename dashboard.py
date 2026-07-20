@@ -4014,7 +4014,19 @@ if choice == "🏠 홈화면":
                 
                 with col_right:
                     # 달력 선택기 (오늘 ~ 3개월 전)
-                    today_kor = datetime.utcnow().date() + timedelta(hours=9)
+                    # 탑백 데이터는 매일 오후 4시에 수집되므로, 4시 이전에는 전날 데이터를 기본으로 보여주도록 설정합니다.
+                    now_kst = datetime.utcnow() + timedelta(hours=9)
+                    if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
+                        # 오후 4시 이전이면 전날 기준
+                        target_dt = now_kst - timedelta(days=1)
+                    else:
+                        target_dt = now_kst
+                        
+                    # get_latest_market_open_date 내부의 '오전 9시 이전이면 하루 빼기' 로직을 회피하기 위해 시간을 정오로 고정합니다.
+                    target_dt = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
+                        
+                    # 휴일/주말을 건너뛰고 가장 최근 유효한 장 마감일을 가져옵니다.
+                    today_kor = get_latest_market_open_date(target_dt)
                     min_date = today_kor - timedelta(days=90)
                     
                     import calendar
@@ -4123,24 +4135,38 @@ if choice == "🏠 홈화면":
                             "trade_date": "날짜",
                             "market": "시장",
                             "stock_name": "종목명",
-                            "frgn_buy": "외국인 매수(억)",
-                            "frgn_sell": "외국인 매도(억)",
-                            "orgn_buy": "기관 매수(억)",
-                            "orgn_sell": "기관 매도(억)"
+                            "frgn_buy": "🔴외국인 매수(억)",
+                            "frgn_sell": "🔵외국인 매도(억)",
+                            "orgn_buy": "🟠기관 매수(억)",
+                            "orgn_sell": "🟢기관 매도(억)"
                         })
                         
-                        # (라디오 버튼은 레이아웃 조정을 위해 위쪽 col_left로 이동됨)
+                        # 합산 필드 이름도 이모지 추가
+                        df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 합산(억)"}, inplace=True)
 
-                        display_cols = ["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]
+                        display_cols = ["날짜", "시장", "종목명", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟣외/기 합산(억)"]
                         display_df = df_top[display_cols]
                         
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         t2 = time.time()
                         
-                        st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas가공: {t2-t1:.2f}초 | (색상 렌더링 제거 완료, 0.1초 컷!)")
+                        # 형님이 원하셨던 '글자 색상' 스크립트 복원!
+                        def get_col_color(col_name):
+                            if col_name == "🔴외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
+                            elif col_name == "🔵외국인 매도(억)": return "color: #1e90ff;"     # 파랑
+                            elif col_name == "🟠기관 매수(억)": return "color: #ff7f50;"       # 주홍
+                            elif col_name == "🟢기관 매도(억)": return "color: #2e8b57;"       # 진녹
+                            elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;" # 밝은보라 (Thistle)
+                            return ""
+                            
+                        styled_df = display_df.style.apply(
+                            lambda col: [get_col_color(col.name)] * len(col), axis=0
+                        )
+                        
+                        st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas가공: {t2-t1:.2f}초 | (색상 렌더링 복구 완료!)")
                         
                         event = st.dataframe(
-                            display_df,
+                            styled_df,
                             use_container_width=True,
                             hide_index=True,
                             height=650,
@@ -4148,11 +4174,11 @@ if choice == "🏠 홈화면":
                             selection_mode="single-row",
                             key=top100_key,
                             column_config={
-                                "외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "외/기 합산 순매수(억)": st.column_config.NumberColumn(format="%.2f")
+                                "🔴외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🔵외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟠기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟢기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟣외/기 합산(억)": st.column_config.NumberColumn(format="%.2f")
                             }
                         )
                         
