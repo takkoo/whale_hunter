@@ -305,7 +305,7 @@ def show_summary_dialog(stock_name, stock_code=""):
         high52 = fin_info.get('high52', 'N/A')
         low52 = fin_info.get('low52', 'N/A')
         price = fin_info.get('price', 'N/A')
-        metrics_html = f"<span style='font-size:0.6em; color:#e0e0e0; margin-left:10px; font-weight:normal;'>[ PER {per} / PBR {pbr} ] &nbsp;[ 52주고/저 {high52} / {low52} ] &nbsp;[ 현재가 {price} ]</span>"
+        metrics_html = f"<div style='font-size:0.85em; color:#e0e0e0; margin-top:8px; line-height:1.4; font-weight:normal;'>[ PER {per} / PBR {pbr} ]<br>[ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]</div>"
         st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else "") + metrics_html, unsafe_allow_html=True)
     else:
         st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else ""))
@@ -3933,13 +3933,12 @@ if choice == "🏠 홈화면":
                                 row_stock_code = df_top.iloc[rows[0]]['stock_code'] if 'stock_code' in df_top.columns else ""
                                 
                                 if click_action == "💬 AI 요약 보기 (팝업)":
-                                    if st.session_state.get('last_summary_stock_top100') != clean_stock:
-                                        st.session_state['show_summary_dialog'] = {
-                                            "stock": clean_stock,
-                                            "code": row_stock_code
-                                        }
-                                        st.session_state['last_summary_stock_top100'] = clean_stock
-                                        st.rerun()
+                                    st.session_state['show_summary_dialog'] = {
+                                        "stock": clean_stock,
+                                        "code": row_stock_code
+                                    }
+                                    st.session_state["top100_dataframe"] = {"selection": {"rows": [], "columns": []}}
+                                    st.rerun()
                                 else:
                                     if st.session_state.get('search_input_val') != clean_stock:
                                         st.session_state['pending_search'] = clean_stock
@@ -4649,6 +4648,7 @@ if choice == "🏠 홈화면":
                     )
                     
                     # 📊 최종 전광판 디스플레이 표출
+                    grid_key = f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}_{st.session_state.get('df_reset_counter', 0)}"
                     event = st.dataframe(
                         styled_df, 
                         # 🛠️ [교정 3] 출력 전광판 순서에서 amount_krw를 폐기하고, 신형 듀얼 레일을 배치합니다!
@@ -4671,7 +4671,7 @@ if choice == "🏠 홈화면":
                         use_container_width=False,
                         on_select="rerun",
                         selection_mode="single-row",
-                        key=f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}_{st.session_state.get('df_reset_counter', 0)}"
+                        key=grid_key
                     )
                     
                     # 🎯 "더 보기" 버튼: 검색어가 없을 때, 가져온 데이터가 limit 이상이라면(더 있을 가능성이 높다면) 표출
@@ -4703,14 +4703,13 @@ if choice == "🏠 홈화면":
                                     needs_rerun = False
                                     
                                     if click_action == "💬 AI 요약 보기 (팝업)":
-                                        if st.session_state.get('last_summary_stock') != selected_stock:
-                                            row_code = display_df.iloc[selected_idx]['code'] if 'code' in display_df.columns else ""
-                                            st.session_state['show_summary_dialog'] = {
-                                                "stock": selected_stock,
-                                                "code": row_code
-                                            }
-                                            st.session_state['last_summary_stock'] = selected_stock
-                                            needs_rerun = True
+                                        row_code = display_df.iloc[selected_idx]['code'] if 'code' in display_df.columns else ""
+                                        st.session_state['show_summary_dialog'] = {
+                                            "stock": selected_stock,
+                                            "code": row_code
+                                        }
+                                        st.session_state[grid_key] = {"selection": {"rows": [], "columns": []}}
+                                        needs_rerun = True
                                     else:
                                         if st.session_state.get('search_input_val') != selected_stock:
                                             st.session_state['pending_search'] = selected_stock
