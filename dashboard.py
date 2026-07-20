@@ -177,8 +177,16 @@ def get_naver_company_summary(stock_code):
     except Exception as e:
         return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", ""
 
-@st.cache_data(ttl=86400)
 def get_gemini_company_summary(stock_name, news_text=""):
+    # 1. DB에서 캐시 조회
+    try:
+        db_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", stock_name).eq("news_text", news_text).limit(1).execute()
+        if db_res.data:
+            return db_res.data[0]['summary']
+    except Exception:
+        pass  # DB 조회가 실패하거나 테이블이 아직 생성 안 된 경우 무시하고 API 호출 진행
+
+    # 2. 캐시가 없으면 구글 API 호출
     api_key = st.secrets.get("gemini", {}).get("api_key", None)
     if not api_key:
         raise ValueError("API_KEY_MISSING")
@@ -200,7 +208,19 @@ def get_gemini_company_summary(stock_name, news_text=""):
 {news_text}
 """
     response = model.generate_content(prompt)
-    return response.text
+    summary = response.text
+    
+    # 3. DB에 결과 저장
+    try:
+        supabase.table("gemini_summaries").insert({
+            "stock_name": stock_name,
+            "news_text": news_text,
+            "summary": summary
+        }).execute()
+    except Exception:
+        pass  # 저장 실패 시에도 정상적으로 요약본 반환
+
+    return summary
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code=""):
