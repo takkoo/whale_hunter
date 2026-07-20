@@ -2013,9 +2013,9 @@ if choice == "🏠 홈화면":
             query = query.lt('time', '15:20:00')
         return query
 
-    # 1. 과거 데이터 엔진 (35일 전 ~ 어제) -> 캐시 1시간
-    @st.cache_data(ttl=3600, max_entries=1, show_spinner="⏳ 클라우드에서 대규모 과거 데이터를 불러오는 중입니다...")
-    def load_historical_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True):
+    # 1. 과거 데이터 엔진 (35일 전 ~ 어제) -> 캐시 24시간 (자정 지나면 cache_date 변경으로 자동 갱신)
+    @st.cache_data(ttl=86400, max_entries=1, show_spinner="⏳ 클라우드에서 대규모 과거 데이터를 불러오는 중입니다...")
+    def load_historical_data(asset_type="전체 다 보기 📊", market_type="전체 시장 🌍", show_closing_auction=True, cache_date=""):
         latest_date = get_latest_market_open_date()
         target_start = latest_date - timedelta(days=35)
         yesterday = latest_date - timedelta(days=1)
@@ -2797,7 +2797,8 @@ if choice == "🏠 홈화면":
                 if is_realtime_log or (global_period == "당일 데이터만"):
                     df = today_df
                 else:
-                    historical_df = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
+                    _cache_date = get_latest_market_open_date().strftime('%Y-%m-%d')
+                    historical_df = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction, cache_date=_cache_date)
                     df = pd.concat([historical_df, today_df], ignore_index=True)
         else:
             # 검색어가 있으면 검색 전용 1분 캐시 엔진 가동
@@ -3208,9 +3209,14 @@ if choice == "🏠 홈화면":
                             df_all = pd.DataFrame() # 빈 데이터프레임으로 하위 로직 패스
                         else:
                             with st.spinner("캐시가 없거나 만료되었습니다. 주가를 실시간 계산 중입니다... 🐳"):
-                                historical_df = load_historical_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True)
-                                today_df = load_today_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True)
-                                df_all = pd.concat([historical_df, today_df], ignore_index=True)
+                                if global_period != "당일 데이터만":
+                                    _cache_date = get_latest_market_open_date().strftime('%Y-%m-%d')
+                                    historical_df = load_historical_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True, cache_date=_cache_date)
+                                    today_df = load_today_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True)
+                                    df_all = pd.concat([historical_df, today_df], ignore_index=True)
+                                else:
+                                    today_df = load_today_data(asset_type='전체 주식/ETF 🌍', market_type='전체 시장 🌍', show_closing_auction=True)
+                                    df_all = today_df
 
                         if df_all.empty:
                             if is_admin:
@@ -4647,7 +4653,8 @@ if choice == "🏠 홈화면":
                 if global_period == "당일 데이터만":
                     full_df = today_df_full
                 else:
-                    historical_df_full = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction)
+                    _cache_date = get_latest_market_open_date().strftime('%Y-%m-%d')
+                    historical_df_full = load_historical_data(asset_type=asset_type, market_type=market_type, show_closing_auction=show_closing_auction, cache_date=_cache_date)
                     full_df = pd.concat([historical_df_full, today_df_full], ignore_index=True) if not historical_df_full.empty else today_df_full
                 
                 target_df = full_df[full_df['date'] >= start_date.strftime('%Y-%m-%d')] if not full_df.empty else full_df
