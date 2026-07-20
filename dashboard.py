@@ -173,8 +173,22 @@ def get_naver_company_summary(stock_code):
         news_md = "\n".join(news_md_items[:5]) if news_md_items else "최근 관련 뉴스가 없습니다."
         news_raw = "\n".join(news_raw_items[:5]) if news_raw_items else "최근 관련 뉴스가 없습니다."
         
-        fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A'}
+        fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A', 'warnings': []}
         try:
+            # 시장경보 (투자주의, 투자경고, 투자위험, 관리종목 등)
+            warnings = set()
+            for em in soup.select('.description em'):
+                blind = em.select_one('.blind')
+                if blind:
+                    text = blind.text.strip()
+                    if text in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '투자주의환기종목']:
+                        warnings.add(text)
+            for img in soup.select('.description img'):
+                alt = img.get('alt', '')
+                if alt in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '환기종목']:
+                    warnings.add(alt)
+            fin_info['warnings'] = list(warnings)
+
             price_tag = soup.select_one('.no_today .blind')
             if price_tag: fin_info['price'] = price_tag.text.strip()
             
@@ -281,6 +295,11 @@ def show_summary_dialog(stock_name, stock_code=""):
             naver_summary, naver_news_md, naver_news_raw, fin_info = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", "", {}
 
     if fin_info:
+        warnings = fin_info.get('warnings', [])
+        if warnings:
+            badges = " ".join([f"<span style='background-color:#ffebee; color:#d32f2f; padding:2px 6px; border-radius:4px; font-size:0.7em; font-weight:bold; margin-right:5px;'>🚨 {w}</span>" for w in warnings])
+            st.markdown(badges, unsafe_allow_html=True)
+            
         per = fin_info.get('per', 'N/A')
         pbr = fin_info.get('pbr', 'N/A')
         high52 = fin_info.get('high52', 'N/A')
