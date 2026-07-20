@@ -9,3 +9,5 @@ streamlit-paste-button
 st-click-detector
 google-generativeai
 beautifulsoup4
+
+openai
