@@ -3907,77 +3907,90 @@ if choice == "🏠 홈화면":
                 st.markdown("<h4 style='color:#FFD700; border-left: 4px solid #FFD700; padding-left: 10px;'>📊 일별 외국인/기관 TOP 100</h4>", unsafe_allow_html=True)
                 st.warning("⚠️ 정회원 이상만 접근 가능한 고급 수급 분석 화면입니다. 가입 및 등업 후 이용해 주세요.")
             else:
-                st.markdown("<h4 style='color:#00BFFF; border-left: 4px solid #00BFFF; padding-left: 10px;'>📊 일별 외국인/기관 순매수 TOP 100</h4>", unsafe_allow_html=True)
-                st.write("시장 주도 세력(외국인/기관)의 일일 순매수 상위 핵심 종목을 확인합니다.")
+                col_left, col_right = st.columns([1.8, 1])
                 
-                # 달력 선택기 (오늘 ~ 3개월 전)
-                today_kor = datetime.utcnow().date() + timedelta(hours=9)
-                min_date = today_kor - timedelta(days=90)
+                with col_left:
+                    st.markdown("<h4 style='color:#00BFFF; border-left: 4px solid #00BFFF; padding-left: 10px; margin-top: 0;'>📊 일별 외국인/기관 순매수 TOP 100</h4>", unsafe_allow_html=True)
+                    st.write("시장 주도 세력(외국인/기관)의 일일 순매수 상위 핵심 종목을 확인합니다.")
+                    
+                    st.write("") # 약간의 여백
+                    
+                    # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼 (왼쪽 배치)
+                    click_action = st.radio(
+                        "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
+                        ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
+                        horizontal=True,
+                        key="top100_click_action"
+                    )
                 
-                import calendar
-                from st_click_detector import click_detector
-                
-                if 'top100_cal_year' not in st.session_state:
-                    st.session_state.top100_cal_year = today_kor.year
-                    st.session_state.top100_cal_month = today_kor.month
-                    st.session_state.top100_selected_date = today_kor
-                    st.session_state.top100_cal_reset = 0
-                
-                cal_year = st.session_state.top100_cal_year
-                cal_month = st.session_state.top100_cal_month
-                selected_date = st.session_state.top100_selected_date
-                
-                # 캘린더 상단 (이전/다음 달 이동)
-                html_cal = f"""
-                <div style="max-width: 320px; background: #1a1c24; padding: 15px; border-radius: 12px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; color: white;">
-                        <a href='#' id='cal_prev' style='color: #888; text-decoration: none; padding: 5px 10px; background: #2a2d3a; border-radius: 5px; font-weight: bold;'>&lt;</a>
-                        <strong style="font-size: 16px;">{cal_year}년 {cal_month}월</strong>
-                        <a href='#' id='cal_next' style='color: #888; text-decoration: none; padding: 5px 10px; background: #2a2d3a; border-radius: 5px; font-weight: bold;'>&gt;</a>
-                    </div>
-                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 5px; font-size: 13px; font-weight: bold; margin-bottom: 8px;">
-                        <div style="color: #ff4b4b;">일</div>
-                        <div style="color: #aaa;">월</div>
-                        <div style="color: #aaa;">화</div>
-                        <div style="color: #aaa;">수</div>
-                        <div style="color: #aaa;">목</div>
-                        <div style="color: #aaa;">금</div>
-                        <div style="color: #4B89B5;">토</div>
-                    </div>
-                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 5px; font-size: 13px;">
-                """
-                
-                c = calendar.Calendar(firstweekday=6) # 일요일부터 시작
-                for week in c.monthdatescalendar(cal_year, cal_month):
-                    for day in week:
-                        if day.month == cal_month:
-                            bg_color = "transparent"
-                            color = "white"
-                            border = "1px solid transparent"
-                            
-                            if day == selected_date:
-                                bg_color = "#00BFFF"
+                with col_right:
+                    # 달력 선택기 (오늘 ~ 3개월 전)
+                    today_kor = datetime.utcnow().date() + timedelta(hours=9)
+                    min_date = today_kor - timedelta(days=90)
+                    
+                    import calendar
+                    from st_click_detector import click_detector
+                    
+                    if 'top100_cal_year' not in st.session_state:
+                        st.session_state.top100_cal_year = today_kor.year
+                        st.session_state.top100_cal_month = today_kor.month
+                        st.session_state.top100_selected_date = today_kor
+                        st.session_state.top100_cal_reset = 0
+                    
+                    cal_year = st.session_state.top100_cal_year
+                    cal_month = st.session_state.top100_cal_month
+                    selected_date = st.session_state.top100_selected_date
+                    
+                    # 캘린더 상단 (이전/다음 달 이동) - 크기 30% 축소
+                    html_cal = f"""
+                    <div style="max-width: 230px; margin-left: auto; background: #1a1c24; padding: 10px; border-radius: 10px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; color: white;">
+                            <a href='#' id='cal_prev' style='color: #888; text-decoration: none; padding: 3px 8px; background: #2a2d3a; border-radius: 4px; font-weight: bold; font-size: 12px;'>&lt;</a>
+                            <strong style="font-size: 14px;">{cal_year}년 {cal_month}월</strong>
+                            <a href='#' id='cal_next' style='color: #888; text-decoration: none; padding: 3px 8px; background: #2a2d3a; border-radius: 4px; font-weight: bold; font-size: 12px;'>&gt;</a>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 3px; font-size: 11px; font-weight: bold; margin-bottom: 5px;">
+                            <div style="color: #ff4b4b;">일</div>
+                            <div style="color: #aaa;">월</div>
+                            <div style="color: #aaa;">화</div>
+                            <div style="color: #aaa;">수</div>
+                            <div style="color: #aaa;">목</div>
+                            <div style="color: #aaa;">금</div>
+                            <div style="color: #4B89B5;">토</div>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 3px; font-size: 11px;">
+                    """
+                    
+                    c = calendar.Calendar(firstweekday=6) # 일요일부터 시작
+                    for week in c.monthdatescalendar(cal_year, cal_month):
+                        for day in week:
+                            if day.month == cal_month:
+                                bg_color = "transparent"
                                 color = "white"
-                            elif day.weekday() == 6: # 일요일
-                                color = "#ff4b4b"
-                            elif day.weekday() == 5: # 토요일
-                                color = "#4B89B5"
+                                border = "1px solid transparent"
                                 
-                            if day == today_kor and day != selected_date:
-                                border = "1px solid #555" # 오늘 날짜 테두리
-                                
-                            if day > today_kor or day < min_date:
-                                # 미래 날짜 또는 90일 이전 날짜는 비활성화
-                                html_cal += f"<div style='padding: 6px; color: #444; border: {border}; border-radius: 5px;'>{day.day}</div>"
+                                if day == selected_date:
+                                    bg_color = "#00BFFF"
+                                    color = "white"
+                                elif day.weekday() == 6: # 일요일
+                                    color = "#ff4b4b"
+                                elif day.weekday() == 5: # 토요일
+                                    color = "#4B89B5"
+                                    
+                                if day == today_kor and day != selected_date:
+                                    border = "1px solid #555" # 오늘 날짜 테두리
+                                    
+                                if day > today_kor or day < min_date:
+                                    # 미래 날짜 또는 90일 이전 날짜는 비활성화
+                                    html_cal += f"<div style='padding: 4px; color: #444; border: {border}; border-radius: 4px;'>{day.day}</div>"
+                                else:
+                                    html_cal += f"<a href='#' id='cal_date_{day.strftime('%Y-%m-%d')}' style='padding: 4px; background: {bg_color}; color: {color}; border: {border}; text-decoration: none; border-radius: 4px; display: block; transition: 0.2s;'>{day.day}</a>"
                             else:
-                                html_cal += f"<a href='#' id='cal_date_{day.strftime('%Y-%m-%d')}' style='padding: 6px; background: {bg_color}; color: {color}; border: {border}; text-decoration: none; border-radius: 5px; display: block; transition: 0.2s;'>{day.day}</a>"
-                        else:
-                            html_cal += "<div></div>"
-                            
-                html_cal += "</div></div>"
-                
-                st.markdown("<p style='font-size: 14px; margin-bottom: 5px; margin-top: 10px; font-weight: bold;'>📅 조회할 날짜 선택 (인라인 달력)</p>", unsafe_allow_html=True)
-                clicked = click_detector(html_cal, key=f"top100_cal_ui_{st.session_state.top100_cal_reset}")
+                                html_cal += "<div></div>"
+                                
+                    html_cal += "</div></div>"
+                    
+                    clicked = click_detector(html_cal, key=f"top100_cal_ui_{st.session_state.top100_cal_reset}")
                 
                 if clicked:
                     if clicked == 'cal_prev':
@@ -4023,14 +4036,8 @@ if choice == "🏠 홈화면":
                             "orgn_sell": "기관 매도(억)"
                         })
                         
-                        # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼
-                        click_action = st.radio(
-                            "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
-                            ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
-                            horizontal=True,
-                            key="top100_click_action"
-                        )
-                        
+                        # (라디오 버튼은 레이아웃 조정을 위해 위쪽 col_left로 이동됨)
+
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         event = st.dataframe(
                             df_top[["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]],
