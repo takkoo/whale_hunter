@@ -227,8 +227,8 @@ def get_gemini_company_summary(stock_name, news_text=""):
         raise ValueError("API_KEY_MISSING")
         
     genai.configure(api_key=api_key)
-    # Use gemini-flash-latest as older models might be deprecated
-    model = genai.GenerativeModel('gemini-flash-latest')
+    # Use gemini-1.5-flash as the stable fast model
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 다음 두 가지 항목으로 나누어 분석해줘.
 주의: 답변 내용에 '(1~2줄)', '(3~4줄)' 같은 분량 지시어는 절대 출력하지 마.
@@ -242,10 +242,10 @@ def get_gemini_company_summary(stock_name, news_text=""):
 [최근 뉴스 제목]
 {news_text}
 """
-    # SDK의 자동 재시도로 인한 50~70초 지연 방지를 위해 timeout 설정 (최대 15초)
+    # 504 타임아웃 방지를 위해 timeout을 60초로 넉넉하게 설정
     response = model.generate_content(
         prompt,
-        request_options={"timeout": 15.0}
+        request_options={"timeout": 60.0}
     )
     summary = response.text
     
