@@ -173,9 +173,44 @@ def get_naver_company_summary(stock_code):
         news_md = "\n".join(news_md_items[:5]) if news_md_items else "최근 관련 뉴스가 없습니다."
         news_raw = "\n".join(news_raw_items[:5]) if news_raw_items else "최근 관련 뉴스가 없습니다."
         
-        return summary_text, news_md, news_raw
+        fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A', 'warnings': []}
+        try:
+            # 시장경보 (투자주의, 투자경고, 투자위험, 관리종목 등)
+            warnings = set()
+            for em in soup.select('.description em'):
+                blind = em.select_one('.blind')
+                if blind:
+                    text = blind.text.strip()
+                    if text in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '투자주의환기종목']:
+                        warnings.add(text)
+            for img in soup.select('.description img'):
+                alt = img.get('alt', '')
+                if alt in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '환기종목']:
+                    warnings.add(alt)
+            fin_info['warnings'] = list(warnings)
+
+            price_tag = soup.select_one('.no_today .blind')
+            if price_tag: fin_info['price'] = price_tag.text.strip()
+            
+            for th in soup.select('th'):
+                if '52주최고l최저' in th.text:
+                    td = th.find_parent('tr').select_one('td')
+                    if td:
+                        parts = td.text.strip().split('l')
+                        if len(parts) >= 2:
+                            fin_info['high52'] = parts[0].strip()
+                            fin_info['low52'] = parts[1].strip()
+                    break
+                    
+            per_tag = soup.select_one('#_per')
+            if per_tag: fin_info['per'] = per_tag.text.strip()
+            pbr_tag = soup.select_one('#_pbr')
+            if pbr_tag: fin_info['pbr'] = pbr_tag.text.strip()
+        except Exception: pass
+        
+        return summary_text, news_md, news_raw, fin_info
     except Exception as e:
-        return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", ""
+        return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", "", {}
 
 def get_gemini_company_summary(stock_name, news_text=""):
     # 1. DB에서 캐시 조회
@@ -232,7 +267,7 @@ def get_cached_krx_listing():
     return fdr.StockListing('KRX')
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
-def show_summary_dialog(stock_name, stock_code=""):
+def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     import FinanceDataReader as fdr
     if not stock_code:
         try:
@@ -252,22 +287,44 @@ def show_summary_dialog(stock_name, stock_code=""):
             except Exception as e:
                 pass # fallback if KRX blocks scraping
             
-    st.markdown(f"### {stock_name}" + (f" ({stock_code})" if stock_code else ""))
+    # 렌더링 전 정보 가져오기
+    with st.spinner("정보를 가져오는 중..."):
+        if stock_code:
+            naver_summary, naver_news_md, naver_news_raw, fin_info = get_naver_company_summary(stock_code)
+        else:
+            naver_summary, naver_news_md, naver_news_raw, fin_info = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", "", {}
+
+    if fin_info:
+        warnings = fin_info.get('warnings', [])
+        if warnings:
+            badges = " ".join([f"<span style='background-color:#ffebee; color:#d32f2f; padding:2px 6px; border-radius:4px; font-size:0.7em; font-weight:bold; margin-right:5px;'>🚨 {w}</span>" for w in warnings])
+            st.markdown(badges, unsafe_allow_html=True)
+            
+        per = fin_info.get('per', 'N/A')
+        pbr = fin_info.get('pbr', 'N/A')
+        high52 = fin_info.get('high52', 'N/A')
+        low52 = fin_info.get('low52', 'N/A')
+        price = fin_info.get('price', 'N/A')
+        metrics_html = f"""
+        <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
+            <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
+            <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
+                [ PER {per} / PBR {pbr} ]<br>
+                [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
+            </div>
+        </div>
+        """
+        st.markdown(metrics_html, unsafe_allow_html=True)
+    else:
+        st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 10px;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>", unsafe_allow_html=True)
     
     tab1, tab2 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석"])
     
     with tab1:
-        with st.spinner("네이버 금융에서 정보를 가져오는 중..."):
-            if stock_code:
-                naver_summary, naver_news_md, naver_news_raw = get_naver_company_summary(stock_code)
-            else:
-                naver_summary, naver_news_md, naver_news_raw = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", ""
-                
-            st.markdown("##### 🏢 기업 개요")
-            st.info(naver_summary)
-            st.markdown("##### 📰 최근 주요 뉴스")
-            st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
-            
+        st.markdown("##### 🏢 기업 개요")
+        st.info(naver_summary)
+        st.markdown("##### 📰 최근 주요 뉴스")
+        st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
     with tab2:
         # 1. 먼저 DB에 캐시된 요약본이 있는지 빠르게 확인 (UI 블로킹 방지)
         db_summary = None
@@ -306,16 +363,19 @@ def show_summary_dialog(stock_name, stock_code=""):
 # 🎯 [요약 팝업 로직] 상선고 히트맵 등에서 클릭 연동
 # ------------------------------------------------------------------
 if "summary_stock" in st.query_params and "summary_code" in st.query_params:
+    trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+    st.session_state['dialog_trigger_id'] = trigger
     st.session_state['show_summary_dialog'] = {
         "stock": st.query_params.get("summary_stock"),
-        "code": st.query_params.get("summary_code")
+        "code": st.query_params.get("summary_code"),
+        "trigger_id": trigger
     }
     st.query_params.clear()
     st.rerun()
     
 if 'show_summary_dialog' in st.session_state:
     data = st.session_state['show_summary_dialog']
-    show_summary_dialog(data['stock'], data['code'])
+    show_summary_dialog(data['stock'], data.get('code', ''), data.get('trigger_id', 0))
 
 @st.dialog("🎯 가상 데이터 (Mock Data) 쾌속 입력")
 def mock_data_dialog(stock, date_str):
@@ -3704,11 +3764,14 @@ if choice == "🏠 홈화면":
                             else:
                                 badge = f"({u_dates_sorted[0][-5:]})"
                                 
+                            # 고유 렌더링 ID 생성 (반복 클릭 감지용, 매번 바뀌면 전체가 깜빡이므로 클릭 시에만 변경)
+                            render_id = str(st.session_state.get('sangseongo_reset', 0))
+                            
                             html_parts.append(f"""
                                     <tr>
                                         <td style="border-bottom: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock}">
-                                            <a href="javascript:void(0);" id="goto___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
-                                            <a href="javascript:void(0);" id="summary___{stock}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #4b8bff;" title="{stock} 기업 요약(AI) 보기">💬</a>
+                                            <a href="javascript:void(0);" id="goto___{stock}___{render_id}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
+                                            <a href="javascript:void(0);" id="summary___{stock}___{render_id}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #4b8bff;" title="{stock} 기업 요약(AI) 보기">💬</a>
                                             {stock} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
                                         </td>
                             """)
@@ -3779,7 +3842,7 @@ if choice == "🏠 홈화면":
                                     
                                 html_parts.append(f"""
                                         <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
-                                            <a href="javascript:void(0);" id="{stock}___{d}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
+                                            <a href="javascript:void(0);" id="{stock}___{d}___{render_id}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
                                                 {inner_html}
                                             </a>
                                         </td>
@@ -3803,13 +3866,18 @@ if choice == "🏠 홈화면":
                                 stock = clicked.split("___")[1]
                                 st.session_state['pending_search'] = stock
                                 st.session_state['scrn_select_radio'] = "체결 로그"
+                                st.session_state['sangseongo_reset'] = st.session_state.get('sangseongo_reset', 0) + 1
                                 st.rerun()
                             elif clicked.startswith("summary___"):
                                 stock = clicked.split("___")[1]
+                                trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                                st.session_state['dialog_trigger_id'] = trigger
                                 st.session_state['show_summary_dialog'] = {
                                     "stock": stock,
-                                    "code": ""
+                                    "code": "",
+                                    "trigger_id": trigger
                                 }
+                                st.session_state['sangseongo_reset'] = st.session_state.get('sangseongo_reset', 0) + 1
                                 st.rerun()
                             else:
                                 stock, date_str = clicked.split("___")
@@ -3863,6 +3931,7 @@ if choice == "🏠 홈화면":
                             key="top100_click_action"
                         )
                         
+                        top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         event = st.dataframe(
                             df_top[["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]],
                             use_container_width=True,
@@ -3870,7 +3939,7 @@ if choice == "🏠 홈화면":
                             height=650,
                             on_select="rerun",
                             selection_mode="single-row",
-                            key="top100_dataframe"
+                            key=top100_key
                         )
                         
                         if event and "selection" in event:
@@ -3884,19 +3953,21 @@ if choice == "🏠 홈화면":
                                 row_stock_code = df_top.iloc[rows[0]]['stock_code'] if 'stock_code' in df_top.columns else ""
                                 
                                 if click_action == "💬 AI 요약 보기 (팝업)":
-                                    if st.session_state.get('last_summary_stock_top100') != clean_stock:
-                                        st.session_state['show_summary_dialog'] = {
-                                            "stock": clean_stock,
-                                            "code": row_stock_code
-                                        }
-                                        st.session_state['last_summary_stock_top100'] = clean_stock
-                                        st.rerun()
+                                    trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                                    st.session_state['dialog_trigger_id'] = trigger
+                                    st.session_state['show_summary_dialog'] = {
+                                        "stock": clean_stock,
+                                        "code": row_stock_code,
+                                        "trigger_id": trigger
+                                    }
+                                    st.session_state['top100_reset_counter'] = st.session_state.get('top100_reset_counter', 0) + 1
+                                    st.rerun()
                                 else:
-                                    if st.session_state.get('search_input_val') != clean_stock:
-                                        st.session_state['pending_search'] = clean_stock
-                                        st.session_state['last_search_keyword'] = clean_stock
-                                        st.session_state['scrn_select_radio'] = "체결 로그"
-                                        st.rerun()
+                                    st.session_state['pending_search'] = clean_stock
+                                    st.session_state['last_search_keyword'] = clean_stock
+                                    st.session_state['scrn_select_radio'] = "체결 로그"
+                                    st.session_state['top100_reset_counter'] = st.session_state.get('top100_reset_counter', 0) + 1
+                                    st.rerun()
                         else:
                             st.session_state.pop('last_summary_stock_top100', None)
                     else:
@@ -4600,6 +4671,7 @@ if choice == "🏠 홈화면":
                     )
                     
                     # 📊 최종 전광판 디스플레이 표출
+                    grid_key = f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}_{st.session_state.get('df_reset_counter', 0)}"
                     event = st.dataframe(
                         styled_df, 
                         # 🛠️ [교정 3] 출력 전광판 순서에서 amount_krw를 폐기하고, 신형 듀얼 레일을 배치합니다!
@@ -4622,7 +4694,7 @@ if choice == "🏠 홈화면":
                         use_container_width=False,
                         on_select="rerun",
                         selection_mode="single-row",
-                        key=f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}_{st.session_state.get('df_reset_counter', 0)}"
+                        key=grid_key
                     )
                     
                     # 🎯 "더 보기" 버튼: 검색어가 없을 때, 가져온 데이터가 limit 이상이라면(더 있을 가능성이 높다면) 표출
@@ -4654,19 +4726,21 @@ if choice == "🏠 홈화면":
                                     needs_rerun = False
                                     
                                     if click_action == "💬 AI 요약 보기 (팝업)":
-                                        if st.session_state.get('last_summary_stock') != selected_stock:
-                                            row_code = display_df.iloc[selected_idx]['code'] if 'code' in display_df.columns else ""
-                                            st.session_state['show_summary_dialog'] = {
-                                                "stock": selected_stock,
-                                                "code": row_code
-                                            }
-                                            st.session_state['last_summary_stock'] = selected_stock
-                                            needs_rerun = True
+                                        row_code = display_df.iloc[selected_idx]['code'] if 'code' in display_df.columns else ""
+                                        trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                                        st.session_state['dialog_trigger_id'] = trigger
+                                        st.session_state['show_summary_dialog'] = {
+                                            "stock": selected_stock,
+                                            "code": row_code,
+                                            "trigger_id": trigger
+                                        }
+                                        st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
+                                        needs_rerun = True
                                     else:
-                                        if st.session_state.get('search_input_val') != selected_stock:
-                                            st.session_state['pending_search'] = selected_stock
-                                            st.session_state['last_search_keyword'] = selected_stock
-                                            needs_rerun = True
+                                        st.session_state['pending_search'] = selected_stock
+                                        st.session_state['last_search_keyword'] = selected_stock
+                                        st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
+                                        needs_rerun = True
                                         
                                     if needs_rerun:
                                         st.rerun()
