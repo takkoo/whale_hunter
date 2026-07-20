@@ -222,6 +222,11 @@ def get_gemini_company_summary(stock_name, news_text=""):
 
     return summary
 
+@st.cache_data(ttl=86400)
+def get_cached_krx_listing():
+    import FinanceDataReader as fdr
+    return fdr.StockListing('KRX')
+
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code=""):
     import FinanceDataReader as fdr
@@ -236,7 +241,7 @@ def show_summary_dialog(stock_name, stock_code=""):
             
         if not stock_code:
             try:
-                krx = fdr.StockListing('KRX')
+                krx = get_cached_krx_listing()
                 matched = krx[krx['Name'] == stock_name]
                 if not matched.empty:
                     stock_code = matched.iloc[0]['Code']
@@ -314,7 +319,7 @@ def mock_data_dialog(stock, date_str):
         with st.spinner("주가 정보 조회 및 저장 중..."):
             try:
                 import FinanceDataReader as fdr
-                krx = fdr.StockListing('KRX')
+                krx = get_cached_krx_listing()
                 matched = krx[krx['Name'] == stock]
                 if matched.empty:
                     st.error("⚠️ 종목 코드를 찾을 수 없습니다. (상장 폐지 또는 이름 변경 가능성)")
@@ -372,7 +377,7 @@ def get_pure_stock_codes():
     try:
         import FinanceDataReader as fdr
         import re
-        df_krx = fdr.StockListing('KRX')
+        df_krx = get_cached_krx_listing()
         noise_keywords = ('ETF', 'ETN', 'KODEX', 'TIGER', 'ACE', 'SOL', 'RISE', 'KBSTAR', 'ARIRANG', 'HANARO', 'KOSEF', 'PLUS', 'TIME', '인버스', '레버리지', 'WON', '1Q', 'KIWOOM', 'TRUE', 'QV', '선물', '콜', '풋', '옵션')
         pure_codes = set()
         for _, row in df_krx.iterrows():
