@@ -4122,9 +4122,24 @@ if choice == "🏠 홈화면":
                         
                         # (라디오 버튼은 레이아웃 조정을 위해 위쪽 col_left로 이동됨)
 
+                        display_cols = ["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]
+                        display_df = df_top[display_cols]
+                        
+                        def get_col_color(col_name):
+                            if col_name == "외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
+                            elif col_name == "외국인 매도(억)": return "color: #1e90ff;"     # 파랑
+                            elif col_name == "기관 매수(억)": return "color: #ff7f50;"       # 주홍
+                            elif col_name == "기관 매도(억)": return "color: #2e8b57;"       # 진녹
+                            elif col_name == "외/기 합산 순매수(억)": return "color: #d8bfd8;" # 밝은보라 (Thistle)
+                            return ""
+                            
+                        styled_df = display_df.style.apply(
+                            lambda col: [get_col_color(col.name)] * len(col), axis=0
+                        )
+
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         event = st.dataframe(
-                            df_top[["날짜", "시장", "종목명", "외국인 매수(억)", "외국인 매도(억)", "기관 매수(억)", "기관 매도(억)", "외/기 합산 순매수(억)"]],
+                            styled_df,
                             use_container_width=True,
                             hide_index=True,
                             height=650,
