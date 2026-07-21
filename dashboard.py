@@ -207,6 +207,17 @@ def get_naver_company_summary(stock_code):
             if per_tag: fin_info['per'] = per_tag.text.strip()
             pbr_tag = soup.select_one('#_pbr')
             if pbr_tag: fin_info['pbr'] = pbr_tag.text.strip()
+            
+            # ROE 추출
+            cop_table = soup.select_one('.cop_analysis')
+            if cop_table:
+                for th in cop_table.select('th'):
+                    if 'ROE' in th.text:
+                        tds = th.find_parent('tr').select('td')
+                        vals = [td.text.strip() for td in tds if td.text.strip() and td.text.strip() not in ('-', '', '\xa0')]
+                        if vals:
+                            fin_info['roe'] = vals[-1]
+                        break
         except Exception: pass
         
         return summary_text, news_md, news_raw, fin_info
@@ -352,14 +363,18 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
             
         per = fin_info.get('per', 'N/A')
         pbr = fin_info.get('pbr', 'N/A')
+        roe = fin_info.get('roe', 'N/A')
         high52 = fin_info.get('high52', 'N/A')
         low52 = fin_info.get('low52', 'N/A')
         price = fin_info.get('price', 'N/A')
+        
+        roe_str = f"{roe}%" if roe != 'N/A' else 'N/A'
+        
         metrics_html = f"""
         <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
             <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
             <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
-                [ PER {per} / PBR {pbr} ]<br>
+                [ PER {per} / PBR {pbr} / ROE {roe_str} ]<br>
                 [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
             </div>
         </div>
