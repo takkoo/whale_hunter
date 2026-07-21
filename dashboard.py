@@ -207,6 +207,17 @@ def get_naver_company_summary(stock_code):
             if per_tag: fin_info['per'] = per_tag.text.strip()
             pbr_tag = soup.select_one('#_pbr')
             if pbr_tag: fin_info['pbr'] = pbr_tag.text.strip()
+            
+            # ROE 추출
+            cop_table = soup.select_one('.cop_analysis')
+            if cop_table:
+                for th in cop_table.select('th'):
+                    if 'ROE' in th.text:
+                        tds = th.find_parent('tr').select('td')
+                        vals = [td.text.strip() for td in tds if td.text.strip() and td.text.strip() not in ('-', '', '\xa0')]
+                        if vals:
+                            fin_info['roe'] = vals[-1]
+                        break
         except Exception: pass
         
         return summary_text, news_md, news_raw, fin_info
@@ -352,14 +363,18 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
             
         per = fin_info.get('per', 'N/A')
         pbr = fin_info.get('pbr', 'N/A')
+        roe = fin_info.get('roe', 'N/A')
         high52 = fin_info.get('high52', 'N/A')
         low52 = fin_info.get('low52', 'N/A')
         price = fin_info.get('price', 'N/A')
+        
+        roe_str = f"{roe}%" if roe != 'N/A' else 'N/A'
+        
         metrics_html = f"""
         <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
             <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
             <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
-                [ PER {per} / PBR {pbr} ]<br>
+                [ PER {per} / PBR {pbr} / ROE {roe_str} ]<br>
                 [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
             </div>
         </div>
@@ -1710,7 +1725,33 @@ def draw_whale_bar_chart(target_code, target_name, df):
     fig_bar.update_yaxes(title_text="외인/기관 (억원)", gridcolor='#2a2a2a', tickformat=",.0f", row=3, col=1)
     fig_bar.update_yaxes(title_text="주가 (원)", gridcolor='#2a2a2a', tickformat=",.0f", row=4, col=1)
     
-    st.plotly_chart(fig_bar, use_container_width=True)
+    # 🔍 줌(확대) 기능 추가
+    zoom_key = f'zoom_{target_code}'
+    if zoom_key not in st.session_state:
+        st.session_state[zoom_key] = 0
+        
+    col_btn, col_chart = st.columns([0.06, 0.94])
+    
+    with col_btn:
+        st.write("")
+        st.write("")
+        st.write("")
+        st.write("")
+        st.write("")
+        zoom_step = st.session_state[zoom_key]
+        btn_label = f"🔍 x{2**zoom_step}" if zoom_step > 0 else "🔍"
+        if st.button(btn_label, key=f"btn_zoom_{target_code}", help="고래 수급 차트 Y축 확대 (아웃라이어 제외용)"):
+            st.session_state[zoom_key] = (st.session_state[zoom_key] + 1) % 5
+            st.rerun()
+            
+    with col_chart:
+        max_val = merged_df['amount_krw_100m'].max() if not merged_df.empty else 0
+        if zoom_step > 0 and max_val > 0:
+            adjusted_max = max_val / (2 ** zoom_step)
+            # 10% 여백 추가
+            fig_bar.update_yaxes(range=[0, adjusted_max * 1.1], row=1, col=1)
+            
+        st.plotly_chart(fig_bar, use_container_width=True)
 
     # 📊 [과거의 증명] 백테스트 리포트 UI 렌더링 (막대그래프 하단)
     backtest_results = calculate_backtest_yield(chart_df)
