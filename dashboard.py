@@ -182,8 +182,8 @@ def append_warning_badge(stock_name, metadata):
         # 투자경고, 투자위험, 관리종목 등 가장 심각한 것 1개만 표시
         for w in ['투자위험', '투자경고', '관리종목', '거래정지', '단기과열', '투자주의', '투자주의환기종목', '환기종목']:
             if w in warnings:
-                return f"{stock_name} 🚨{w}"
-        return f"{stock_name} 🚨{warnings[0]}"
+                return f"{stock_name} <span style='color: #FADB5F; font-size: 13px;'>🚨{w}</span>"
+        return f"{stock_name} <span style='color: #FADB5F; font-size: 13px;'>🚨{warnings[0]}</span>"
     return stock_name
 
 @st.cache_data(ttl=86400)
@@ -197,7 +197,7 @@ def get_naver_company_summary(stock_code):
         summary_text = summary_p.text.strip() if summary_p else "네이버 금융에서 기업개요를 찾을 수 없습니다."
         
         news_links = soup.select('.news_section ul li a')
-        news_md_items = []
+        news_html_items = []
         news_raw_items = []
         for a in news_links:
             title = a.text.strip()
@@ -205,10 +205,10 @@ def get_naver_company_summary(stock_code):
                 href = a.get('href', '')
                 if href.startswith('/'):
                     href = "https://finance.naver.com" + href
-                news_md_items.append(f"- [{title}]({href})")
+                news_html_items.append(f"<li style='margin-bottom: 6px; margin-left: 20px;'><a href='{href}' target='_blank' style='color: #FADB5F; text-decoration: none;'>{title}</a></li>")
                 news_raw_items.append(f"- {title}")
                 
-        news_md = "\n".join(news_md_items[:5]) if news_md_items else "최근 관련 뉴스가 없습니다."
+        news_md = f"<ul style='margin-top: 5px; margin-bottom: 0;'>{''.join(news_html_items[:5])}</ul>" if news_html_items else "최근 관련 뉴스가 없습니다."
         news_raw = "\n".join(news_raw_items[:5]) if news_raw_items else "최근 관련 뉴스가 없습니다."
         
         fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A', 'warnings': []}
@@ -278,7 +278,7 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
 이 회사의 핵심 기술과 주요 사업 내용을 1~2줄로 요약해줘.
 
 **2. 📊 현재 상황 및 평가**
-다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 시장 상황(호재/악재 및 테마)을 3~4줄로 분석하고 평가해줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
+다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
 
 [최근 뉴스 제목]
 {news_text}
@@ -331,7 +331,7 @@ def get_gemini_company_summary(stock_name, news_text=""):
 이 회사의 핵심 기술과 주요 사업 내용을 1~2줄로 요약해줘.
 
 **2. 📊 현재 상황 및 평가**
-다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 시장 상황(호재/악재 및 테마)을 3~4줄로 분석하고 평가해줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
+다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
 
 [최근 뉴스 제목]
 {news_text}
@@ -366,6 +366,7 @@ def get_cached_krx_listing():
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
+    st.markdown("""<style>div[data-testid="stDialog"] button[aria-label="Close"] {display: none;}</style>""", unsafe_allow_html=True)
     import FinanceDataReader as fdr
     if not stock_code:
         try:
@@ -437,7 +438,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
 <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
     <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
     <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
-        [ PER {per} / PBR {pbr} / ROE {roe_str} ]
+        [ <span style='color: #90EE90;'>PER</span> {per} / <span style='color: #90EE90;'>PBR</span> {pbr} / <span style='color: #90EE90;'>ROE</span> {roe_str} ]
     </div>
 </div>
 {progress_html}
@@ -450,9 +451,17 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     
     with tab1:
         st.markdown("##### 🏢 기업 개요")
-        st.info(naver_summary)
+        st.markdown(f"""
+        <div style="background-color: rgba(28, 131, 225, 0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #e0e0e0; font-size: 0.95em; line-height: 1.5;">
+            {naver_summary}
+        </div>
+        """, unsafe_allow_html=True)
         st.markdown("##### 📰 최근 주요 뉴스")
-        st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
+        st.markdown(f"""
+        <div style="background-color: rgba(255, 193, 7, 0.05); padding: 15px; border-radius: 8px; color: #FADB5F; font-size: 0.95em; line-height: 1.5;">
+            {naver_news_md}
+        </div>
+        """, unsafe_allow_html=True)
         
     with tab2:
         # 1. 먼저 DB에 캐시된 요약본이 있는지 빠르게 확인 (UI 블로킹 방지)
