@@ -4168,6 +4168,8 @@ if choice == "🏠 홈화면":
                         
                         # 합산 필드 만들어서 정렬 (합산 순매수 기준)
                         df_top['외/기 합산 순매수(억)'] = (df_top["frgn_buy"] - df_top["frgn_sell"]) + (df_top["orgn_buy"] - df_top["orgn_sell"])
+                        df_top['🟣외국인 매수세(억)'] = df_top["frgn_buy"] - df_top["frgn_sell"]
+                        df_top['🟡기관 매수세(억)'] = df_top["orgn_buy"] - df_top["orgn_sell"]
                         df_top = df_top.sort_values(by="외/기 합산 순매수(억)", ascending=False)
 
                         
@@ -4185,7 +4187,7 @@ if choice == "🏠 홈화면":
                         # 합산 필드 이름도 이모지 추가
                         df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 합산(억)"}, inplace=True)
 
-                        display_cols = ["날짜", "시장", "종목명", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟣외/기 합산(억)"]
+                        display_cols = ["날짜", "시장", "종목명", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟣외국인 매수세(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟡기관 매수세(억)", "🟣외/기 합산(억)"]
                         display_df = df_top[display_cols]
                         
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
@@ -4195,9 +4197,11 @@ if choice == "🏠 홈화면":
                         def get_col_color(col_name):
                             if col_name == "🔴외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
                             elif col_name == "🔵외국인 매도(억)": return "color: #1e90ff;"     # 파랑
+                            elif col_name == "🟣외국인 매수세(억)": return "color: #b388ff;"   # 밝은 보라
                             elif col_name == "🟠기관 매수(억)": return "color: #ff7f50;"       # 주홍
                             elif col_name == "🟢기관 매도(억)": return "color: #2e8b57;"       # 진녹
-                            elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;" # 밝은보라 (Thistle)
+                            elif col_name == "🟡기관 매수세(억)": return "color: #ffd54f;"     # 노랑
+                            elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;"       # 옅은 보라
                             return ""
                             
                         styled_df = display_df.style.apply(
@@ -4217,8 +4221,10 @@ if choice == "🏠 홈화면":
                             column_config={
                                 "🔴외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🔵외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟣외국인 매수세(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🟠기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🟢기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟡기관 매수세(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🟣외/기 합산(억)": st.column_config.NumberColumn(format="%.2f")
                             }
                         )
