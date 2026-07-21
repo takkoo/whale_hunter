@@ -148,6 +148,33 @@ if "mock_stock" in st.query_params and "mock_date" in st.query_params:
 
 import google.generativeai as genai
 from bs4 import BeautifulSoup
+import json
+import os
+
+@st.cache_data(ttl=60)
+def get_global_stock_metadata():
+    """백그라운드에서 수집된 시장경보 및 52주 고/저가 캐시 파일 읽기 (60초 캐싱)"""
+    metadata_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_metadata.json")
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def append_warning_badge(stock_name, metadata):
+    """종목명에 시장경보 뱃지 추가"""
+    clean_name = stock_name.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
+    info = metadata.get(clean_name, {})
+    warnings = info.get("warnings", [])
+    if warnings:
+        # 투자경고, 투자위험, 관리종목 등 가장 심각한 것 1개만 표시
+        for w in ['투자위험', '투자경고', '관리종목', '거래정지', '단기과열', '투자주의', '투자주의환기종목', '환기종목']:
+            if w in warnings:
+                return f"{stock_name} 🚨{w}"
+        return f"{stock_name} 🚨{warnings[0]}"
+    return stock_name
 
 @st.cache_data(ttl=86400)
 def get_naver_company_summary(stock_code):
@@ -370,15 +397,42 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
         
         roe_str = f"{roe}%" if roe != 'N/A' else 'N/A'
         
+        progress_html = ""
+        try:
+            h_val = int(str(high52).replace(',', ''))
+            l_val = int(str(low52).replace(',', ''))
+            p_val = int(str(price).replace(',', ''))
+            if h_val > l_val:
+                ratio = (p_val - l_val) / (h_val - l_val) * 100
+                ratio = max(0, min(100, ratio))
+                
+                progress_html = f"""
+<div style='margin-top: 15px; margin-bottom: 5px; width: 100%; padding: 10px; background-color: #1a1c24; border-radius: 8px; border: 1px solid #333; box-sizing: border-box;'>
+    <div style='display: flex; justify-content: space-between; font-size: 12px; color: #a0a0a0; margin-bottom: 6px;'>
+        <span>📉 최저 {low52}</span>
+        <span style='color: #FFD700; font-weight: bold; font-size: 13px;'>현재 {price}</span>
+        <span>📈 최고 {high52}</span>
+    </div>
+    <div style='position: relative; height: 8px; background-color: #2a2d3a; border-radius: 4px; width: 100%;'>
+        <div style='position: absolute; left: 0; top: 0; height: 100%; width: {ratio}%; background: linear-gradient(90deg, #1e90ff, #ff4b4b); border-radius: 4px;'></div>
+        <div style='position: absolute; left: {ratio}%; top: -3px; height: 14px; width: 4px; background-color: white; border-radius: 2px; transform: translateX(-50%); box-shadow: 0 0 5px rgba(255,255,255,0.8);'></div>
+    </div>
+    <div style='text-align: center; font-size: 11px; color: #666; margin-top: 6px;'>52주 최고/최저가 대비 현재 주가 위치</div>
+</div>
+"""
+        except Exception:
+            pass
+        
         metrics_html = f"""
-        <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
-            <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
-            <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
-                [ PER {per} / PBR {pbr} / ROE {roe_str} ]<br>
-                [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
-            </div>
-        </div>
-        """
+<div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
+    <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
+    <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
+        [ PER {per} / PBR {pbr} / ROE {roe_str} ]<br>
+        [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
+    </div>
+</div>
+{progress_html}
+"""
         st.markdown(metrics_html, unsafe_allow_html=True)
     else:
         st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 10px;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>", unsafe_allow_html=True)
@@ -2948,9 +3002,12 @@ if choice == "🏠 홈화면":
                     stock_names_list = top10_df['name'].tolist()
                     themes_dict = get_themes_for_stocks(stock_names_list)
                     
+                    global_meta = get_global_stock_metadata()
+                    
                     def format_name_with_theme(row):
-                        name = row['name']
-                        theme = themes_dict.get(name, "")
+                        raw_name = row['name']
+                        name = append_warning_badge(raw_name, global_meta)
+                        theme = themes_dict.get(raw_name, "")
                         if theme:
                             # 콤마로 구분된 여러 테마를 줄바꿈(<br>)하여 세로로 배치
                             theme_list = [t.strip() for t in theme.split(',') if t.strip()]
@@ -3876,16 +3933,16 @@ if choice == "🏠 홈화면":
                         # 5. HTML/SVG 표 렌더링 준비
                         html_parts = []
                         html_parts.append(f"""
-                        <div style="overflow-x: auto; margin-top: 20px; background-color: #1E1E1E; padding: 15px; border-radius: 10px;">
+                        <div style="overflow-x: auto; margin-top: 20px; background-color: transparent; padding: 15px; border-radius: 10px;">
                             <table style="width: 100%; border-collapse: collapse; color: white; text-align: center; font-size: 13px; table-layout: fixed;">
                                 <thead>
                                     <tr>
-                                        <th style="width: 120px; border-bottom: 2px solid #555; padding: 5px;">종목명 (상한가일)</th>
+                                        <th style="width: 230px; border-bottom: 2px solid #555; border-right: 1px solid #555; padding: 5px; text-align: left; padding-left: 10px;"><span style="margin-right: 15px;" title="시계열 추적 차트">📊</span><span style="margin-right: 25px; color: #4b8bff; font-weight: bold; font-size: 14px;" title="AI 기업 요약">AI</span>종목명 (상한가일수)</th>
                         """)
                         # 헤더 생성
                         for d in trading_days:
                             day_str = d[-2:] # "01", "15" 등
-                            html_parts.append(f'<th style="width: 40px; border-bottom: 2px solid #555; padding: 5px;">{day_str}일</th>')
+                            html_parts.append(f'<th style="width: 35px; border-bottom: 2px solid #555; padding: 5px;">{day_str}일</th>')
                         html_parts.append("""
                                     </tr>
                                 </thead>
@@ -3893,9 +3950,12 @@ if choice == "🏠 홈화면":
                         """)
                         
                         # 종목별 행 생성
+                        # 종목별 행 생성
                         import math
+                        global_meta = get_global_stock_metadata()
                         for _, row in upper_grouped.iterrows():
-                            stock = row['name']
+                            stock_raw = row['name']
+                            stock_display = append_warning_badge(stock_raw, global_meta)
                             u_dates = row['recorded_date']
                             
                             # (절대 금액 5단계 평가를 위해 max_amt 계산은 제거)
@@ -3912,10 +3972,10 @@ if choice == "🏠 홈화면":
                             
                             html_parts.append(f"""
                                     <tr>
-                                        <td style="border-bottom: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock}">
-                                            <a href="javascript:void(0);" id="goto___{stock}___{render_id}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
-                                            <a href="javascript:void(0);" id="summary___{stock}___{render_id}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #4b8bff;" title="{stock} 기업 요약(AI) 보기">💬</a>
-                                            {stock} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
+                                        <td style="border-bottom: 1px solid #333; border-right: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; padding-left: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock_raw}">
+                                            <a href="javascript:void(0);" id="goto___{stock_raw}___{render_id}" style="text-decoration: none; margin-right: 12px; font-size: 16px; color: #888;" title="{stock_raw} 시계열 추적 화면으로 이동">☐</a>
+                                            <a href="javascript:void(0);" id="summary___{stock_raw}___{render_id}" style="text-decoration: none; margin-right: 12px; font-size: 16px; color: #4b8bff;" title="{stock_raw} 기업 요약(AI) 보기">💬</a>
+                                            {stock_display} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
                                         </td>
                             """)
                             
@@ -3925,9 +3985,9 @@ if choice == "🏠 홈화면":
                                 
                                 amt = 0
                                 cnt = 0
-                                if stock in daily_whale and d in daily_whale[stock]:
-                                    amt = daily_whale[stock][d]['amt']
-                                    cnt = daily_whale[stock][d]['cnt']
+                                if stock_raw in daily_whale and d in daily_whale[stock_raw]:
+                                    amt = daily_whale[stock_raw][d]['amt']
+                                    cnt = daily_whale[stock_raw][d]['cnt']
                                     
                                 inner_html = ""
                                 if d in u_dates:
@@ -3985,7 +4045,7 @@ if choice == "🏠 홈화면":
                                     
                                 html_parts.append(f"""
                                         <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
-                                            <a href="javascript:void(0);" id="{stock}___{d}___{render_id}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
+                                            <a href="javascript:void(0);" id="{stock_raw}___{d}___{render_id}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
                                                 {inner_html}
                                             </a>
                                         </td>
@@ -4168,6 +4228,8 @@ if choice == "🏠 홈화면":
                         
                         # 합산 필드 만들어서 정렬 (합산 순매수 기준)
                         df_top['외/기 합산 순매수(억)'] = (df_top["frgn_buy"] - df_top["frgn_sell"]) + (df_top["orgn_buy"] - df_top["orgn_sell"])
+                        df_top['🟣외국인 매수세(억)'] = df_top["frgn_buy"] - df_top["frgn_sell"]
+                        df_top['🟡기관 매수세(억)'] = df_top["orgn_buy"] - df_top["orgn_sell"]
                         df_top = df_top.sort_values(by="외/기 합산 순매수(억)", ascending=False)
 
                         
@@ -4184,8 +4246,12 @@ if choice == "🏠 홈화면":
                         
                         # 합산 필드 이름도 이모지 추가
                         df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 합산(억)"}, inplace=True)
+                        
+                        # 🚨 [시장 경보] 투자경고 배지 부여
+                        global_meta = get_global_stock_metadata()
+                        df_top['종목명'] = df_top['종목명'].apply(lambda x: append_warning_badge(x, global_meta))
 
-                        display_cols = ["날짜", "시장", "종목명", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟣외/기 합산(억)"]
+                        display_cols = ["날짜", "시장", "종목명", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟣외국인 매수세(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟡기관 매수세(억)", "🟣외/기 합산(억)"]
                         display_df = df_top[display_cols]
                         
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
@@ -4195,9 +4261,11 @@ if choice == "🏠 홈화면":
                         def get_col_color(col_name):
                             if col_name == "🔴외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
                             elif col_name == "🔵외국인 매도(억)": return "color: #1e90ff;"     # 파랑
+                            elif col_name == "🟣외국인 매수세(억)": return "color: #b388ff;"   # 밝은 보라
                             elif col_name == "🟠기관 매수(억)": return "color: #ff7f50;"       # 주홍
                             elif col_name == "🟢기관 매도(억)": return "color: #2e8b57;"       # 진녹
-                            elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;" # 밝은보라 (Thistle)
+                            elif col_name == "🟡기관 매수세(억)": return "color: #ffd54f;"     # 노랑
+                            elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;"       # 옅은 보라
                             return ""
                             
                         styled_df = display_df.style.apply(
@@ -4217,8 +4285,10 @@ if choice == "🏠 홈화면":
                             column_config={
                                 "🔴외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🔵외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟣외국인 매수세(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🟠기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🟢기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟡기관 매수세(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🟣외/기 합산(억)": st.column_config.NumberColumn(format="%.2f")
                             }
                         )
@@ -4821,6 +4891,8 @@ if choice == "🏠 홈화면":
                 # 🚨 [놀빅 AI 탐지] 실시간 매수 폭주 종목 렌더링
                 hot_signals = get_hot_signals(main_df)
                 
+                global_meta = get_global_stock_metadata()
+                
                 st.markdown("#### 🚨 [놀빅 AI 탐지] 실시간 매수 폭주 종목 (Top 3)")
                 hot_cols = st.columns(3) # 항상 3자리를 고정으로 유지
                 
@@ -4829,6 +4901,9 @@ if choice == "🏠 홈화면":
                         if idx < len(hot_signals):
                             signal = hot_signals[idx]
                             score = signal['score']
+                            # 종목명에 시장경보 뱃지 추가
+                            display_name = append_warning_badge(signal['name'], global_meta)
+                            
                             if score >= 95:
                                 bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #332700 0%, #1a1400 100%)", "#FFD700", "#FFD700", "rgba(255, 215, 0, 0.4)"
                             elif score >= 90:
@@ -4840,7 +4915,7 @@ if choice == "🏠 홈화면":
 
                             st.markdown(f"""
                             <div style="background: {bg_grad}; border: 1px solid {border_col}; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 0 15px {shadow_col};">
-                                <div style="font-size: 18px; font-weight: bold; color: #ffffff;">{signal['name']}</div>
+                                <div style="font-size: 18px; font-weight: bold; color: #ffffff;">{display_name}</div>
                                 <div style="font-size: 15px; color: {text_col}; font-weight: bold; margin-top: 8px;">{signal['icon']} 파워 스코어: {score:.1f}점</div>
                                 <div style="font-size: 13px; color: #a0a0a0; margin-top: 5px;">순매수 강도: {int(signal['net_buy'] // 1000000):,}백만원 ({int(signal['buy_count'])}회 고래 매집)</div>
                             </div>
@@ -4877,11 +4952,14 @@ if choice == "🏠 홈화면":
                         except Exception as e:
                             pass
                             
-                    # 🔥 [데이터프레임 시각화 강화] 핫 시그널 종목에 등급별 뱃지 부여
                     if 'hot_signals' in locals() and hot_signals:
                         hot_dict = {s['name']: s['icon'] for s in hot_signals}
                         # 이름에 이미 🚀가 붙어있을 수 있으므로 기존 이름 기준으로 맵핑
                         display_df['name'] = display_df['name'].apply(lambda x: x + f" {hot_dict[x.replace(' 🚀', '')]}" if x.replace(' 🚀', '') in hot_dict else x)
+                        
+                    # 🚨 [시장 경보] 투자경고, 관리종목 등 배지 부여
+                    global_meta = get_global_stock_metadata()
+                    display_df['name'] = display_df['name'].apply(lambda x: append_warning_badge(x, global_meta))
                     
                     # ⚡ [안전 퓨즈] 혹시나 테이블 데이터에 'side' 컬럼 신호가 비어있다면 에러 방지용 기본값 주입
                     if 'side' not in display_df.columns:
