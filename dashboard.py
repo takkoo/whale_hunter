@@ -1710,7 +1710,33 @@ def draw_whale_bar_chart(target_code, target_name, df):
     fig_bar.update_yaxes(title_text="외인/기관 (억원)", gridcolor='#2a2a2a', tickformat=",.0f", row=3, col=1)
     fig_bar.update_yaxes(title_text="주가 (원)", gridcolor='#2a2a2a', tickformat=",.0f", row=4, col=1)
     
-    st.plotly_chart(fig_bar, use_container_width=True)
+    # 🔍 줌(확대) 기능 추가
+    zoom_key = f'zoom_{target_code}'
+    if zoom_key not in st.session_state:
+        st.session_state[zoom_key] = 0
+        
+    col_btn, col_chart = st.columns([0.06, 0.94])
+    
+    with col_btn:
+        st.write("")
+        st.write("")
+        st.write("")
+        st.write("")
+        st.write("")
+        zoom_step = st.session_state[zoom_key]
+        btn_label = f"🔍 x{2**zoom_step}" if zoom_step > 0 else "🔍"
+        if st.button(btn_label, key=f"btn_zoom_{target_code}", help="고래 수급 차트 Y축 확대 (아웃라이어 제외용)"):
+            st.session_state[zoom_key] = (st.session_state[zoom_key] + 1) % 5
+            st.rerun()
+            
+    with col_chart:
+        max_val = merged_df['amount_krw_100m'].max() if not merged_df.empty else 0
+        if zoom_step > 0 and max_val > 0:
+            adjusted_max = max_val / (2 ** zoom_step)
+            # 10% 여백 추가
+            fig_bar.update_yaxes(range=[0, adjusted_max * 1.1], row=1, col=1)
+            
+        st.plotly_chart(fig_bar, use_container_width=True)
 
     # 📊 [과거의 증명] 백테스트 리포트 UI 렌더링 (막대그래프 하단)
     backtest_results = calculate_backtest_yield(chart_df)
