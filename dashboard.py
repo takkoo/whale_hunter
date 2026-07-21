@@ -153,7 +153,17 @@ import os
 
 @st.cache_data(ttl=60)
 def get_global_stock_metadata():
-    """백그라운드에서 수집된 시장경보 및 52주 고/저가 캐시 파일 읽기 (60초 캐싱)"""
+    """백그라운드에서 수집된 시장경보 및 52주 고/저가 캐시 파일 읽기 (60초 캐싱)
+    클라우드 동기화를 위해 먼저 Supabase에서 읽고, 실패 시 로컬 파일 읽기"""
+    try:
+        res = supabase.table("system_settings").select("key, value").like("key", "stock_meta_%").execute()
+        if res.data:
+            chunks = sorted(res.data, key=lambda x: int(x['key'].split('_')[-1]))
+            full_str = "".join([c['value'] for c in chunks])
+            return json.loads(full_str)
+    except Exception as e:
+        print(f"☁️ Supabase 메타데이터 로드 실패 (로컬로 폴백): {e}")
+        
     metadata_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_metadata.json")
     if os.path.exists(metadata_path):
         try:
@@ -408,7 +418,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                 
                 progress_html = f"""
 <div style='margin-top: 15px; margin-bottom: 5px; width: 100%; padding: 10px; background-color: #1a1c24; border-radius: 8px; border: 1px solid #333; box-sizing: border-box;'>
-    <div style='display: flex; justify-content: space-between; font-size: 12px; color: #a0a0a0; margin-bottom: 6px;'>
+    <div style='display: flex; justify-content: space-between; font-size: 12px; color: #e0e0e0; margin-bottom: 6px;'>
         <span>📉 최저 {low52}</span>
         <span style='color: #FFD700; font-weight: bold; font-size: 13px;'>현재 {price}</span>
         <span>📈 최고 {high52}</span>
@@ -417,7 +427,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
         <div style='position: absolute; left: 0; top: 0; height: 100%; width: {ratio}%; background: linear-gradient(90deg, #1e90ff, #ff4b4b); border-radius: 4px;'></div>
         <div style='position: absolute; left: {ratio}%; top: -3px; height: 14px; width: 4px; background-color: white; border-radius: 2px; transform: translateX(-50%); box-shadow: 0 0 5px rgba(255,255,255,0.8);'></div>
     </div>
-    <div style='text-align: center; font-size: 11px; color: #666; margin-top: 6px;'>52주 최고/최저가 대비 현재 주가 위치</div>
+    <div style='text-align: center; font-size: 11px; color: #a0a0a0; margin-top: 6px;'>52주 최고/최저가 대비 현재 주가 위치</div>
 </div>
 """
         except Exception:
@@ -427,8 +437,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
 <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
     <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
     <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
-        [ PER {per} / PBR {pbr} / ROE {roe_str} ]<br>
-        [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
+        [ PER {per} / PBR {pbr} / ROE {roe_str} ]
     </div>
 </div>
 {progress_html}
