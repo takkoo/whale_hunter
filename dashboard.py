@@ -173,7 +173,7 @@ def get_global_stock_metadata():
             return {}
     return {}
 
-def append_warning_badge(stock_name, metadata):
+def append_warning_badge(stock_name, metadata, html=False):
     """종목명에 시장경보 뱃지 추가"""
     clean_name = stock_name.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
     info = metadata.get(clean_name, {})
@@ -182,9 +182,26 @@ def append_warning_badge(stock_name, metadata):
         # 투자경고, 투자위험, 관리종목 등 가장 심각한 것 1개만 표시
         for w in ['투자위험', '투자경고', '관리종목', '거래정지', '단기과열', '투자주의', '투자주의환기종목', '환기종목']:
             if w in warnings:
-                return f"{stock_name} <span style='color: #FADB5F; font-size: 13px;'>🚨{w}</span>"
-        return f"{stock_name} <span style='color: #FADB5F; font-size: 13px;'>🚨{warnings[0]}</span>"
+                if html:
+                    return f"{stock_name} <span style='color: #FADB5F; font-size: 13px;'>🚨{w}</span>"
+                else:
+                    return stock_name # 표본 분리 모드에서는 종목명에 추가하지 않음
+        if html:
+            return f"{stock_name} <span style='color: #FADB5F; font-size: 13px;'>🚨{warnings[0]}</span>"
+        else:
+            return stock_name
     return stock_name
+
+def get_warning_text(stock_name, metadata):
+    clean_name = stock_name.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
+    info = metadata.get(clean_name, {})
+    warnings = info.get("warnings", [])
+    if warnings:
+        for w in ['투자위험', '투자경고', '관리종목', '거래정지', '단기과열', '투자주의', '투자주의환기종목', '환기종목']:
+            if w in warnings:
+                return f"🚨{w}"
+        return f"🚨{warnings[0]}"
+    return ""
 
 @st.cache_data(ttl=86400)
 def get_naver_company_summary(stock_name, stock_code):
@@ -266,7 +283,19 @@ def get_naver_company_summary(stock_name, stock_code):
         return summary_text, news_md, news_raw, fin_info
     except Exception as e:
         import urllib.parse
-        fallback_summary = f"[{stock_name}] 현재 네이버 금융(웹 스크래핑) 연결이 차단되어, 구글 뉴스를 통한 AI 분석으로 대체합니다."
+        fallback_summary = f"{stock_name} 기업 개요를 불러올 수 없습니다."
+        try:
+            import pandas as pd
+            krx_df = get_cached_krx_listing()
+            if not krx_df.empty:
+                stock_row = krx_df[krx_df['Code'] == stock_code]
+                if not stock_row.empty:
+                    sector = stock_row.iloc[0].get('Sector', '')
+                    industry = stock_row.iloc[0].get('Industry', '')
+                    if pd.notna(sector) and pd.notna(industry) and sector and industry:
+                        fallback_summary = f"동사는 {sector} 섹터에 속하는 기업으로, 주요 사업으로 {industry}을(를) 영위하고 있음."
+        except Exception:
+            pass
         fallback_news_md = "최근 뉴스를 불러올 수 없습니다."
         fallback_news_raw = ""
         try:
@@ -311,6 +340,8 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
 - [호재] ~~~
 - [악재] ~~~
 - [전망] ~~~
+
+※ 주의사항: 요약할 때 기사에 언급된 특정 기업명(예: 홈플러스, 엔비디아), 기관명(예: FDA, 식약처), 고유명사 등을 '주요 입점사', '일부 기업', '규제 기관' 등으로 뭉뚱그리지 말고 구체적인 명칭을 반드시 그대로 명시할 것.
 
 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 위 포맷으로 적어줘.
 
@@ -370,6 +401,8 @@ def get_gemini_company_summary(stock_name, news_text=""):
 - [호재] ~~~
 - [악재] ~~~
 - [전망] ~~~
+
+※ 주의사항: 요약할 때 기사에 언급된 특정 기업명(예: 홈플러스, 엔비디아), 기관명(예: FDA, 식약처), 고유명사 등을 '주요 입점사', '일부 기업', '규제 기관' 등으로 뭉뚱그리지 말고 구체적인 명칭을 반드시 그대로 명시할 것.
 
 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 위 포맷으로 적어줘.
 
@@ -487,7 +520,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     else:
         st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 10px;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>", unsafe_allow_html=True)
     
-    tab1, tab2, tab3 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석", "💡 ChatGPT AI 분석"])
+    tab1, tab2, tab3 = st.tabs(["📊 기업개요", "🤖 Gemini AI 분석", "💡 ChatGPT AI 분석"])
     
     with tab1:
         st.markdown("##### 🏢 기업 개요")
@@ -550,9 +583,9 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
             if db_summary_gpt:
                 st.success(db_summary_gpt)
             else:
-                st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
+                st.info("💡 처음 조회하는 뉴스이거나 기존 분석이 만료(30일 경과)되었습니다. 아래 버튼을 눌러 AI 분석을 갱신하세요.")
                 if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
-                    with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
+                    with st.spinner("ChatGPT가 뉴스를 바탕으로 분석 중입니다..."):
                         try:
                             chatgpt_summary = get_chatgpt_company_summary(stock_name, naver_news_raw)
                             st.success(chatgpt_summary)
@@ -3064,7 +3097,7 @@ if choice == "🏠 홈화면":
                     
                     def format_name_with_theme(row):
                         raw_name = row['name']
-                        name = append_warning_badge(raw_name, global_meta)
+                        name = append_warning_badge(raw_name, global_meta, html=True)
                         theme = themes_dict.get(raw_name, "")
                         if theme:
                             # 콤마로 구분된 여러 테마를 줄바꿈(<br>)하여 세로로 배치
@@ -4008,12 +4041,11 @@ if choice == "🏠 홈화면":
                         """)
                         
                         # 종목별 행 생성
-                        # 종목별 행 생성
                         import math
                         global_meta = get_global_stock_metadata()
                         for _, row in upper_grouped.iterrows():
                             stock_raw = row['name']
-                            stock_display = append_warning_badge(stock_raw, global_meta)
+                            stock_display = append_warning_badge(stock_raw, global_meta, html=True)
                             u_dates = row['recorded_date']
                             
                             # (절대 금액 5단계 평가를 위해 max_amt 계산은 제거)
@@ -4305,11 +4337,11 @@ if choice == "🏠 홈화면":
                         # 합산 필드 이름도 이모지 추가
                         df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 합산(억)"}, inplace=True)
                         
-                        # 🚨 [시장 경보] 투자경고 배지 부여
+                        # 🚨 [시장 경보] 투자경고 배지 부여 (전용 칼럼으로 분리)
                         global_meta = get_global_stock_metadata()
-                        df_top['종목명'] = df_top['종목명'].apply(lambda x: append_warning_badge(x, global_meta))
+                        df_top['특이사항'] = df_top['종목명'].apply(lambda x: get_warning_text(x, global_meta))
 
-                        display_cols = ["날짜", "시장", "종목명", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟣외국인 매수세(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟡기관 매수세(억)", "🟣외/기 합산(억)"]
+                        display_cols = ["날짜", "시장", "종목명", "특이사항", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟣외국인 매수세(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟡기관 매수세(억)", "🟣외/기 합산(억)"]
                         display_df = df_top[display_cols]
                         
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
@@ -4324,6 +4356,7 @@ if choice == "🏠 홈화면":
                             elif col_name == "🟢기관 매도(억)": return "color: #2e8b57;"       # 진녹
                             elif col_name == "🟡기관 매수세(억)": return "color: #ffd54f;"     # 노랑
                             elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;"       # 옅은 보라
+                            elif col_name == "특이사항": return "color: #FADB5F; font-weight: bold;" # 노란색
                             return ""
                             
                         styled_df = display_df.style.apply(
@@ -4960,7 +4993,7 @@ if choice == "🏠 홈화면":
                             signal = hot_signals[idx]
                             score = signal['score']
                             # 종목명에 시장경보 뱃지 추가
-                            display_name = append_warning_badge(signal['name'], global_meta)
+                            display_name = append_warning_badge(signal['name'], global_meta, html=True)
                             
                             if score >= 95:
                                 bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #332700 0%, #1a1400 100%)", "#FFD700", "#FFD700", "rgba(255, 215, 0, 0.4)"
@@ -5015,9 +5048,9 @@ if choice == "🏠 홈화면":
                         # 이름에 이미 🚀가 붙어있을 수 있으므로 기존 이름 기준으로 맵핑
                         display_df['name'] = display_df['name'].apply(lambda x: x + f" {hot_dict[x.replace(' 🚀', '')]}" if x.replace(' 🚀', '') in hot_dict else x)
                         
-                    # 🚨 [시장 경보] 투자경고, 관리종목 등 배지 부여
+                    # 🚨 [시장 경보] 투자경고, 관리종목 등 배지 부여 (전용 칼럼으로 분리)
                     global_meta = get_global_stock_metadata()
-                    display_df['name'] = display_df['name'].apply(lambda x: append_warning_badge(x, global_meta))
+                    display_df['특이사항'] = display_df['name'].apply(lambda x: get_warning_text(x, global_meta))
                     
                     # ⚡ [안전 퓨즈] 혹시나 테이블 데이터에 'side' 컬럼 신호가 비어있다면 에러 방지용 기본값 주입
                     if 'side' not in display_df.columns:
@@ -5047,6 +5080,10 @@ if choice == "🏠 홈화면":
                         # ⏰ [광대역 필터] 15:20:00 포함, 그 이후에 들어오는 모든 장마감/장후 틱 처리
                         if row['time'] >= '15:20:00': 
                             styles[row.index.get_loc('time')] = 'background-color: #5c1d1d; color: #ff9999; font-weight: bold;'
+                        
+                        # 🚨 특이사항 컬럼은 무조건 노란색 고정
+                        if '특이사항' in row and row['특이사항']:
+                            styles[row.index.get_loc('특이사항')] = 'color: #FADB5F; font-weight: bold;'
 
                         # 🐋 매수/매도 레일별 고래 LED 하이라이트
                         total_amt_raw = row['amount_krw']
@@ -5093,13 +5130,14 @@ if choice == "🏠 홈화면":
                     event = st.dataframe(
                         styled_df, 
                         # 🛠️ [교정 3] 출력 전광판 순서에서 amount_krw를 폐기하고, 신형 듀얼 레일을 배치합니다!
-                        column_order=["No.", "date", "time", "name", "price", "volume", "buy_amount", "sell_amount", "unknown_amount", "market_type"],
+                        column_order=["No.", "date", "time", "name", "특이사항", "price", "volume", "buy_amount", "sell_amount", "unknown_amount", "market_type"],
                         
                         column_config={
                             "No.": st.column_config.NumberColumn("순번", format="%d"),
                             "date": "체결일자",
                             "time": "체결시간",
                             "name": "종목명",
+                            "특이사항": "특이사항",
                             "price": st.column_config.NumberColumn(("\u00A0" * 16) + "체결가 (원)"),
                             "volume": st.column_config.NumberColumn(("\u00A0" * 16) + "체결량 (주)"),
                             "buy_amount": st.column_config.NumberColumn("매수금액 (백만)"), 
