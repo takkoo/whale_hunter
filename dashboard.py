@@ -187,7 +187,7 @@ def append_warning_badge(stock_name, metadata):
     return stock_name
 
 @st.cache_data(ttl=86400)
-def get_naver_company_summary(stock_code):
+def get_naver_company_summary(stock_name, stock_code):
     try:
         url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
         headers = {
@@ -265,7 +265,29 @@ def get_naver_company_summary(stock_code):
         
         return summary_text, news_md, news_raw, fin_info
     except Exception as e:
-        return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", "", {}
+        import urllib.parse
+        fallback_summary = f"[{stock_name}] 현재 네이버 금융(웹 스크래핑) 연결이 차단되어, 구글 뉴스를 통한 AI 분석으로 대체합니다."
+        fallback_news_md = "최근 뉴스를 불러올 수 없습니다."
+        fallback_news_raw = ""
+        try:
+            gnews_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(stock_name + ' 주식')}&hl=ko&gl=KR&ceid=KR:ko"
+            g_res = requests.get(gnews_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=4)
+            g_soup = BeautifulSoup(g_res.text, 'xml')
+            items = g_soup.find_all('item')[:5]
+            md_items = []
+            raw_items = []
+            for item in items:
+                title = item.title.text if item.title else ""
+                link = item.link.text if item.link else ""
+                if title:
+                    md_items.append(f"<li style='margin-bottom: 6px; margin-left: 20px;'><a href='{link}' target='_blank' style='color: #FADB5F; text-decoration: none;'>{title}</a></li>")
+                    raw_items.append(f"- {title}")
+            if md_items:
+                fallback_news_md = f"<ul style='margin-top: 5px; margin-bottom: 0;'>{''.join(md_items)}</ul>"
+                fallback_news_raw = "\n".join(raw_items)
+        except Exception:
+            pass
+        return fallback_summary, fallback_news_md, fallback_news_raw, {}
 
 def get_chatgpt_company_summary(stock_name, news_text=""):
     gpt_stock_key = f"[GPT]{stock_name}"
@@ -284,7 +306,13 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
 이 회사의 핵심 기술과 주요 사업 내용을 1~2줄로 요약해줘.
 
 **2. 📊 현재 상황 및 평가**
-다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
+다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘.
+(반드시 아래 예시 포맷을 지켜서 작성할 것)
+- [호재] ~~~
+- [악재] ~~~
+- [전망] ~~~
+
+뉴스 제목이 없다면 일반적인 최근 시장의 평가를 위 포맷으로 적어줘.
 
 [최근 뉴스 제목]
 {news_text}
@@ -337,7 +365,13 @@ def get_gemini_company_summary(stock_name, news_text=""):
 이 회사의 핵심 기술과 주요 사업 내용을 1~2줄로 요약해줘.
 
 **2. 📊 현재 상황 및 평가**
-다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘. 뉴스 제목이 없다면 일반적인 최근 시장의 평가를 적어줘.
+다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘.
+(반드시 아래 예시 포맷을 지켜서 작성할 것)
+- [호재] ~~~
+- [악재] ~~~
+- [전망] ~~~
+
+뉴스 제목이 없다면 일반적인 최근 시장의 평가를 위 포맷으로 적어줘.
 
 [최근 뉴스 제목]
 {news_text}
@@ -395,7 +429,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     # 렌더링 전 정보 가져오기
     with st.spinner("정보를 가져오는 중..."):
         if stock_code:
-            naver_summary, naver_news_md, naver_news_raw, fin_info = get_naver_company_summary(stock_code)
+            naver_summary, naver_news_md, naver_news_raw, fin_info = get_naver_company_summary(stock_name, stock_code)
         else:
             naver_summary, naver_news_md, naver_news_raw, fin_info = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", "", {}
 
