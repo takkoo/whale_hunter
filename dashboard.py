@@ -190,7 +190,13 @@ def append_warning_badge(stock_name, metadata):
 def get_naver_company_summary(stock_code):
     try:
         url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': 'https://finance.naver.com/'
+        }
+        res = requests.get(url, headers=headers, timeout=3)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, 'html.parser')
         summary_p = soup.select_one('.summary_info p')
@@ -702,7 +708,7 @@ def get_kis_access_token():
     url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
     headers = {"content-type": "application/json"}
     body = {"grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET}
-    res = requests.post(url, headers=headers, json=body)
+    res = requests.post(url, headers=headers, json=body, timeout=5)
     if res.status_code == 200:
         new_token = res.json()["access_token"]
         # 새 토큰을 파일에 저장
@@ -734,7 +740,7 @@ def fetch_investor_net_buying(stock_code):
         "FID_COND_MRKT_DIV_CODE": "J",
         "FID_INPUT_ISCD": stock_code
     }
-    res = requests.get(url, headers=headers, params=params)
+    res = requests.get(url, headers=headers, params=params, timeout=5)
     if res.status_code == 200:
         data = res.json().get("output", [])
         if not data:
