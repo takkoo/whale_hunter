@@ -1954,20 +1954,20 @@ def draw_whale_bar_chart(target_code, target_name, df):
     
     # 3번째: 외국인/기관 상세 수급 (순매수로 변경)
     if not investor_df.empty:
-        # 외국인 순매수
+        # 외국인 순매수 (offset=-0.41, width=0.38 -> [-0.41, -0.03])
         fig_bar.add_trace(go.Bar(
             x=investor_df['date_str'], y=investor_df['frgn_net_100m'],
             name="외국인 순매수", marker_color='#FFB000', opacity=0.9,
-            offset=-0.2, width=0.4,
+            offset=-0.41, width=0.38,
             text=investor_df['frgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if x != 0 else ""),
             textposition='auto', textfont=dict(size=10, color='white')
         ), row=3, col=1)
         
-        # 기관 순매수
+        # 기관 순매수 (offset=0.03, width=0.38 -> [+0.03, +0.41] -> 경계선 0.5 내부 안착!)
         fig_bar.add_trace(go.Bar(
             x=investor_df['date_str'], y=investor_df['orgn_net_100m'],
             name="기관 순매수", marker_color='#00FA9A', opacity=0.9,
-            offset=0.2, width=0.4,
+            offset=0.03, width=0.38,
             text=investor_df['orgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if x != 0 else ""),
             textposition='auto', textfont=dict(size=10, color='black')
         ), row=3, col=1)
