@@ -471,10 +471,43 @@ def get_gemini_company_summary(stock_name, news_text=""):
 
     return summary
 
-@st.cache_data(ttl=86400)
-def get_cached_krx_listing():
-    import FinanceDataReader as fdr
-    return fdr.StockListing('KRX')
+def render_ai_summary_box(text):
+    if not text:
+        return
+    import re
+    
+    # 1. 굵은 글씨 및 줄바꿈 처리
+    html_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    html_text = html_text.replace("\n", "<br>")
+    
+    # 2. "1. 🏢 기업 개요", "2. 📊 현재 상황 및 평가" 계열 -> 빨간색 (Red: #ff4b4b)
+    red_style = "color: #ff4b4b; font-weight: bold; font-size: 1.05em;"
+    html_text = re.sub(
+        r'(1\.\s*(?:🏢|🏫)?\s*기업\s*개요)',
+        rf'<span style="{red_style}">\1</span>',
+        html_text
+    )
+    html_text = re.sub(
+        r'(2\.\s*(?:📊|📈)?\s*현재\s*상황\s*및\s*평가)',
+        rf'<span style="{red_style}">\1</span>',
+        html_text
+    )
+    
+    # 3. "[호재]", "[악재]", "[전망]" -> 주홍색 (Orange: #ff7f50)
+    orange_style = "color: #ff7f50; font-weight: bold;"
+    html_text = re.sub(
+        r'(\[호재\]|\[악재\]|\[전망\])',
+        rf'<span style="{orange_style}">\1</span>',
+        html_text
+    )
+    
+    # 4. 시인성 높은 다크 그린 배경 컨테이너 렌더링
+    container_html = f"""
+    <div style="background-color: rgba(30, 50, 35, 0.45); border: 1px solid rgba(46, 125, 50, 0.5); border-radius: 8px; padding: 16px; font-size: 0.95em; line-height: 1.7; color: #e0e0e0; margin-bottom: 12px;">
+        {html_text}
+    </div>
+    """
+    st.markdown(container_html, unsafe_allow_html=True)
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
@@ -587,14 +620,14 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
             pass
 
         if db_summary:
-            st.success(db_summary)
+            render_ai_summary_box(db_summary)
         else:
             st.info("💡 처음 조회하는 뉴스이거나 기존 분석이 만료(30일 경과)되었습니다. 아래 버튼을 눌러 AI 분석을 갱신하세요.")
             if st.button("🤖 Gemini AI 분석 시작", key=f"gemini_btn_{stock_name}"):
                 with st.spinner("Gemini AI가 뉴스를 바탕으로 분석 중입니다..."):
                     try:
                         gemini_summary = get_gemini_company_summary(stock_name, naver_news_raw)
-                        st.success(gemini_summary)
+                        render_ai_summary_box(gemini_summary)
                     except Exception as e:
                         err_msg = str(e)
                         if "API_KEY_MISSING" in err_msg:
@@ -620,14 +653,14 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                 pass
 
             if db_summary_gpt:
-                st.success(db_summary_gpt)
+                render_ai_summary_box(db_summary_gpt)
             else:
                 st.info("💡 처음 조회하는 뉴스이거나 기존 분석이 만료(30일 경과)되었습니다. 아래 버튼을 눌러 AI 분석을 갱신하세요.")
                 if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
                     with st.spinner("ChatGPT가 뉴스를 바탕으로 분석 중입니다..."):
                         try:
                             chatgpt_summary = get_chatgpt_company_summary(stock_name, naver_news_raw)
-                            st.success(chatgpt_summary)
+                            render_ai_summary_box(chatgpt_summary)
                         except Exception as e:
                             err_msg = str(e)
                             if "OPENAI_API_KEY_MISSING" in err_msg:
