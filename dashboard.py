@@ -2000,11 +2000,13 @@ def draw_whale_bar_chart(target_code, target_name, df):
                         row=4, col=1
                     )
     
-    # 5. 차트 영점 조절
+    # 5. 차트 영점 조절 및 일별 시인성 극대화 튜닝
     fig_bar.update_layout(
         template='plotly_dark',
         plot_bgcolor='#11111b', paper_bgcolor='#11111b',
-        barmode='group', # 다시 group으로 복구 (각 row가 독립적인 막대 너비를 가짐)
+        barmode='group',
+        bargap=0.2, # 일별 막대 간격 정돈
+        hovermode='x unified', # 4개 차트를 관통하는 수직 호버 가이드라인
         legend=dict(title="", orientation="h", yanchor="bottom", y=1.05, xanchor="left", x=0.0),
         height=850, margin=dict(l=20, r=20, t=60, b=40),
         xaxis_rangeslider_visible=False,
@@ -2013,16 +2015,29 @@ def draw_whale_bar_chart(target_code, target_name, df):
         xaxis4_rangeslider_visible=False
     )
     
-    # 축 설정
-    fig_bar.update_xaxes(title_text="날짜", type='category', categoryorder='category descending', tickangle=45, gridcolor='#2a2a2a', rangeslider=dict(visible=False), row=4, col=1)
-    fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, gridcolor='#2a2a2a', row=1, col=1)
-    fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, gridcolor='#2a2a2a', row=2, col=1)
-    fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, gridcolor='#2a2a2a', row=3, col=1)
+    # 🚨 [형님 맞춤형 튜닝]: 수평 배경선 수준의 은은함을 가지는 깔끔한 세로 점선(Dotted Line) 세팅
+    grid_style = dict(
+        showgrid=True, 
+        gridcolor='rgba(255, 255, 255, 0.15)', # 수평선과 균형을 이루는 은은한 밝기
+        griddash='dot',                        # 마우스 대기 전에도 바로 구분되는 점선 (Dot)
+        gridwidth=1,
+        showspikes=True,
+        spikemode='across',
+        spikesnap='cursor',
+        spikecolor='#ff4b4b',
+        spikethickness=1.5
+    )
     
-    fig_bar.update_yaxes(title_text="고래 수급 (억원)", gridcolor='#2a2a2a', tickformat=",.0f", row=1, col=1)
-    fig_bar.update_yaxes(title_text="전체 대금 (억원)", gridcolor='#2a2a2a', tickformat=",.0f", row=2, col=1)
-    fig_bar.update_yaxes(title_text="외인/기관 (억원)", gridcolor='#2a2a2a', tickformat=",.0f", row=3, col=1)
-    fig_bar.update_yaxes(title_text="주가 (원)", gridcolor='#2a2a2a', tickformat=",.0f", row=4, col=1)
+    # 축 설정
+    fig_bar.update_xaxes(title_text="날짜", type='category', categoryorder='category descending', tickangle=45, rangeslider=dict(visible=False), row=4, col=1, **grid_style)
+    fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, row=1, col=1, **grid_style)
+    fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, row=2, col=1, **grid_style)
+    fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, row=3, col=1, **grid_style)
+    
+    fig_bar.update_yaxes(title_text="고래 수급 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", row=1, col=1)
+    fig_bar.update_yaxes(title_text="전체 대금 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", row=2, col=1)
+    fig_bar.update_yaxes(title_text="외인/기관 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", row=3, col=1)
+    fig_bar.update_yaxes(title_text="주가 (원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", row=4, col=1)
     
     # 🔍 줌(확대) 기능 추가
     zoom_key = f'zoom_{target_code}'
