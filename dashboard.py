@@ -4488,8 +4488,8 @@ if choice == "🏠 홈화면":
                         
                         # 합산 필드 만들어서 정렬 (합산 순매수 기준)
                         df_top['외/기 합산 순매수(억)'] = (df_top["frgn_buy"] - df_top["frgn_sell"]) + (df_top["orgn_buy"] - df_top["orgn_sell"])
-                        df_top['🟣외국인 매수세(억)'] = df_top["frgn_buy"] - df_top["frgn_sell"]
-                        df_top['🟡기관 매수세(억)'] = df_top["orgn_buy"] - df_top["orgn_sell"]
+                        df_top['🟣외국인 순매수(억)'] = df_top["frgn_buy"] - df_top["frgn_sell"]
+                        df_top['🟡기관 순매수(억)'] = df_top["orgn_buy"] - df_top["orgn_sell"]
                         df_top = df_top.sort_values(by="외/기 합산 순매수(억)", ascending=False)
 
                         
@@ -4504,34 +4504,54 @@ if choice == "🏠 홈화면":
                             "orgn_sell": "🟢기관 매도(억)"
                         })
                         
-                        # 합산 필드 이름도 이모지 추가
-                        df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 합산(억)"}, inplace=True)
+                        # 합산 필드 이름도 이모지 추가 (외/기 순매수로 변경)
+                        df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 순매수(억)"}, inplace=True)
                         
                         # 🚨 [시장 경보] 투자경고 배지 부여 (전용 칼럼으로 분리)
                         global_meta = get_global_stock_metadata()
                         df_top['특이사항'] = df_top['종목명'].apply(lambda x: get_warning_text(x, global_meta))
 
-                        display_cols = ["날짜", "시장", "종목명", "특이사항", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟣외국인 매수세(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟡기관 매수세(억)", "🟣외/기 합산(억)"]
+                        display_cols = ["날짜", "시장", "종목명", "특이사항", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟣외국인 순매수(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟡기관 순매수(억)", "🟣외/기 순매수(억)"]
                         display_df = df_top[display_cols]
                         
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         t2 = time.time()
                         
-                        # 형님이 원하셨던 '글자 색상' 스크립트 복원!
-                        def get_col_color(col_name):
-                            if col_name == "🔴외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
-                            elif col_name == "🔵외국인 매도(억)": return "color: #1e90ff;"     # 파랑
-                            elif col_name == "🟣외국인 매수세(억)": return "color: #b388ff;"   # 밝은 보라
-                            elif col_name == "🟠기관 매수(억)": return "color: #ff7f50;"       # 주홍
-                            elif col_name == "🟢기관 매도(억)": return "color: #2e8b57;"       # 진녹
-                            elif col_name == "🟡기관 매수세(억)": return "color: #ffd54f;"     # 노랑
-                            elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;"       # 옅은 보라
-                            elif col_name == "특이사항": return "color: #FADB5F; font-weight: bold;" # 노란색
-                            return ""
+                        # 🎨 [셀 단위 렌더링]: 음수(-) 값일 경우 같은 색상 계열에서 톤다운(어둡게) 렌더링
+                        def get_cell_style(col):
+                            styles = []
+                            for val in col:
+                                col_name = col.name
+                                if col_name == "🔴외국인 매수(억)":
+                                    styles.append("color: #ff4b4b;")       # 빨강
+                                elif col_name == "🔵외국인 매도(억)":
+                                    styles.append("color: #1e90ff;")     # 파랑
+                                elif col_name == "🟣외국인 순매수(억)":
+                                    if isinstance(val, (int, float)) and val < 0:
+                                        styles.append("color: #7c5295;")  # 음수: 톤다운된 보라 (순매도)
+                                    else:
+                                        styles.append("color: #b388ff;")  # 양수: 밝은 보라 (순매수)
+                                elif col_name == "🟠기관 매수(억)":
+                                    styles.append("color: #ff7f50;")       # 주홍
+                                elif col_name == "🟢기관 매도(억)":
+                                    styles.append("color: #2e8b57;")       # 진녹
+                                elif col_name == "🟡기관 순매수(억)":
+                                    if isinstance(val, (int, float)) and val < 0:
+                                        styles.append("color: #998028;")  # 음수: 톤다운된 황갈색 (순매도)
+                                    else:
+                                        styles.append("color: #ffd54f;")  # 양수: 밝은 노랑 (순매수)
+                                elif col_name == "🟣외/기 순매수(억)":
+                                    if isinstance(val, (int, float)) and val < 0:
+                                        styles.append("color: #856a85;")  # 음수: 톤다운된 연보라 (순매도)
+                                    else:
+                                        styles.append("color: #d8bfd8;")  # 양수: 옅은 보라 (순매수)
+                                elif col_name == "특이사항":
+                                    styles.append("color: #FADB5F; font-weight: bold;") # 노란색
+                                else:
+                                    styles.append("")
+                            return styles
                             
-                        styled_df = display_df.style.apply(
-                            lambda col: [get_col_color(col.name)] * len(col), axis=0
-                        )
+                        styled_df = display_df.style.apply(get_cell_style, axis=0)
                         
                         st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas가공: {t2-t1:.2f}초 | (색상 렌더링 복구 완료!)")
                         
@@ -4546,11 +4566,11 @@ if choice == "🏠 홈화면":
                             column_config={
                                 "🔴외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🔵외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🟣외국인 매수세(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🟠기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
                                 "🟢기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🟡기관 매수세(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🟣외/기 합산(억)": st.column_config.NumberColumn(format="%.2f")
+                                "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%.2f"),
+                                "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%.2f")
                             }
                         )
                         
