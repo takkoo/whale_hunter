@@ -205,6 +205,12 @@ def get_warning_text(stock_name, metadata):
 
 @st.cache_data(ttl=86400)
 def get_naver_company_summary(stock_name, stock_code):
+    summary_text = ""
+    news_md = ""
+    news_raw = ""
+    fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A', 'roe': 'N/A', 'warnings': []}
+
+    # 1. 네이버 금융 시도
     try:
         url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
         headers = {
@@ -214,36 +220,33 @@ def get_naver_company_summary(stock_name, stock_code):
             'Referer': 'https://finance.naver.com/'
         }
         res = requests.get(url, headers=headers, timeout=3)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
-        summary_p = soup.select_one('.summary_info p')
-        summary_text = summary_p.text.strip() if summary_p else "네이버 금융에서 기업개요를 찾을 수 없습니다."
-        
-        news_links = soup.select('.news_section ul li a')
-        news_html_items = []
-        news_raw_items = []
-        for a in news_links:
-            title = a.text.strip()
-            if "관련" not in title and title:
-                href = a.get('href', '')
-                if href.startswith('/'):
-                    href = "https://finance.naver.com" + href
-                news_html_items.append(f"<li style='margin-bottom: 6px; margin-left: 20px;'><a href='{href}' target='_blank' style='color: #FADB5F; text-decoration: none;'>{title}</a></li>")
-                news_raw_items.append(f"- {title}")
-                
-        news_md = f"<ul style='margin-top: 5px; margin-bottom: 0;'>{''.join(news_html_items[:5])}</ul>" if news_html_items else "최근 관련 뉴스가 없습니다."
-        news_raw = "\n".join(news_raw_items[:5]) if news_raw_items else "최근 관련 뉴스가 없습니다."
-        
-        fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A', 'warnings': []}
-        try:
-            # 시장경보 (투자주의, 투자경고, 투자위험, 관리종목 등)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            summary_p = soup.select_one('.summary_info p')
+            if summary_p and summary_p.text.strip():
+                summary_text = summary_p.text.strip()
+            
+            news_links = soup.select('.news_section ul li a')
+            news_html_items = []
+            news_raw_items = []
+            for a in news_links:
+                title = a.text.strip()
+                if "관련" not in title and title:
+                    href = a.get('href', '')
+                    if href.startswith('/'):
+                        href = "https://finance.naver.com" + href
+                    news_html_items.append(f"<li style='margin-bottom: 6px; margin-left: 20px;'><a href='{href}' target='_blank' style='color: #FADB5F; text-decoration: none;'>{title}</a></li>")
+                    news_raw_items.append(f"- {title}")
+                    
+            if news_html_items:
+                news_md = f"<ul style='margin-top: 5px; margin-bottom: 0;'>{''.join(news_html_items[:5])}</ul>"
+                news_raw = "\n".join(news_raw_items[:5])
+
             warnings = set()
             for em in soup.select('.description em'):
                 blind = em.select_one('.blind')
-                if blind:
-                    text = blind.text.strip()
-                    if text in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '투자주의환기종목']:
-                        warnings.add(text)
+                if blind and blind.text.strip() in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '투자주의환기종목']:
+                    warnings.add(blind.text.strip())
             for img in soup.select('.description img'):
                 alt = img.get('alt', '')
                 if alt in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '환기종목']:
@@ -268,7 +271,6 @@ def get_naver_company_summary(stock_name, stock_code):
             pbr_tag = soup.select_one('#_pbr')
             if pbr_tag: fin_info['pbr'] = pbr_tag.text.strip()
             
-            # ROE 추출
             cop_table = soup.select_one('.cop_analysis')
             if cop_table:
                 for th in cop_table.select('th'):
@@ -278,12 +280,39 @@ def get_naver_company_summary(stock_name, stock_code):
                         if vals:
                             fin_info['roe'] = vals[-1]
                         break
-        except Exception: pass
-        
-        return summary_text, news_md, news_raw, fin_info
-    except Exception as e:
-        import urllib.parse
-        fallback_summary = f"{stock_name} 기업 개요를 불러올 수 없습니다."
+    except Exception:
+        pass
+
+    # 2. 다음 금융 API 2차 구원 투수 (네이버 실패 또는 개요 누락 시)
+    if not summary_text or fin_info['price'] == 'N/A':
+        try:
+            d_url = f"https://finance.daum.net/api/quotes/A{stock_code}"
+            d_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                'Referer': 'https://finance.daum.net/'
+            }
+            d_res = requests.get(d_url, headers=d_headers, timeout=3)
+            if d_res.status_code == 200:
+                d_json = d_res.json()
+                if not summary_text:
+                    d_sum = d_json.get('companySummary', '').strip()
+                    if d_sum:
+                        summary_text = d_sum
+                if fin_info['price'] == 'N/A' and d_json.get('tradePrice'):
+                    fin_info['price'] = f"{int(d_json['tradePrice']):,}"
+                if fin_info['high52'] == 'N/A' and d_json.get('high52wPrice'):
+                    fin_info['high52'] = f"{int(d_json['high52wPrice']):,}"
+                if fin_info['low52'] == 'N/A' and d_json.get('low52wPrice'):
+                    fin_info['low52'] = f"{int(d_json['low52wPrice']):,}"
+                if fin_info['per'] == 'N/A' and d_json.get('per'):
+                    fin_info['per'] = str(d_json['per'])
+                if fin_info['pbr'] == 'N/A' and d_json.get('pbr'):
+                    fin_info['pbr'] = str(d_json['pbr'])
+        except Exception:
+            pass
+
+    # 3. KRX 상장 데이터 3차 보완
+    if not summary_text:
         try:
             import pandas as pd
             krx_df = get_cached_krx_listing()
@@ -293,12 +322,17 @@ def get_naver_company_summary(stock_name, stock_code):
                     sector = stock_row.iloc[0].get('Sector', '')
                     industry = stock_row.iloc[0].get('Industry', '')
                     if pd.notna(sector) and pd.notna(industry) and sector and industry:
-                        fallback_summary = f"동사는 {sector} 섹터에 속하는 기업으로, 주요 사업으로 {industry}을(를) 영위하고 있음."
+                        summary_text = f"동사는 {sector} 섹터에 속하는 기업으로, 주요 사업으로 {industry}을(를) 영위하고 있음."
         except Exception:
             pass
-        fallback_news_md = "최근 뉴스를 불러올 수 없습니다."
-        fallback_news_raw = ""
+
+    if not summary_text:
+        summary_text = f"동사는 국내 시장에 상장된 주요 기업으로, 사업 영역을 지속적으로 확장해 나가고 있음."
+
+    # 4. 최근 뉴스 구글 RSS 4차 보완
+    if not news_md:
         try:
+            import urllib.parse
             gnews_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(stock_name + ' 주식')}&hl=ko&gl=KR&ceid=KR:ko"
             g_res = requests.get(gnews_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=4)
             g_soup = BeautifulSoup(g_res.text, 'xml')
@@ -312,11 +346,16 @@ def get_naver_company_summary(stock_name, stock_code):
                     md_items.append(f"<li style='margin-bottom: 6px; margin-left: 20px;'><a href='{link}' target='_blank' style='color: #FADB5F; text-decoration: none;'>{title}</a></li>")
                     raw_items.append(f"- {title}")
             if md_items:
-                fallback_news_md = f"<ul style='margin-top: 5px; margin-bottom: 0;'>{''.join(md_items)}</ul>"
-                fallback_news_raw = "\n".join(raw_items)
+                news_md = f"<ul style='margin-top: 5px; margin-bottom: 0;'>{''.join(md_items)}</ul>"
+                news_raw = "\n".join(raw_items)
         except Exception:
             pass
-        return fallback_summary, fallback_news_md, fallback_news_raw, {}
+
+    if not news_md:
+        news_md = "최근 관련 뉴스를 불러올 수 없습니다."
+        news_raw = "최근 관련 뉴스가 없습니다."
+
+    return summary_text, news_md, news_raw, fin_info
 
 def get_chatgpt_company_summary(stock_name, news_text=""):
     gpt_stock_key = f"[GPT]{stock_name}"
