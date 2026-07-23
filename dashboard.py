@@ -370,10 +370,10 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
     prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 다음 두 가지 항목으로 나누어 분석해줘.
 주의: 답변 내용에 '(1~2줄)', '(3~4줄)' 같은 분량 지시어는 절대 출력하지 마.
 
-**1. 🏢 기업 개요**
+**1. 기업 개요**
 이 회사의 핵심 기술과 주요 사업 내용을 1~2줄로 요약해줘.
 
-**2. 📊 현재 상황 및 평가**
+**2. 현재 상황 및 평가**
 다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘.
 (반드시 아래 예시 포맷을 지켜서 작성할 것)
 - [호재] ~~~
@@ -431,10 +431,10 @@ def get_gemini_company_summary(stock_name, news_text=""):
     prompt = f"""한국 주식 시장에 상장된 '{stock_name}' 이라는 기업에 대해 다음 두 가지 항목으로 나누어 분석해줘.
 주의: 답변 내용에 '(1~2줄)', '(3~4줄)' 같은 분량 지시어는 절대 출력하지 마.
 
-**1. 🏢 기업 개요**
+**1. 기업 개요**
 이 회사의 핵심 기술과 주요 사업 내용을 1~2줄로 요약해줘.
 
-**2. 📊 현재 상황 및 평가**
+**2. 현재 상황 및 평가**
 다음 최근 뉴스 제목들을 바탕으로 현재 이 기업의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘.
 (반드시 아래 예시 포맷을 지켜서 작성할 것)
 - [호재] ~~~
@@ -480,16 +480,16 @@ def render_ai_summary_box(text):
     html_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     html_text = html_text.replace("\n", "<br>")
     
-    # 2. "1. 🏢 기업 개요", "2. 📊 현재 상황 및 평가" 계열 -> 빨간색 (Red: #ff4b4b)
+    # 2. "1. 기업 개요", "2. 현재 상황 및 평가" -> 빨간색 (Red: #ff4b4b), 아이콘 이모지 제거
     red_style = "color: #ff4b4b; font-weight: bold; font-size: 1.05em;"
     html_text = re.sub(
-        r'(1\.\s*(?:🏢|🏫)?\s*기업\s*개요)',
-        rf'<span style="{red_style}">\1</span>',
+        r'1\.\s*(?:🏢|🏫)?\s*기업\s*개요',
+        rf'<span style="{red_style}">1. 기업 개요</span>',
         html_text
     )
     html_text = re.sub(
-        r'(2\.\s*(?:📊|📈)?\s*현재\s*상황\s*및\s*평가)',
-        rf'<span style="{red_style}">\1</span>',
+        r'2\.\s*(?:📊|📈)?\s*현재\s*상황\s*및\s*평가',
+        rf'<span style="{red_style}">2. 현재 상황 및 평가</span>',
         html_text
     )
     
@@ -5291,7 +5291,7 @@ if choice == "🏠 홈화면":
                             "date": "체결일자",
                             "time": "체결시간",
                             "name": "종목명",
-                            "특이사항": "특이사항",
+                            "특이사항": st.column_config.TextColumn("특이사항", width="medium"),
                             "price": st.column_config.NumberColumn(("\u00A0" * 16) + "체결가 (원)"),
                             "volume": st.column_config.NumberColumn(("\u00A0" * 16) + "체결량 (주)"),
                             "buy_amount": st.column_config.NumberColumn("매수금액 (백만)"), 
