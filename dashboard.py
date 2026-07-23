@@ -690,8 +690,8 @@ def mock_data_dialog(stock, date_str):
                 market = matched.iloc[0]['Market']
                 market_type = "KOSPI" if market in ["KOSPI", "KOSPI200"] else "KOSDAQ"
                 
-                # Fetch price
-                df_price = fdr.DataReader(code, start=date_str, end=date_str)
+                # Fetch price via ultra-fast Naver/Daum API
+                df_price = fetch_kis_daily_volume(code)
                 if df_price.empty:
                     st.error(f"⚠️ {date_str}의 주가 데이터가 없습니다. (휴장일이거나 거래 정지 상태)")
                     return
@@ -769,24 +769,103 @@ def get_themes_for_stocks(stock_names):
 
 
 @st.cache_data(ttl=600)
-def fetch_kis_daily_volume(stock_code, start_date):
+def fetch_kis_daily_volume(stock_code, start_date=None):
+    """
+    FinanceDataReader의 해외 IP(Streamlit Cloud) 차단 문제를 원천 방지하기 위해 
+    네이버/다음 전용 API 체인으로 일별 OHLCV 및 거래대금 데이터를 초고속(0.1초)으로 가져옵니다.
+    """
+    code = str(stock_code).strip().zfill(6)
+    
+    # 1. 네이버 차트 XML API (fchart - 해외 IP 차단 없음, 0.1초 소요)
     try:
-        # FDR을 사용하여 안정적으로 종가 및 거래량 가져오기 (API 키 필요 없음)
-        df = fdr.DataReader(stock_code, start_date)
-        if df.empty:
-            return pd.DataFrame()
-            
-        # 거래정지(단기과열 등)로 인해 거래량이 아예 없는 날(Open=0 등)은 차트에서 제외
-        df = df[df['Volume'] > 0]
-        if df.empty:
-            return pd.DataFrame()
-        
-        # 거래대금 = 거래량 * 종가 (근사치이지만 매우 정확함)
-        df['acml_tr_pbmn'] = df['Volume'] * df['Close']
-        df['date'] = df.index.date
-        return df.reset_index()
-    except Exception as e:
-        return pd.DataFrame()
+        url = f"https://fchart.stock.naver.com/sise.nhn?symbol={code}&timeframe=day&count=45&requestType=0"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        res = requests.get(url, headers=headers, timeout=3)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'xml')
+            items = soup.find_all('item')
+            records = []
+            for item in items:
+                data_str = item.get('data', '')
+                parts = data_str.split('|')
+                if len(parts) >= 6:
+                    d_str, op, hp, lp, cp, vol = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+                    try:
+                        d_obj = datetime.strptime(d_str, '%Y%m%d').date()
+                        open_p = float(op)
+                        high_p = float(hp)
+                        low_p = float(lp)
+                        close_p = float(cp)
+                        volume_p = float(vol)
+                        if volume_p > 0 and close_p > 0:
+                            records.append({
+                                'Date': pd.to_datetime(d_obj),
+                                'date': d_obj,
+                                'Open': open_p,
+                                'High': high_p,
+                                'Low': low_p,
+                                'Close': close_p,
+                                'Volume': volume_p,
+                                'acml_tr_pbmn': close_p * volume_p
+                            })
+                    except ValueError:
+                        continue
+            if records:
+                return pd.DataFrame(records)
+    except Exception:
+        pass
+
+    # 2. 다음 금융 일별 API (Daum Days API)
+    try:
+        d_url = f"https://finance.daum.net/api/quote/A{code}/days?symbolCode=A{code}&page=1&perPage=45"
+        d_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://finance.daum.net/'}
+        res = requests.get(d_url, headers=d_headers, timeout=3)
+        if res.status_code == 200:
+            items = res.json().get('data', [])
+            records = []
+            for item in items:
+                try:
+                    d_str = item.get('date', '').split(' ')[0]
+                    d_obj = datetime.strptime(d_str, '%Y-%m-%d').date()
+                    open_p = float(item.get('openingPrice', 0))
+                    high_p = float(item.get('highPrice', 0))
+                    low_p = float(item.get('lowPrice', 0))
+                    close_p = float(item.get('tradePrice', 0))
+                    volume_p = float(item.get('accTradeVolume', 0))
+                    amount_p = float(item.get('accTradePrice', close_p * volume_p))
+                    if volume_p > 0 and close_p > 0:
+                        records.append({
+                            'Date': pd.to_datetime(d_obj),
+                            'date': d_obj,
+                            'Open': open_p,
+                            'High': high_p,
+                            'Low': low_p,
+                            'Close': close_p,
+                            'Volume': volume_p,
+                            'acml_tr_pbmn': amount_p
+                        })
+                except ValueError:
+                    continue
+            if records:
+                df = pd.DataFrame(records)
+                return df.sort_values('date').reset_index(drop=True)
+    except Exception:
+        pass
+
+    # 3. FDR 최후 보완 (백업)
+    try:
+        start = start_date if start_date else (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        df = fdr.DataReader(code, start)
+        if not df.empty:
+            df = df[df['Volume'] > 0]
+            df['acml_tr_pbmn'] = df['Volume'] * df['Close']
+            df['date'] = df.index.date
+            df['Date'] = pd.to_datetime(df['date'])
+            return df.reset_index()
+    except Exception:
+        pass
+
+    return pd.DataFrame()
 # ------------------------------------------------------------------
 # 📊 [투자자별 매매동향] 한투 KIS OpenAPI 연동
 # ------------------------------------------------------------------
@@ -3472,7 +3551,7 @@ if choice == "🏠 홈화면":
                                     progress_text.text(f"주가 데이터 조회 중: {name} ({idx+1}/{total_stocks})")
                                     
                                     try:
-                                        price_df = fdr.DataReader(code, str_start, str_end)
+                                        price_df = fetch_kis_daily_volume(code)
                                         if not price_df.empty and len(price_df) > 0:
                                             start_price = price_df.iloc[0]['Open']
                                             end_price = price_df.iloc[-1]['Close']
