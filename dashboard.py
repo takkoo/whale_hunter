@@ -2015,12 +2015,13 @@ def draw_whale_bar_chart(target_code, target_name, df):
         xaxis4_rangeslider_visible=False
     )
     
-    # 🚨 [형님 맞춤형 튜닝]: 수평 배경선 수준의 은은함을 가지는 깔끔한 세로 점선(Dotted Line) 세팅
+    # 🚨 [날짜 경계 구분선 튜닝]: 격자선을 막대 중앙이 아닌 '날짜와 날짜 사이(경계선)'로 이동 (tickson='boundaries')
     grid_style = dict(
         showgrid=True, 
-        gridcolor='rgba(255, 255, 255, 0.15)', # 수평선과 균형을 이루는 은은한 밝기
-        griddash='dot',                        # 마우스 대기 전에도 바로 구분되는 점선 (Dot)
+        gridcolor='rgba(255, 255, 255, 0.20)', # 눈에 편안한 은은한 구분선
+        griddash='dot',                        # 점선 (Dot) 스타일
         gridwidth=1,
+        tickson='boundaries',                  # 🎯 막대 중앙 관통 방지! '날짜 간 경계선' 위치로 세로선 이동
         showspikes=True,
         spikemode='across',
         spikesnap='cursor',
