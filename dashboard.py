@@ -1860,15 +1860,18 @@ def draw_whale_bar_chart(target_code, target_name, df):
     thirty_days_ago = today - timedelta(days=30)
     kis_df = fetch_kis_daily_volume(target_code, thirty_days_ago)
     
+    valid_dates = merged_df['date_str'].unique()
+
     if not kis_df.empty:
         kis_df['date_str'] = pd.to_datetime(kis_df['date']).dt.strftime('%m-%d')
         kis_df['amount_100m'] = kis_df['acml_tr_pbmn'] / 100000000
+        # 🚨 [축 왜곡 방지]: 30일 범위(valid_dates) 밖의 묵은 데이터는 잘라내어 X축이 60일로 벌어지는 현상 차단
+        kis_df = kis_df[kis_df['date_str'].isin(valid_dates)]
 
     # 투자자별 매매동향 (외국인/기관) 가져오기
     investor_df = fetch_investor_net_buying(target_code)
-    valid_dates = merged_df['date_str'].unique()
     if not investor_df.empty:
-        # 30일(달력기준) 이내의 데이터만 남기기 (주말 등 제외로 데이터가 많아지는 현상 방지)
+        # 30일(달력기준) 이내의 데이터만 남기기
         investor_df = investor_df[investor_df['date_str'].isin(valid_dates)]
     
     # 4. 차트 레이아웃 구성 (위: 고래 수급, 2: 시장 거래대금, 3: 외인/기관 수급, 4: 캔들차트)
