@@ -5319,8 +5319,8 @@ if choice == "🏠 홈화면":
                     grid_key = f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}_{st.session_state.get('df_reset_counter', 0)}"
                     event = st.dataframe(
                         styled_df, 
-                        # 🛠️ [교정 3] 출력 전광판 순서에서 amount_krw를 폐기하고, 신형 듀얼 레일을 배치합니다!
-                        column_order=["No.", "date", "time", "name", "특이사항", "price", "volume", "buy_amount", "sell_amount", "unknown_amount", "market_type"],
+                        # 🛠️ [교정 3] 출력 전광판에서 '방미금액(unknown_amount)' 컬럼을 제거하고 매수/매도 중심의 깔끔한 컬럼 배치 적용!
+                        column_order=["No.", "date", "time", "name", "특이사항", "price", "volume", "buy_amount", "sell_amount", "market_type"],
                         
                         column_config={
                             "No.": st.column_config.NumberColumn("순번", format="%d"),
@@ -5332,7 +5332,6 @@ if choice == "🏠 홈화면":
                             "volume": st.column_config.NumberColumn(("\u00A0" * 16) + "체결량 (주)"),
                             "buy_amount": st.column_config.NumberColumn("매수금액 (백만)"), 
                             "sell_amount": st.column_config.NumberColumn("매도금액 (백만)"), 
-                            "unknown_amount": st.column_config.NumberColumn("방미금액 (백만)"),
                             "market_type": "시장구분"
                         },
                         hide_index=True,  
