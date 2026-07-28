@@ -105,7 +105,7 @@ apply_query_params(raw_qs)
 if not st.session_state.get('authenticated', False):
     _scrn = st.session_state.get('scrn_select_radio', "체결 로그")
     _search = st.session_state.get('search_input_val', "")
-    if _scrn in ["TOP 10 화면", "수익율 화면", "상선고 화면", "기간 누적 폭주"] or st.session_state.get('upper_limit_filter', False) or _search:
+    if _scrn in ["TOP 10 화면", "수익율 화면", "상선고 화면", "기간 누적 폭주", "고래 골든픽"] or st.session_state.get('upper_limit_filter', False) or _search:
         st.session_state['scrn_select_radio'] = "체결 로그"
         st.session_state['upper_limit_filter'] = False
         st.session_state['last_search_keyword'] = ""
@@ -2790,6 +2790,40 @@ if choice == "🏠 홈화면":
             font-weight: bold !important;
             line-height: 1 !important;
         }
+
+        /* 🏆 골든픽 버튼 (보라색/황금색) 스타일 */
+        div.element-container:has(.btn-style-purple) { display: none; }
+        div.element-container:has(.btn-style-purple) + div.element-container button { 
+            background-color: #9c27b0 !important; 
+            border: 1px solid #7b1fa2 !important;
+            padding-left: 4px !important; 
+            padding-right: 4px !important; 
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-purple) + div.element-container button p { 
+            font-size: 13px !important; 
+            color: #ffffff !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+        div.element-container:has(.btn-style-purple-active) { display: none; }
+        div.element-container:has(.btn-style-purple-active) + div.element-container button { 
+            background-color: transparent !important;
+            border: 2px solid #e040fb !important;
+            padding-left: 4px !important; 
+            padding-right: 4px !important; 
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-purple-active) + div.element-container button p { 
+            font-size: 13px !important; 
+            color: #e040fb !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
         
         /* 기폭주 버튼 활성화 상태 */
         div.element-container:has(.btn-style-red-active) { display: none; }
@@ -3062,8 +3096,12 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "기간 누적 폭주"
                     st.rerun()
         with btn_col7:
-            st.markdown(f'<div class="btn-style-gray"></div>', unsafe_allow_html=True)
-            if st.button("예비2", key="btn_res2", use_container_width=True): pass
+            cls_res2 = "btn-style-purple-active" if scrn_select == "고래 골든픽" else "btn-style-purple"
+            st.markdown(f'<div class="{cls_res2}"></div>', unsafe_allow_html=True)
+            if st.button("골든픽", key="btn_res2", use_container_width=True):
+                if st.session_state.get('scrn_select_radio') != "고래 골든픽":
+                    st.session_state['scrn_select_radio'] = "고래 골든픽"
+                    st.rerun()
         with btn_col8:
             st.markdown(f'<div class="btn-style-gray"></div>', unsafe_allow_html=True)
             if st.button("예비3", key="btn_res3", use_container_width=True): pass
@@ -3097,7 +3135,7 @@ if choice == "🏠 홈화면":
     # 체결 로그(목록보기) 상태이고 검색어가 없을 때는 세션에 저장된 limit 만큼 가져옵니다.
     if scrn_select == "체결 로그" and not search_keyword.strip():
         fetch_limit = st.session_state['log_fetch_limit']
-    elif scrn_select in ["TOP 10 화면", "수익율 화면"]:
+    elif scrn_select in ["TOP 10 화면", "수익율 화면", "고래 골든픽"]:
         fetch_limit = 0 # 개별 화면은 전역 글로벌 데이터가 필요 없음
     else:
         fetch_limit = None
@@ -3196,7 +3234,7 @@ if choice == "🏠 홈화면":
             st.session_state['current_user'] = ""
             st.rerun()
 
-    if df.empty and scrn_select not in ["TOP 10 화면", "수익율 화면", "상선고 화면", "수익율 자랑", "기간 누적 폭주"]:
+    if df.empty and scrn_select not in ["TOP 10 화면", "수익율 화면", "상선고 화면", "수익율 자랑", "기간 누적 폭주", "고래 골든픽"]:
         st.warning("⚠️ 해당 조건의 고래 데이터가 없거나, 아직 수집 전입니다!")
     else:
         # 메인 차트용 데이터 필터링
@@ -4604,6 +4642,235 @@ if choice == "🏠 홈화면":
                             st.session_state.pop('last_summary_stock_top100', None)
                     else:
                         st.info("해당 날짜의 수급 데이터가 아직 수집되지 않았거나 휴장일입니다. (또는 너무 오래된 과거입니다)")
+
+        elif scrn_select == "고래 골든픽":
+            st.markdown("<h4 style='color:#E040FB; border-left: 4px solid #E040FB; padding-left: 10px;'>🏆 고래 골든픽 (황금 승률 추천 TOP 20)</h4>", unsafe_allow_html=True)
+            st.write("시장 세력 수급, 외인/기관 쌍끌이, 상한가 족보, 실시간 고래 활동 및 위험 배지를 입체 종합 분석하여 산출된 1~20위 최정예 추천 종목입니다. 🚀")
+
+            global_meta = get_global_stock_metadata()
+
+            # 1. 10일간 수급 데이터 가져오기 (연속 출현 횟수 판독용)
+            start_date_str = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+            top_res = supabase.table("daily_whale_top200").select("*").gte("trade_date", start_date_str).order("trade_date", desc=True).execute()
+            if not top_res.data:
+                st.warning("⚠️ 최근 수급 데이터가 준비되지 않았습니다.")
+            else:
+                df_top_gp = pd.DataFrame(top_res.data)
+                all_dates = sorted(df_top_gp['trade_date'].unique(), reverse=True)
+                total_trading_days = len(all_dates) if all_dates else 1
+                latest_date_gp = all_dates[0]
+                df_latest_gp = df_top_gp[df_top_gp['trade_date'] == latest_date_gp].copy()
+
+                # 종목별 최근 거래일 출현 횟수 (수급 지속성)
+                appear_counts = df_top_gp.groupby('stock_code')['trade_date'].nunique().to_dict()
+
+                # 2. 상한가 족보 종목 명단
+                upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")).execute()
+                upper_names = set([r['name'] for r in upper_res.data]) if upper_res.data else set()
+
+                # 3. 실시간 및 누적 고래 수급 (df 실시간 체결 + DB whale_log 보완)
+                whale_realtime = {}
+                if not df.empty and 'side' in df.columns:
+                    for name_val, group_val in df.groupby('name'):
+                        b_sum = group_val[group_val['side'] == '매수']['amount_krw'].sum() / 1_000_000
+                        s_sum = group_val[group_val['side'] == '매도']['amount_krw'].sum() / 1_000_000
+                        whale_realtime[name_val] = (b_sum, s_sum)
+
+                if not whale_realtime:
+                    try:
+                        w_date = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+                        w_res = supabase.table("whale_log").select("name, side, amount_krw").gte("date", w_date).limit(5000).execute()
+                        if w_res.data:
+                            df_w_db = pd.DataFrame(w_res.data)
+                            for name_val, group_val in df_w_db.groupby('name'):
+                                c_name = name_val.replace("🚀","").replace("👑","").replace("🔥","").replace("💥","").replace("✨","").replace("🌱","").strip()
+                                b_sum = group_val[group_val['side'] == '매수']['amount_krw'].sum() / 1_000_000
+                                s_sum = group_val[group_val['side'] == '매도']['amount_krw'].sum() / 1_000_000
+                                whale_realtime[c_name] = (b_sum, s_sum)
+                    except Exception:
+                        pass
+
+                candidates = []
+                for _, r_val in df_latest_gp.iterrows():
+                    name_str = r_val['stock_name']
+                    clean_n = name_str.replace("🚀","").replace("👑","").replace("🔥","").replace("💥","").replace("✨","").replace("🌱","").strip()
+                    code_str = r_val['stock_code']
+                    market_str = r_val['market']
+                    frgn_net = (r_val['frgn_buy'] - r_val['frgn_sell'])
+                    orgn_net = (r_val['orgn_buy'] - r_val['orgn_sell'])
+                    total_net = frgn_net + orgn_net
+
+                    warning_text = get_warning_text(name_str, global_meta)
+                    app_count = appear_counts.get(code_str, 0)
+
+                    score = 25 # 기본 점수 25점
+                    reasons = []
+
+                    # 1) 🐋 [고래 실체 체결 점수] (Whale Hunter의 핵심 정체성!)
+                    rt_buy, rt_sell = whale_realtime.get(clean_n, (0, 0))
+                    if rt_buy == 0:
+                        rt_buy, rt_sell = whale_realtime.get(name_str, (0, 0))
+                    if rt_buy >= 1000: # 10억 이상 고래 매수
+                        score += 25
+                        reasons.append(f"🐋 실시간 고래 대량 매수({rt_buy/1000:.1f}억)")
+                    elif rt_buy >= 100: # 1억 이상 고래 매수
+                        score += 15
+                        reasons.append(f"🐋 실시간 고래 매수 포착({rt_buy/1000:.1f}억)")
+                    elif rt_buy > 0:
+                        score += 8
+                        reasons.append("🐋 고래 소액 체결 포착")
+                    else: # 자이에스앤디처럼 고래 포착이 전혀 안 된 종목 감점
+                        score -= 15
+                        reasons.append("⚠️ 실시간 고래 포착 미흡")
+
+                    # 2) 🏛️ [수급 규모 점수] (대형 수급 우선)
+                    if total_net >= 300:
+                        score += 25
+                    elif total_net >= 100:
+                        score += 20
+                    elif total_net >= 50:
+                        score += 15
+                    elif total_net >= 20:
+                        score += 10
+                    elif total_net > 0:
+                        score += 3
+
+                    # 3) 🔥 쌍끌이 프리미엄 vs ⚠️ 한쪽 대량 덤핑 폭탄 차감 (셀트리온 -278억 외인 매도 차감)
+                    if frgn_net > 0 and orgn_net > 0:
+                        score += 15
+                        reasons.append("🔥 외/기 동시 쌍끌이")
+                    elif frgn_net < -100 or orgn_net < -100:
+                        score -= 20
+                        reasons.append("⚠️ 외인/기관 한쪽 대량 덤핑(-100억 이상)")
+
+                    # 4) 👑 N일 연속 수급 지속성 (max +15)
+                    if app_count >= total_trading_days:
+                        score += 15
+                        reasons.append(f"👑 {total_trading_days}일 연속 수급 장악")
+                    elif app_count >= total_trading_days - 1:
+                        score += 8
+                        reasons.append("✨ 수급 지속성 우수")
+
+                    # 5) ⚡ 상한가 족보
+                    if clean_n in upper_names or name_str in upper_names:
+                        if app_count >= total_trading_days - 1:
+                            score += 10
+                            reasons.append("⚡ 상한가 후 수급 유지")
+                        else:
+                            score -= 30
+                            reasons.append("⚠️ 상한가 후 수급 이탈 이력")
+
+                    # 6) 클린 종목 가산점 (+5)
+                    if not warning_text:
+                        score += 5
+                    else:
+                        score -= 15
+                        reasons.append(f"🚨 {warning_text}")
+
+                    if not reasons:
+                        reasons.append("수급 순매수 우상향")
+
+                    candidates.append({
+                        "code": code_str,
+                        "name": name_str,
+                        "market": market_str,
+                        "score": max(0, min(score, 100)),
+                        "total_net": total_net,
+                        "frgn_net": frgn_net,
+                        "orgn_net": orgn_net,
+                        "warning": warning_text if warning_text else "정상",
+                        "rt_buy": round(rt_buy, 1),
+                        "reason": " | ".join(reasons)
+                    })
+
+                df_cand = pd.DataFrame(candidates)
+                if not df_cand.empty:
+                    df_cand = df_cand.sort_values(by=["score", "total_net"], ascending=[False, False]).reset_index(drop=True)
+                    top20_gp = df_cand.head(20).copy()
+                    top20_gp.insert(0, "순위", range(1, len(top20_gp) + 1))
+
+                    # 🥇 1~3위 명예의 전당 메트릭 카드
+                    st.markdown("<h5 style='color:#FFD700; margin-top:15px;'>🥇 오늘의 TOP 3 골든 픽 명예의 전당</h5>", unsafe_allow_html=True)
+                    c1_gp, c2_gp, c3_gp = st.columns(3)
+                    medals = ["🥇 1위", "🥈 2위", "🥉 3위"]
+                    colors = ["#FFD700", "#C0C0C0", "#CD7F32"]
+                    cols_gp = [c1_gp, c2_gp, c3_gp]
+
+                    for i in range(min(3, len(top20_gp))):
+                        row_gp = top20_gp.iloc[i]
+                        with cols_gp[i]:
+                            st.markdown(f"""
+                            <div style="background:#1a1c24; border: 2px solid {colors[i]}; border-radius:12px; padding:15px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+                                <div style="color:{colors[i]}; font-weight:bold; font-size:16px; margin-bottom:5px;">{medals[i]} {row_gp['name']}</div>
+                                <div style="font-size:24px; font-weight:900; color:#00E676; margin-bottom:8px;">{row_gp['score']}점 <span style="font-size:12px; color:#aaa;">/ 100점</span></div>
+                                <div style="font-size:13px; color:#ddd; margin-bottom:4px;">🏛️ 외/기 합산: <b>{row_gp['total_net']:,.0f}억 원</b></div>
+                                <div style="font-size:12px; color:#ff9800; margin-bottom:8px;">(외인 {row_gp['frgn_net']:,.0f}억 / 기관 {row_gp['orgn_net']:,.0f}억)</div>
+                                <div style="font-size:11px; color:#64B5F6; background:#12131c; padding:6px; border-radius:6px; min-height:38px;">💡 {row_gp['reason']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                    st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
+                    st.markdown("<h5 style='color:#FFFFFF;'>📋 골든 픽 TOP 20 전체 순위 전광판</h5>", unsafe_allow_html=True)
+
+                    # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼
+                    click_action_gp = st.radio(
+                        "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
+                        ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
+                        horizontal=True,
+                        key="gp_click_action_radio"
+                    )
+
+                    top20_key_gp = f"golden_pick_table_{st.session_state.get('gp_reset_counter', 0)}"
+
+                    display_gp = top20_gp[['순위', 'name', 'market', 'score', 'warning', 'total_net', 'frgn_net', 'orgn_net', 'rt_buy', 'reason']].copy()
+                    display_gp = display_gp.rename(columns={
+                        'name': '종목명', 'market': '시장', 'score': '황금점수',
+                        'warning': '특이사항', 'total_net': '🟣외/기 순매수(억)',
+                        'frgn_net': '🟣외국인 순매수(억)', 'orgn_net': '🟡기관 순매수(억)',
+                        'rt_buy': '🐋실시간 매수(백만)', 'reason': '핵심 추천 포인트'
+                    })
+
+                    event_gp = st.dataframe(
+                        display_gp,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=580,
+                        on_select="rerun",
+                        selection_mode="single-row",
+                        key=top20_key_gp,
+                        column_config={
+                            "순위": st.column_config.NumberColumn("순위", format="%d위"),
+                            "황금점수": st.column_config.NumberColumn("황금점수", format="%d점"),
+                            "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%.0f억"),
+                            "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%.0f억"),
+                            "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%.0f억"),
+                            "🐋실시간 매수(백만)": st.column_config.NumberColumn(format="%.0f백만"),
+                        }
+                    )
+
+                    if event_gp and "selection" in event_gp:
+                        rows_gp = event_gp["selection"]["rows"]
+                        if rows_gp and rows_gp[0] < len(top20_gp):
+                            selected_stock_gp = top20_gp.iloc[rows_gp[0]]['name']
+                            clean_stock_gp = selected_stock_gp.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
+                            row_stock_code_gp = top20_gp.iloc[rows_gp[0]]['code']
+
+                            if click_action_gp == "💬 AI 요약 보기 (팝업)":
+                                trigger_gp = st.session_state.get('dialog_trigger_id', 0) + 1
+                                st.session_state['dialog_trigger_id'] = trigger_gp
+                                st.session_state['show_summary_dialog'] = {
+                                    "stock": clean_stock_gp,
+                                    "code": row_stock_code_gp,
+                                    "trigger_id": trigger_gp
+                                }
+                                st.session_state['gp_reset_counter'] = st.session_state.get('gp_reset_counter', 0) + 1
+                                st.rerun()
+                            else:
+                                st.session_state['pending_search'] = clean_stock_gp
+                                st.session_state['last_search_keyword'] = ""
+                                st.session_state['scrn_select_radio'] = "체결 로그"
+                                st.session_state['gp_reset_counter'] = st.session_state.get('gp_reset_counter', 0) + 1
+                                st.rerun()
 
         elif scrn_select == "수익율 자랑":
             is_admin_view = st.session_state.get('is_admin', False)
