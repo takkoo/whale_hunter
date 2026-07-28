@@ -13,6 +13,11 @@ import websockets
 from datetime import datetime
 from supabase import create_client
 
+import sys
+
+# ⚡ [강제 수집 옵션 감지] python FindingWhale.py --force 명령어로 실행 시 시간/휴일 차단벽 우회
+FORCE_RUN = "--force" in sys.argv or "--ignore-time" in sys.argv
+
 def get_market_holidays(supabase_client):
     try:
         res = supabase_client.table("market_holidays").select("holiday_date").execute()
@@ -264,9 +269,14 @@ def load_master_data():
 def clean_old_data():
     from datetime import datetime, timedelta
     one_year_ago = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    one_month_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
     try:
+        # 1. 1년 넘은 모든 오래된 데이터 삭제 (개별주 포함)
         supabase.table("whale_log").delete().lt("date", one_year_ago).execute()
-        print(f"🧹 [시스템 초기화] {one_year_ago} 이전의 오래된 데이터 청소를 완료했습니다.")
+        # 2. 1개월 넘은 ETF/ETN 데이터 집중 삭제
+        supabase.table("whale_log").delete().eq("asset_type", "ETF").lt("date", one_month_ago).execute()
+        
+        print(f"🧹 [시스템 초기화] {one_year_ago} 이전 전체 데이터 & {one_month_ago} 이전 ETF 데이터 청소 완료!")
     except Exception as e:
         print(f"⚠️ 시스템 청소 중 알림: {e}")
 
@@ -278,6 +288,10 @@ def init_network_and_tokens():
     print(f"📡 IP: {MY_IP} / MAC: {MY_MAC} / 시스템 초기화 완료")
 
 def check_market_open():
+    if FORCE_RUN:
+        print("⚡ [--force 옵션 감지] 장외시간 및 휴장일 검사를 우회하고 즉시 수집을 진행합니다.")
+        return
+        
     today_str = datetime.now().strftime('%Y%m%d')
     url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/chk-holiday"
     headers = {
@@ -371,7 +385,11 @@ def fetch_hantoo_asking_price_residual(code, token, appkey, secret):
             return f"{int(tot_bidp_rsqn):,}"
         else:
             print(f"⚠️ [한투 서버 거절 응답] Code: {res.status_code} | Reason: {res.text}")
+            if "EGW00123" in res.text or "만료된" in res.text:
+                raise Exception("EXPIRED_TOKEN")
     except Exception as e:
+        if "EXPIRED_TOKEN" in str(e):
+            raise
         print(f"⚠️ [REST 프로브] 호가 잔량 획득 실패 (사유: {e})")
     return "계측 실패"
 
@@ -407,12 +425,14 @@ async def start_whale_hunting(websocket_queue, db_queue):
         try:
             # 타임아웃을 짧게 주어 한투 서버 응답 지연으로 인한 전체 락인(Lock-in) 방쇄
             res = await asyncio.to_thread(requests.get, tick_url, headers=tick_headers, params=tick_params, timeout=1.5)
+            if res.status_code != 200 and ("EGW00123" in res.text or "만료된" in res.text):
+                raise Exception("EXPIRED_TOKEN")
             if res.status_code == 200:
                 tick_data = res.json()
                 ticks = tick_data.get('output', [])
                 
                 last_price = None
-                trade_side = "방향미상"
+                trade_side = "매수"
                 
                 for t in reversed(ticks):
                     try:
@@ -425,9 +445,14 @@ async def start_whale_hunting(websocket_queue, db_queue):
                                 trade_side = "매수"
                             elif price < last_price:
                                 trade_side = "매도"
-                            # price == last_price 인 경우 이전 방향(trade_side)을 유지 (Zero-tick)
+                            # price == last_price 인 경우 이전 방향(trade_side)을 유지 (Zero-tick Rule)
                         else:
-                            trade_side = "방향미상"
+                            # 🚀 첫 번째 틱(last_price가 없을 때): 전일종가/시가 대비 매수/매도 분기 (방향미상 완전 철거!)
+                            base_prc = int(t.get('stck_sdpr', 0) or t.get('stck_oprc', 0) or price)
+                            if base_prc > 0 and price < base_prc:
+                                trade_side = "매도"
+                            else:
+                                trade_side = "매수"
                             
                         last_price = price
 
@@ -468,6 +493,8 @@ async def start_whale_hunting(websocket_queue, db_queue):
                     except ValueError:
                         continue
         except Exception as probe_err:
+            if "EXPIRED_TOKEN" in str(probe_err):
+                raise
             # 특정 소자 통신 불량 시 에러 무시하고 0점 처리하여 생존성 확보
             pass
             
@@ -476,23 +503,25 @@ async def start_whale_hunting(websocket_queue, db_queue):
     # 메인 그랜드 레이더 루프
     while True:
         try:
-            # 🕰️ [시간/휴일 차단벽]
-            now_time = datetime.now().time()
-            market_start = datetime.strptime("09:00:00", "%H:%M:%S").time()
-            market_end = datetime.strptime("15:35:00", "%H:%M:%S").time()
-            
-            if now_time < market_start or now_time > market_end:
-                await asyncio.sleep(60)
-                continue
-                
-            if datetime.now().weekday() >= 5:
-                await asyncio.sleep(60)
-                continue
-            
             today_str = datetime.now().strftime('%Y-%m-%d')
-            if today_str in get_market_holidays(supabase):
-                await asyncio.sleep(60)
-                continue
+            
+            # 🕰️ [시간/휴일 차단벽] (--force 옵션이 없을 때만 가동)
+            if not FORCE_RUN:
+                now_time = datetime.now().time()
+                market_start = datetime.strptime("09:00:00", "%H:%M:%S").time()
+                market_end = datetime.strptime("15:35:00", "%H:%M:%S").time()
+                
+                if now_time < market_start or now_time > market_end:
+                    await asyncio.sleep(60)
+                    continue
+                    
+                if datetime.now().weekday() >= 5:
+                    await asyncio.sleep(60)
+                    continue
+                
+                if today_str in get_market_holidays(supabase):
+                    await asyncio.sleep(60)
+                    continue
 
             print(f"\n🔍 [{datetime.now().strftime('%H:%M:%S')}] 조건검색 레이더 가동 (100개 전수조사 시작)...")
             
@@ -540,11 +569,14 @@ async def start_whale_hunting(websocket_queue, db_queue):
                 # 가드 A: 이름 기반 1차 검전 (이제 정상 가동!)
                 is_etf_name = any(kw in s_name.upper() for kw in noise_keywords)
                 
+                # 우선주 필터링 (이름이 '우' 또는 '우B' 등으로 끝나고, 종목코드가 '0'으로 끝나지 않는 경우)
+                is_preferred = (s_name.endswith('우') or s_name.endswith('우B') or s_name.endswith('우C') or s_name.endswith('우(전환)')) and clean_target_code[-1] != '0'
+                
                 # 가드 B: 확실한 정품 개별주 세트 대조 (문자열 대 문자열 직결)
                 is_not_ordinary = (clean_target_code not in ordinary_stock_set)
                 
                 # 둘 중 하나라도 걸리면 파생 노이즈로 낙인찍어 맨 밑바닥으로 수몰시킵니다.
-                if is_etf_name or is_not_ordinary:
+                if is_etf_name or is_not_ordinary or is_preferred:
                     s['score'] = -9999
             
             # 고래 점수 기반으로 내림차순 정렬
@@ -649,6 +681,12 @@ async def start_whale_hunting(websocket_queue, db_queue):
             await asyncio.sleep(60)
 
         except Exception as e:
+            if "EXPIRED_TOKEN" in str(e):
+                print("⚠️ [코어 A] 토큰 만료 감지! 시스템 강제 재기동을 요청합니다.")
+                import os
+                if os.path.exists("kis_token.json"):
+                    os.remove("kis_token.json")
+                raise
             print(f"❌ [코어 A 레이더 코어 충돌]: {e}")
             await asyncio.sleep(10)
 
@@ -869,24 +907,27 @@ async def upper_limit_poller_engine(db_queue):
     
     while True:
         try:
-            # 🕰️ [시간 차단벽]: 장시간(09:00 ~ 15:35) 외에는 상한가 폴러 가동 중지
-            now_time = datetime.now().time()
-            market_start = datetime.strptime("09:00:00", "%H:%M:%S").time()
-            market_end = datetime.strptime("15:35:00", "%H:%M:%S").time()
-            
-            if now_time < market_start or now_time > market_end:
-                await asyncio.sleep(60)
-                continue
-                
-            # 🕰️ [주말/휴일 차단벽]
-            if datetime.now().weekday() >= 5:
-                await asyncio.sleep(60)
-                continue
-            
             today_str = datetime.now().strftime('%Y-%m-%d')
-            if today_str in get_market_holidays(supabase):
-                await asyncio.sleep(60)
-                continue
+            current_time_str = datetime.now().strftime('%H:%M:%S')
+            
+            # 🕰️ [시간 차단벽]: 장시간(09:00 ~ 15:35) 외에는 상한가 폴러 가동 중지 (--force 옵션 시 우회)
+            if not FORCE_RUN:
+                now_time = datetime.now().time()
+                market_start = datetime.strptime("09:00:00", "%H:%M:%S").time()
+                market_end = datetime.strptime("15:35:00", "%H:%M:%S").time()
+                
+                if now_time < market_start or now_time > market_end:
+                    await asyncio.sleep(60)
+                    continue
+                    
+                # 🕰️ [주말/휴일 차단벽]
+                if datetime.now().weekday() >= 5:
+                    await asyncio.sleep(60)
+                    continue
+                
+                if today_str in get_market_holidays(supabase):
+                    await asyncio.sleep(60)
+                    continue
                 
             current_time_str = datetime.now().strftime('%H:%M:%S')
             
@@ -938,8 +979,16 @@ async def upper_limit_poller_engine(db_queue):
                                 })
                 else:
                     print(f"⚠️ [Core E] 조건검색 스캔 실패 (상태코드: {res.status_code}, 메시지: {res.text})")
+                    if "EGW00123" in res.text or "만료된" in res.text:
+                        raise Exception("EXPIRED_TOKEN")
             
             except Exception as api_err:
+                if "EXPIRED_TOKEN" in str(api_err):
+                    print("⚠️ [Core E] 토큰 만료 감지! 시스템 강제 재기동을 요청합니다.")
+                    import os
+                    if os.path.exists("kis_token.json"):
+                        os.remove("kis_token.json")
+                    raise
                 print(f"⚠️ [Core E] API 호출 타임아웃/에러: {api_err}")
             
             await asyncio.sleep(60)
@@ -994,8 +1043,43 @@ async def main_async_executor():
         whale_websocket_engine(approval_key, websocket_queue, db_queue), # Core B
         token_lifecycle_timer(),                                         # Core C
         supabase_db_worker(db_queue),                                    # Core D
-        upper_limit_poller_engine(db_queue)                              # 🚨 Core E (1분 주기 상한가 스캐너 신설!)
+        upper_limit_poller_engine(db_queue),                             # 🚨 Core E (1분 주기 상한가 스캐너 신설!)
+        metadata_updater_loop()                                          # 💡 Core F (메타데이터 자동 갱신!)
     )
+
+async def metadata_updater_loop():
+    """매 1시간마다 stock_metadata.json을 확인하여 당일 데이터가 아니면 백그라운드 갱신"""
+    import subprocess
+    import json
+    import os
+    import sys
+    from datetime import datetime
+    
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "fetch_stock_metadata.py")
+    metadata_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_metadata.json")
+    
+    while True:
+        try:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            needs_update = True
+            
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    last_updated = data.get("_meta", {}).get("last_updated_date", "")
+                    if last_updated == today_str:
+                        needs_update = False
+                        
+            if needs_update:
+                print(f"🔄 [메타데이터 갱신] 금일({today_str}) 시장 경보 데이터가 없습니다. 자동 수집을 시작합니다.")
+                # subprocess로 실행하여 비동기 루프 차단 방지
+                subprocess.Popen([sys.executable, script_path])
+                
+        except Exception as e:
+            print(f"⚠️ 메타데이터 갱신 루프 오류: {e}")
+            
+        # 1시간 대기
+        await asyncio.sleep(3600)
 
 
 # 💡 무인 가동 그랜드 루프
@@ -1005,6 +1089,14 @@ if __name__ == "__main__":
             print("🚀 [엔진 초기 기동] 시스템을 초기화 기동합니다...")
             init_network_and_tokens() 
             check_market_open()
+
+            if FORCE_RUN:
+                import subprocess
+                print("⚡ [--force 옵션 감지] 오늘자 외/기 TOP100 및 메타데이터 자동 수집을 즉시 시작합니다.")
+                top200_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "fetch_daily_top200.py")
+                meta_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "fetch_stock_metadata.py")
+                subprocess.Popen([sys.executable, top200_script])
+                subprocess.Popen([sys.executable, meta_script])
 
             # ------------------------------------------------------------------
             #send_telegram_broadcast("🚨 [관제탑] 수집기 메인 안테나 수동 기동 테스트! 통신 양호한가?")
