@@ -4722,7 +4722,9 @@ if choice == "🏠 홈화면":
                                 return 'color: #4B89B5;'
                             return 'color: #aaaaaa;'
 
-                        styled_gp = display_gp.style.applymap(_get_sentiment_color, subset=['📰 뉴스감성'])
+                        # 🔧 [수정 2026-07-30] Streamlit Cloud 배포 시 최신 pandas(applymap 완전 제거)에서
+                        # AttributeError 발생 확인 → pandas 2.1+에서 applymap의 대체 메서드인 Styler.map으로 교체
+                        styled_gp = display_gp.style.map(_get_sentiment_color, subset=['📰 뉴스감성'])
 
                         event_gp = st.dataframe(
                             styled_gp,
@@ -5003,7 +5005,9 @@ if choice == "🏠 홈화면":
                         return 'color: #4B89B5;'
                     return 'color: #aaaaaa;'
 
-                styled_watch = df_watch.style.applymap(_get_sentiment_color_watch, subset=['📰 뉴스감성'])
+                # 🔧 [수정 2026-07-30] Streamlit Cloud 배포 시 최신 pandas(applymap 완전 제거)에서
+                # AttributeError 발생 확인 → pandas 2.1+에서 applymap의 대체 메서드인 Styler.map으로 교체
+                styled_watch = df_watch.style.map(_get_sentiment_color_watch, subset=['📰 뉴스감성'])
 
                 st.markdown('<div class="no-header-icon"></div>', unsafe_allow_html=True)
                 st.dataframe(
