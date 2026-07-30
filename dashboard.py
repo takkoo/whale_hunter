@@ -135,6 +135,83 @@ components.html(
     """,
     height=0, width=0
 )
+
+# 🌟 [신규 2026-07-30] 표(st.dataframe) 행(row) 마우스 오버 하이라이트 (하늘색 형광펜 효과)
+# 배경: 긴 표(골든픽/실시간/상한가/외기 등)에서 맨 왼쪽~맨 오른쪽 컬럼을 눈으로 따라갈 때
+#       지금 보고 있는 행이 어디인지 놓치기 쉬워서, 커서가 위치한 행 전체를 하늘색 반투명으로 강조.
+# ⚠️ 참고: st.dataframe은 Glide Data Grid(캔버스) 기반이라 CSS :hover 의사클래스를 행 단위로 못 쓰기 때문에,
+#    JS로 마우스 Y좌표 → 행 인덱스를 계산해서 그 위치에 오버레이 박스를 그리는 방식으로 구현함.
+#    기본 행높이(ROW_H)/헤더높이(HEADER_H)는 Streamlit 기본값(35px)으로 가정 — 실제 화면에서 밴드 위치가
+#    살짝 어긋나 보이면 몇 px 어긋났는지 알려주면 보정 가능.
+components.html(
+    """
+    <script>
+        const parentWindow = window.parent || window;
+        const ROW_H = 35;
+        const HEADER_H = 35;
+        const HILITE_COLOR = "rgba(88, 134, 163, 0.28)"; // 🔧 [수정 2026-07-30] 흰 글자가 묻힌다는 피드백으로 하늘색을 35% 더 어둡게 조정
+
+        function bindRowHoverHighlight(container) {
+            if (container.dataset.hoverBound === "1") return;
+            container.dataset.hoverBound = "1";
+
+            const cs = parentWindow.getComputedStyle(container);
+            if (cs.position === "static") {
+                container.style.position = "relative";
+            }
+
+            const overlay = parentWindow.document.createElement("div");
+            overlay.style.position = "absolute";
+            overlay.style.left = "0";
+            overlay.style.right = "0";
+            overlay.style.pointerEvents = "none";
+            overlay.style.background = HILITE_COLOR;
+            overlay.style.display = "none";
+            overlay.style.zIndex = "5";
+            overlay.style.borderRadius = "2px";
+            container.appendChild(overlay);
+
+            container.addEventListener("mousemove", function(e) {
+                const rect = container.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                if (y < HEADER_H) {
+                    overlay.style.display = "none";
+                    return;
+                }
+                const rowIndex = Math.floor((y - HEADER_H) / ROW_H);
+                const top = HEADER_H + rowIndex * ROW_H;
+                if (top + ROW_H > rect.height + 1) {
+                    overlay.style.display = "none";
+                    return;
+                }
+                overlay.style.top = top + "px";
+                overlay.style.height = ROW_H + "px";
+                overlay.style.display = "block";
+            });
+
+            container.addEventListener("mouseleave", function() {
+                overlay.style.display = "none";
+            });
+        }
+
+        function scanAndBindRowHover() {
+            const containers = parentWindow.document.querySelectorAll('div[data-testid="stDataFrame"]');
+            containers.forEach(bindRowHoverHighlight);
+        }
+
+        scanAndBindRowHover();
+
+        if (!parentWindow.hasRowHoverObserver) {
+            const observer = new MutationObserver(function() {
+                scanAndBindRowHover();
+            });
+            observer.observe(parentWindow.document.body, { childList: true, subtree: true });
+            parentWindow.hasRowHoverObserver = true;
+        }
+    </script>
+    """,
+    height=0, width=0
+)
 # ------------------------------------------------------------------
 # 🎯 [가상 데이터 쾌속 입력 팝업 로직] 상선고 히트맵 셀 클릭 연동
 # ------------------------------------------------------------------
@@ -387,6 +464,16 @@ def render_ai_summary_box(text):
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     import FinanceDataReader as fdr
+
+    # 🔧 [수정 2026-07-30] 우측 상단 기본 X 닫기 버튼 제거.
+    # X로 닫으면 Streamlit이 스크립트 rerun을 트리거하지 않아서(Streamlit 공식 이슈 #8507) 우리 쪽
+    # session_state['show_summary_dialog'] 정리 코드가 아예 실행이 안 되고, 그래서 다음 자동새로고침 때
+    # 창이 또 뜨는 버그가 있었음. "닫기 (확인)"/"관심종목 추가" 버튼만 쓰도록 X를 아예 숨김.
+    st.markdown(
+        '<style>div[aria-label="dialog"]>button[aria-label="Close"] { display: none !important; }</style>',
+        unsafe_allow_html=True
+    )
+
     if not stock_code:
         try:
             # 1. 자체 DB(upper_limit_stocks)에서 먼저 조회 시도 (KRX IP 차단 우회 및 속도 향상)
@@ -510,9 +597,29 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                             else:
                                 st.error(f"ChatGPT API 호출 중 오류가 발생했습니다: {e}")
             
-    if st.button("닫기 (확인)", use_container_width=True):
-        st.session_state.pop('show_summary_dialog', None)
-        st.rerun()
+    close_col_dlg, watch_col_dlg = st.columns(2)
+    with close_col_dlg:
+        if st.button("닫기 (확인)", use_container_width=True):
+            st.session_state.pop('show_summary_dialog', None)
+            st.rerun()
+    with watch_col_dlg:
+        # 🌟 [신규 2026-07-30] 이 창에서 바로 관심종목에 추가할 수 있는 버튼
+        st.markdown('<div class="btn-style-green"></div>', unsafe_allow_html=True)
+        if st.button("⭐ 관심종목 추가", key=f"watch_add_dialog_{stock_name}_{trigger_id}", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                st.warning("🚫 정회원만 이용할 수 있습니다.")
+            elif not stock_code:
+                st.warning("⚠️ 종목코드를 확인할 수 없어 관심종목에 추가하지 못했습니다.")
+            else:
+                try:
+                    supabase.table("user_watchlist").upsert({
+                        "username": st.session_state.get('username', ''),
+                        "stock_code": str(stock_code).strip().zfill(6),
+                        "stock_name": stock_name,
+                    }, on_conflict="username,stock_code").execute()
+                    st.toast(f"⭐ '{stock_name}' 관심종목에 추가되었습니다.")
+                except Exception as e:
+                    st.error(f"추가 실패: {e}")
 
 # ------------------------------------------------------------------
 # 🎯 [요약 팝업 로직] 상선고 히트맵 등에서 클릭 연동
@@ -659,6 +766,37 @@ def get_themes_for_stocks(stock_names):
         return {row['stock_name']: row['theme_names'] for row in res.data}
     except Exception as e:
         return {}
+
+# 🔧 [수정 2026-07-30] "고래 골든픽" 화면이 화면 안의 아무 버튼(AI 요약 보기, 차트 이동 등)만 눌러도
+# 매번 daily_whale_top200/whale_log/upper_limit_stocks를 통째로 다시 조회하고 있어서 클릭할 때마다
+# 느려진다는 피드백 — 선택한 날짜(sel_date_str)가 그대로면 굳이 다시 조회할 필요가 없으므로,
+# 네트워크 왕복이 제일 비싼 이 부분만 따로 떼어내 st.cache_data로 하루(86400초) 캐싱함.
+# ⚠️ 당일 실시간 틱(df, 세션에 이미 로드된 실시간 데이터)을 더하는 부분은 캐시 밖(호출부)에 그대로 남겨둬서
+# 캐시가 실시간성을 완전히 죽이지는 않도록 함 — df 병합은 이미 메모리에 있는 데이터라 비용이 거의 없음.
+@st.cache_data(ttl=86400, show_spinner=False)
+def _fetch_golden_pick_base_data(sel_date_str, start_date_str):
+    top_res = supabase.table("daily_whale_top200").select("*").eq("trade_date", sel_date_str).limit(1000).execute()
+    hist_res = supabase.table("daily_whale_top200").select("stock_code, trade_date").gte("trade_date", start_date_str).lte("trade_date", sel_date_str).limit(5000).execute()
+    upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", start_date_str).lte("recorded_date", sel_date_str).execute()
+
+    all_w_data = []
+    page_size = 1000
+    start = 0
+    while start < 50000:
+        w_res = supabase.table("whale_log").select("code, side, amount_krw").gte("date", start_date_str).lte("date", sel_date_str).order("date", desc=True).order("time", desc=True).range(start, start + page_size - 1).execute()
+        if not w_res.data:
+            break
+        all_w_data.extend(w_res.data)
+        if len(w_res.data) < page_size:
+            break
+        start += page_size
+
+    return {
+        "top_data": top_res.data or [],
+        "hist_data": hist_res.data or [],
+        "upper_data": upper_res.data or [],
+        "whale_log_data": all_w_data,
+    }
 
 
 @st.cache_data(ttl=600)
@@ -2018,7 +2156,24 @@ def draw_whale_bar_chart(target_code, target_name, df):
         if st.button(btn_label, key=f"btn_zoom_{target_code}", help="고래 수급 차트 Y축 확대 (아웃라이어 제외용)"):
             st.session_state[zoom_key] = (st.session_state[zoom_key] + 1) % 5
             st.rerun()
-            
+
+        # 🌟 [신규 2026-07-30] 돋보기(줌) 버튼 바로 아래에 관심종목 등록 버튼 추가
+        # 🔧 [수정 2026-07-30] 위 돋보기 버튼과 크기가 달라 보인다는 피드백 → 크기는 그대로 두고 색만 입히는 -icon 클래스로 교체
+        st.markdown('<div class="btn-style-green-icon"></div>', unsafe_allow_html=True)
+        if st.button("⭐", key=f"btn_watch_add_chart_{target_code}", help="관심종목 등록"):
+            if not st.session_state.get('authenticated', False):
+                st.warning("🚫 정회원만 이용할 수 있습니다.")
+            else:
+                try:
+                    supabase.table("user_watchlist").upsert({
+                        "username": st.session_state.get('username', ''),
+                        "stock_code": str(target_code).strip().zfill(6),
+                        "stock_name": target_name,
+                    }, on_conflict="username,stock_code").execute()
+                    st.toast(f"⭐ '{target_name}' 관심종목에 추가되었습니다.")
+                except Exception as e:
+                    st.error(f"추가 실패: {e}")
+
     with col_chart:
         max_val = merged_df['amount_krw_100m'].max() if not merged_df.empty else 0
         if zoom_step > 0 and max_val > 0:
@@ -2807,6 +2962,112 @@ if choice == "🏠 홈화면":
             line-height: 1 !important;
         }
 
+        /* 🌟 [신규 2026-07-30] "내관심" 버튼 전용 녹색 */
+        div.element-container:has(.btn-style-green) { display: none; }
+        div.element-container:has(.btn-style-green) + div.element-container button {
+            background-color: #2E8B57 !important;
+            border: 1px solid #1F5C3D !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-green) + div.element-container button p {
+            font-size: 13px !important;
+            color: #ffffff !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+        div.element-container:has(.btn-style-green) + div.element-container button:hover {
+            background-color: #1F5C3D !important;
+        }
+
+        div.element-container:has(.btn-style-green-active) { display: none; }
+        div.element-container:has(.btn-style-green-active) + div.element-container button {
+            background-color: transparent !important;
+            border: 2px solid #2E8B57 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-green-active) + div.element-container button p {
+            font-size: 13px !important;
+            color: #2E8B57 !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+
+        /* 🔧 [수정 2026-07-30] 차트 화면의 "⭐ 관심종목 등록" 아이콘 버튼 전용 —
+           바로 위 돋보기(줌) 버튼과 크기를 맞추기 위해 padding/min-height는 건드리지 않고 색상만 입힘 */
+        div.element-container:has(.btn-style-green-icon) { display: none; }
+        div.element-container:has(.btn-style-green-icon) + div.element-container button {
+            background-color: #2E8B57 !important;
+            border: 1px solid #1F5C3D !important;
+        }
+        div.element-container:has(.btn-style-green-icon) + div.element-container button p {
+            color: #ffffff !important;
+            font-weight: bold !important;
+        }
+        div.element-container:has(.btn-style-green-icon) + div.element-container button:hover {
+            background-color: #1F5C3D !important;
+        }
+
+        /* 🔧 [수정 2026-07-30] "내 관심종목" 화면의 "+ 추가" 버튼이 옆 입력창보다 2~3px 아래로 처져 보여
+           좌측 입력창과 중심을 맞추기 위해 살짝 위로 당김 (색상/크기는 그대로 유지) */
+        div.element-container:has(.btn-style-align-up) { display: none; }
+        div.element-container:has(.btn-style-align-up) + div.element-container button {
+            position: relative !important;
+            top: -4px !important;
+        }
+
+        /* 🔧 [수정 2026-07-30] 특정 데이터프레임에서 좌상단 "📊" 오버레이 아이콘이 첫 컬럼(예: "종목명")
+           헤더 글자를 가리는 문제 → 마커 div 바로 다음 데이터프레임에서만 이 아이콘을 숨김 */
+        div.element-container:has(.no-header-icon) { display: none; }
+        div.element-container:has(.no-header-icon) + div.element-container div[data-testid="stDataFrame"]::after {
+            content: none !important;
+        }
+
+        /* 🌟 [신규 2026-07-30] "테마킹" 버튼 전용 찐노랑 (배경이 밝아서 글자는 어둡게) */
+        div.element-container:has(.btn-style-yellow) { display: none; }
+        div.element-container:has(.btn-style-yellow) + div.element-container button {
+            background-color: #FFD400 !important;
+            border: 1px solid #C9A600 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-yellow) + div.element-container button p {
+            font-size: 13px !important;
+            color: #1a1a1a !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+        div.element-container:has(.btn-style-yellow) + div.element-container button:hover {
+            background-color: #E6BE00 !important;
+        }
+
+        div.element-container:has(.btn-style-yellow-active) { display: none; }
+        div.element-container:has(.btn-style-yellow-active) + div.element-container button {
+            background-color: transparent !important;
+            border: 2px solid #FFD400 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-yellow-active) + div.element-container button p {
+            font-size: 13px !important;
+            color: #FFD400 !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+
 
         /* 검색 초기화(휴지통) 버튼 스타일 */
         div.element-container:has(.btn-style-clear) { display: none; }
@@ -3077,11 +3338,35 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "외기 TOP 100 화면"
                     st.rerun()
     with btn_col7:
-        st.markdown('<div class="btn-style-gray"></div>', unsafe_allow_html=True)
-        if st.button("예비1", key="btn_reserve_1", use_container_width=True): pass
+        # 🌟 [신규 2026-07-30] "내관심" — 관심종목(즐겨찾기) 화면. 골든픽/외기와 동일한 접근 규칙(정회원 이상).
+        is_watch_active = (current_scrn == "내 관심종목")
+        cls_watch = "btn-style-green-active" if is_watch_active else "btn-style-green"
+        st.markdown(f'<div class="{cls_watch}"></div>', unsafe_allow_html=True)
+        if st.button("내관심", key="btn_watchlist", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if st.session_state.get('scrn_select_radio') != "내 관심종목":
+                    st.session_state['scrn_select_radio'] = "내 관심종목"
+                    st.rerun()
     with btn_col8:
-        st.markdown('<div class="btn-style-gray"></div>', unsafe_allow_html=True)
-        if st.button("예비2", key="btn_reserve_2", use_container_width=True): pass
+        # 🌟 [신규 2026-07-30] "테마킹" — 테마주 랭킹(섹터 모멘텀) 화면. 골든픽/외기와 동일한 접근 규칙(정회원 이상).
+        is_themeking_active = (current_scrn == "테마 랭킹")
+        cls_themeking = "btn-style-yellow-active" if is_themeking_active else "btn-style-yellow"
+        st.markdown(f'<div class="{cls_themeking}"></div>', unsafe_allow_html=True)
+        if st.button("테마킹", key="btn_themeking", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if st.session_state.get('scrn_select_radio') != "테마 랭킹":
+                    st.session_state['scrn_select_radio'] = "테마 랭킹"
+                    st.rerun()
 
     # 🌟 [버튼 재배치 2026-07-30] 3번째 줄 (구 2번째 줄) — 관리자에게만 보이고 관리자만 사용 가능 (기존 규칙 그대로)
     if st.session_state.get('is_admin', False):
@@ -3222,6 +3507,9 @@ if choice == "🏠 홈화면":
             st.session_state['current_user'] = ""
             st.rerun()
 
+    # 🔧 [추가 2026-07-30] 투자 유의 문구 위 구분선
+    st.sidebar.markdown('<hr style="margin:10px 0 6px 0; border:none; border-top:1px solid #333333;">', unsafe_allow_html=True)
+
     # 🔧 [추가 2026-07-30] 투자 유의 문구 (사이드바 맨 하단, 로그아웃 버튼 색상보다 살짝 밝게)
     st.sidebar.markdown(
         """
@@ -3232,6 +3520,35 @@ if choice == "🏠 홈화면":
         """,
         unsafe_allow_html=True
     )
+
+    # 🌟 [신규 2026-07-30] 골든스코어 / 뉴스감성 산출 방식 FAQ (사용자 문의 대응용, 문구 바로 아래 배치)
+    with st.sidebar.expander("ℹ️ 골든스코어는 어떻게 계산되나요?"):
+        st.markdown(
+            """
+            <div style="font-size:8.5pt; color:#dddddd; line-height:1.5;">
+            골든스코어는 아래와 같은 시장 수급 데이터를 종합해 산출하는 참고 점수입니다 (0~100점).<br><br>
+            • 외국인·기관의 동반 순매수 여부와 규모<br>
+            • 최근 며칠간 이 흐름이 지속되고 있는지 (하루성 vs 지속적 관심)<br>
+            • 실시간 대량 매수(고래) 활동 정도<br>
+            • 최근 상한가 이력<br>
+            • 관리종목·거래정지 등 위험 신호 유무<br><br>
+            이 점수는 과거~현재의 수급 데이터를 정리해 보여드리는 참고 지표이며, 특정 종목의 매수/매도를 추천하거나 향후 수익을 보장하는 것이 아닙니다. 점수 산출 기준은 서비스 품질 개선을 위해 예고 없이 조정될 수 있습니다. 모든 투자 판단과 그에 따른 손익은 투자자 본인의 책임입니다.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with st.sidebar.expander("ℹ️ 📰 뉴스감성 점수는 무엇인가요?"):
+        st.markdown(
+            """
+            <div style="font-size:8.5pt; color:#dddddd; line-height:1.5;">
+            📰 뉴스감성은 해당 종목의 최근 뉴스 제목들을 AI가 읽고, 시장 심리가 긍정적인지 부정적인지를 -5(매우 부정적) ~ +5(매우 긍정적) 사이의 숫자로 정리해 보여드리는 실험적 참고 지표입니다.<br><br>
+            매일 자동으로 갱신되며, 아직 해당 종목의 뉴스가 수집되지 않았거나 분석 전이라면 빈칸으로 표시됩니다.<br><br>
+            이 점수는 AI가 뉴스 제목만으로 판단한 참고용 감성 지표이며, 실제 기업 가치나 향후 주가를 보장하지 않습니다. 뉴스 해석은 AI마다 다를 수 있으니 참고 자료로만 활용해 주세요.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     if df.empty and scrn_select not in ["TOP 10 화면", "수익율 화면", "상선고 화면", "수익율 자랑", "기간 누적 폭주", "고래 골든픽"]:
         st.warning("⚠️ 해당 조건의 고래 데이터가 없거나, 아직 수집 전입니다!")
@@ -4075,8 +4392,8 @@ if choice == "🏠 홈화면":
             col_gold_left, col_gold_right = st.columns([1.8, 1])
             
             with col_gold_left:
-                st.markdown("<h4 style='color:#E040FB; border-left: 4px solid #E040FB; padding-left: 10px; margin-top: 0;'>🏆 고래 골든픽 (황금 승률 추천 TOP 20)</h4>", unsafe_allow_html=True)
-                st.caption("시장 세력 수급, 외인/기관 쌍끌이, 상한가 족보, 실시간 고래 활동 및 위험 배지를 입체 종합 분석하여 산출된 1~20위 최정예 추천 종목입니다. 🚀")
+                st.markdown("<h4 style='color:#E040FB; border-left: 4px solid #E040FB; padding-left: 10px; margin-top: 0;'>🏆 고래 골든픽 TOP 20</h4>", unsafe_allow_html=True)
+                st.caption("시장 세력 수급, 외인/기관 쌍끌이, 상한가 족보, 실시간 고래 활동 및 위험 배지를 입체 종합 분석하여 산출된 1~20위 최정예 종목입니다. 🚀")
                 st.write("")
 
 
@@ -4185,18 +4502,21 @@ if choice == "🏠 홈화면":
             start_date_str = (sel_date_dt - timedelta(days=14)).strftime("%Y-%m-%d")
             sel_date_str = selected_date.strftime("%Y-%m-%d")
 
+            # 🔧 [수정 2026-07-30] 아래 네 개 쿼리(daily_whale_top200 x2, upper_limit_stocks, whale_log 페이지네이션)는
+            # 선택 날짜(sel_date_str)가 안 바뀌면 결과가 똑같으므로 st.cache_data로 하루 캐싱된 함수를 통해 가져옴 —
+            # 화면 안에서 AI 요약 보기/차트 이동 등 다른 버튼을 눌러도 이 무거운 조회가 매번 반복되지 않도록 함.
+            # (캘린더에서 날짜를 바꾸면 sel_date_str/start_date_str이 달라지므로 자동으로 새로 조회됨.)
             with st.spinner(f"🚀 {selected_date.strftime('%Y년 %m월 %d일')} 기준 최정예 골든 픽 종목을 종합 분석 중입니다..."):
-                # 🎯 해당 선택 날짜 전용 1000개 한도 쿼리로 누락 방지!
-                top_res = supabase.table("daily_whale_top200").select("*").eq("trade_date", sel_date_str).limit(1000).execute()
-                # 수급 지속성 계산용 과거 14일 쿼리
-                hist_res = supabase.table("daily_whale_top200").select("stock_code, trade_date").gte("trade_date", start_date_str).lte("trade_date", sel_date_str).limit(5000).execute()
-                
-                if not top_res.data:
+                base_data_gp = _fetch_golden_pick_base_data(sel_date_str, start_date_str)
+                top_data_gp = base_data_gp["top_data"]
+
+                if not top_data_gp:
                     st.warning("⚠️ 해당 날짜의 수급 데이터가 준비되지 않았습니다.")
                 else:
-                    df_latest_gp = pd.DataFrame(top_res.data)
-                    if hist_res.data:
-                        df_hist = pd.DataFrame(hist_res.data)
+                    df_latest_gp = pd.DataFrame(top_data_gp)
+                    hist_data_gp = base_data_gp["hist_data"]
+                    if hist_data_gp:
+                        df_hist = pd.DataFrame(hist_data_gp)
                         all_dates = sorted(df_hist['trade_date'].unique(), reverse=True)
                         total_trading_days = len(all_dates) if all_dates else 1
                         appear_counts = df_hist.groupby('stock_code')['trade_date'].nunique().to_dict()
@@ -4204,31 +4524,13 @@ if choice == "🏠 홈화면":
                         total_trading_days = 1
                         appear_counts = {}
 
-                    # 🔧 [버그 수정 2026-07-29]: 상단(.lte) 상한선이 없어서 선택한 날짜(sel_date_str) 이후의
-                    # 미래 상한가 기록까지 새어 들어올 수 있었음 (차트 쪽 계산은 d_dt를 상한으로 걸어서 이미 막고 있었음).
-                    upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", start_date_str).lte("recorded_date", sel_date_str).execute()
-                    upper_names = set([r['name'] for r in upper_res.data]) if upper_res.data else set()
+                    upper_names = set([r['name'] for r in base_data_gp["upper_data"]]) if base_data_gp["upper_data"] else set()
 
                     whale_realtime = {}
-                    
-                    # 1. 14일치 DB 고래 수급 데이터 조회 (항상 실행하여 과거 14일 이내 고래 포착 여부 누적 반영)
-                    try:
-                        all_w_data = []
-                        page_size = 1000
-                        start = 0
-                        # 최대 5만건까지 페이지네이션 (PostgREST 1000건 제한 우회)
-                        while start < 50000:
-                            # 🔧 [버그 수정 2026-07-29]: name(종목명) exact-match/이모지 클린 매칭은 whale_log에 섞인
-                            # 표기 변형(이모지, 공백 등)에 취약해서 일부 행을 놓친다 → 차트/골든픽 rt_buy 불일치 원인.
-                            # code(종목코드)는 표기 변형이 없는 고유값이라 여기로 통일.
-                            w_res = supabase.table("whale_log").select("code, side, amount_krw").gte("date", start_date_str).lte("date", sel_date_str).order("date", desc=True).order("time", desc=True).range(start, start + page_size - 1).execute()
-                            if not w_res.data:
-                                break
-                            all_w_data.extend(w_res.data)
-                            if len(w_res.data) < page_size:
-                                break
-                            start += page_size
 
+                    # 1. 14일치 DB 고래 수급 데이터 (캐시된 조회 결과 사용, 항상 반영하여 과거 14일 이내 고래 포착 여부 누적 반영)
+                    try:
+                        all_w_data = base_data_gp["whale_log_data"]
                         if all_w_data:
                             df_w_db = pd.DataFrame(all_w_data)
                             for code_val, group_val in df_w_db.groupby('code'):
@@ -4239,7 +4541,8 @@ if choice == "🏠 홈화면":
                     except Exception:
                         pass
 
-                    # 2. 당일 실시간 데이터(df)가 있으면 기존 DB 합산값에 누적 (당일 포착분 추가)
+                    # 2. 당일 실시간 데이터(df)가 있으면 기존 DB 합산값에 누적 (당일 포착분 추가) — 이 부분은 캐시하지 않고
+                    #    매번 그대로 반영해서, 캐시된 하루치 기준값 위에 "지금 이 순간"의 실시간 틱을 얹어줌.
                     if not df.empty and 'side' in df.columns and 'code' in df.columns:
                         for code_val, group_val in df.groupby('code'):
                             c_code = str(code_val).strip().zfill(6)
@@ -4351,6 +4654,21 @@ if choice == "🏠 홈화면":
                         top20_gp = df_cand.head(20).copy()
                         top20_gp.insert(0, "순위", range(1, len(top20_gp) + 1))
 
+                        # 🌟 [신규 2026-07-30] 뉴스 감성점수 조인 (scripts/fetch_news_sentiment.py 배치가 채워주는 news_sentiment_daily)
+                        # 아직 실험 단계 기능이라 실패해도 골든픽 화면 자체는 항상 정상 표출되도록 예외를 넓게 잡음
+                        try:
+                            codes_gp = top20_gp['code'].tolist()
+                            sent_res = supabase.table("news_sentiment_daily").select("stock_code, trade_date, sentiment_score").in_("stock_code", codes_gp).order("trade_date", desc=True).execute()
+                            sent_map = {}
+                            if sent_res.data:
+                                for r in sent_res.data:
+                                    # 최신순 정렬이므로 종목당 가장 먼저 나오는 값(=가장 최근 날짜)만 채택
+                                    if r['stock_code'] not in sent_map:
+                                        sent_map[r['stock_code']] = r['sentiment_score']
+                            top20_gp['news_sentiment'] = top20_gp['code'].map(sent_map)
+                        except Exception:
+                            top20_gp['news_sentiment'] = None
+
                         st.markdown("<h5 style='color:#FFD700; margin-top:15px;'>🥇 오늘의 TOP 3 골든 픽 명예의 전당</h5>", unsafe_allow_html=True)
                         c1_gp, c2_gp, c3_gp = st.columns(3)
                         medals = ["🥇 1위", "🥈 2위", "🥉 3위"]
@@ -4382,16 +4700,32 @@ if choice == "🏠 홈화면":
 
                         top20_key_gp = f"golden_pick_table_{st.session_state.get('gp_reset_counter', 0)}"
 
-                        display_gp = top20_gp[['순위', 'name', 'market', 'score', 'warning', 'total_net', 'frgn_net', 'orgn_net', 'rt_buy', 'reason']].copy()
+                        display_gp = top20_gp[['순위', 'name', 'market', 'score', 'warning', 'total_net', 'frgn_net', 'orgn_net', 'rt_buy', 'news_sentiment', 'reason']].copy()
                         display_gp = display_gp.rename(columns={
                             'name': '종목명', 'market': '시장', 'score': '황금점수',
                             'warning': '특이사항', 'total_net': '🟣외/기 순매수(억)',
                             'frgn_net': '🟣외국인 순매수(억)', 'orgn_net': '🟡기관 순매수(억)',
-                            'rt_buy': '🐋고래매수 일평균(백만)', 'reason': '핵심 추천 포인트'
+                            'rt_buy': '🐋고래매수 일평균(백만)', 'news_sentiment': '📰 뉴스감성',
+                            'reason': '핵심 추천 포인트'
                         })
 
+                        # 🌟 [신규 2026-07-30] 뉴스감성 점수 색상(호재=빨강/악재=파랑/중립=회색, 이 앱의 매수·매도 색 관례와 통일)
+                        # 🔧 [수정 2026-07-30] font-size 시도는 반영이 안 되는 것으로 확인되어 제거.
+                        #    대신 "🟡기관 순매수(억)" 컬럼처럼 Styler를 아예 안 씌운(스타일 없는 기본) 컬럼과 폰트가
+                        #    똑같아 보이도록 color만 남기고 font-weight/font-size는 모두 제거함(컬러 로직은 그대로 유지).
+                        def _get_sentiment_color(val):
+                            if pd.isna(val):
+                                return 'color: #777777;'
+                            if val > 0:
+                                return 'color: #ff4b4b;'
+                            elif val < 0:
+                                return 'color: #4B89B5;'
+                            return 'color: #aaaaaa;'
+
+                        styled_gp = display_gp.style.applymap(_get_sentiment_color, subset=['📰 뉴스감성'])
+
                         event_gp = st.dataframe(
-                            display_gp,
+                            styled_gp,
                             use_container_width=True,
                             hide_index=True,
                             height=580,
@@ -4406,6 +4740,7 @@ if choice == "🏠 홈화면":
                                 "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
                                 "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
                                 "🐋고래매수 일평균(백만)": st.column_config.NumberColumn(format="%,.0f백만"),
+                                "📰 뉴스감성": st.column_config.NumberColumn(format="%+d", help="배치 스크립트(fetch_news_sentiment.py)가 매일 채워주는 실험적 뉴스 감성 점수 (-5~+5). 아직 데이터 없으면 빈칸."),
                             }
                         )
 
@@ -4432,6 +4767,332 @@ if choice == "🏠 홈화면":
                                     st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
                                     st.session_state['scrn_select_radio'] = "체결 로그"
                                     st.rerun()
+
+        elif scrn_select == "내 관심종목":
+            st.markdown("<h4 style='color:#2E8B57; border-left: 4px solid #2E8B57; padding-left: 10px;'>⭐ 내 관심종목</h4>", unsafe_allow_html=True)
+            st.caption("관심 있는 종목을 등록해두면 오늘자 골든점수·외/기 수급·뉴스감성을 한눈에 모아볼 수 있습니다.")
+
+            watch_username = st.session_state.get('username', '')
+
+            if 'watch_input_reset_counter' not in st.session_state:
+                st.session_state['watch_input_reset_counter'] = 0
+
+            add_col1, add_col2 = st.columns([3, 1])
+            with add_col1:
+                new_watch_input = st.text_input(
+                    "종목명 또는 종목코드 입력 후 추가",
+                    key=f"watch_add_input_{st.session_state['watch_input_reset_counter']}",
+                    placeholder="예: 삼성전자 또는 005930"
+                )
+            with add_col2:
+                st.write("")
+                st.write("")
+                st.markdown('<div class="btn-style-align-up"></div>', unsafe_allow_html=True)
+                add_watch_clicked = st.button("➕ 추가", key="watch_add_btn", use_container_width=True)
+
+            if add_watch_clicked:
+                if not new_watch_input.strip():
+                    st.warning("⚠️ 종목명 또는 종목코드를 입력해주세요.")
+                else:
+                    try:
+                        krx_df_w = get_cached_krx_listing()
+                        query_str_w = new_watch_input.strip()
+                        match_w = krx_df_w[krx_df_w['Code'] == query_str_w.zfill(6)]
+                        if match_w.empty:
+                            match_w = krx_df_w[krx_df_w['Name'] == query_str_w]
+                        if match_w.empty:
+                            match_w = krx_df_w[krx_df_w['Name'].str.contains(query_str_w, case=False, na=False)]
+
+                        if match_w.empty:
+                            st.warning(f"⚠️ '{query_str_w}'에 해당하는 종목을 찾을 수 없습니다.")
+                        else:
+                            if len(match_w) > 1:
+                                st.info(f"🔍 '{query_str_w}'로 검색된 종목이 여러 개라 첫 번째 결과({match_w.iloc[0]['Name']})를 추가합니다. 정확한 종목명으로 다시 검색해보시면 원하는 종목을 콕 집어 추가할 수 있어요.")
+                            row_match_w = match_w.iloc[0]
+                            match_code_w = str(row_match_w['Code']).strip().zfill(6)
+                            match_name_w = str(row_match_w['Name']).strip()
+
+                            supabase.table("user_watchlist").upsert({
+                                "username": watch_username,
+                                "stock_code": match_code_w,
+                                "stock_name": match_name_w,
+                            }, on_conflict="username,stock_code").execute()
+                            st.success(f"✅ '{match_name_w}' 관심종목에 추가되었습니다.")
+                            st.session_state['watch_input_reset_counter'] += 1
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"추가 중 오류가 발생했습니다: {e}")
+
+            st.write("---")
+
+            try:
+                watch_res = supabase.table("user_watchlist").select("*").eq("username", watch_username).order("created_at", desc=True).execute()
+                watch_list = watch_res.data if watch_res.data else []
+            except Exception:
+                watch_list = []
+
+            if not watch_list:
+                st.info("아직 등록된 관심종목이 없습니다. 위에서 종목을 추가해보세요.")
+            else:
+                watch_codes = [w['stock_code'] for w in watch_list]
+                watch_names = [w['stock_name'] for w in watch_list]
+
+                today_watch = get_latest_market_open_date()
+                today_watch_str = today_watch.strftime("%Y-%m-%d")
+                start_watch_str = (today_watch - timedelta(days=14)).strftime("%Y-%m-%d")
+
+                with st.spinner("⭐ 관심종목의 오늘자 골든점수를 계산하는 중입니다..."):
+                    # 🔧 [신규 2026-07-30] 아래 골든점수 계산은 "고래 골든픽" 화면(~4260줄 부근)의 배점 공식을
+                    # 관심종목(임의의 종목 리스트)에 맞게 그대로 옮겨온 것 — 세 번째 복제본이라는 점을 인지하고 있음.
+                    # ⚠️ 향후 배점 공식을 조정할 때는 차트(draw_whale_bar_chart)/골든픽 화면/이 화면 3곳을 모두 맞춰야 함
+                    # (공용 함수로 합치는 리팩터링은 추후 과제로 남겨둠 — 기존 화면들을 건드리는 리스크를 피하기 위함).
+                    global_meta_w = get_global_stock_metadata()
+
+                    try:
+                        today_res_w = supabase.table("daily_whale_top200").select("*").eq("trade_date", today_watch_str).in_("stock_code", watch_codes).execute()
+                        today_map_w = {r['stock_code']: r for r in today_res_w.data} if today_res_w.data else {}
+                    except Exception:
+                        today_map_w = {}
+
+                    try:
+                        hist_res_w = supabase.table("daily_whale_top200").select("trade_date").gte("trade_date", start_watch_str).lte("trade_date", today_watch_str).execute()
+                        all_dates_w = sorted(set(r['trade_date'] for r in hist_res_w.data)) if hist_res_w.data else []
+                        total_trading_days_w = len(all_dates_w) if all_dates_w else 1
+                    except Exception:
+                        total_trading_days_w = 1
+
+                    try:
+                        appear_res_w = supabase.table("daily_whale_top200").select("stock_code, trade_date").gte("trade_date", start_watch_str).lte("trade_date", today_watch_str).in_("stock_code", watch_codes).execute()
+                        appear_counts_w = {}
+                        if appear_res_w.data:
+                            df_appear_w = pd.DataFrame(appear_res_w.data)
+                            appear_counts_w = df_appear_w.groupby('stock_code')['trade_date'].nunique().to_dict()
+                    except Exception:
+                        appear_counts_w = {}
+
+                    try:
+                        upper_res_w = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", start_watch_str).lte("recorded_date", today_watch_str).in_("name", watch_names).execute()
+                        upper_names_w = set(r['name'] for r in upper_res_w.data) if upper_res_w.data else set()
+                    except Exception:
+                        upper_names_w = set()
+
+                    whale_realtime_w = {}
+                    try:
+                        w_res_w = supabase.table("whale_log").select("code, side, amount_krw").gte("date", start_watch_str).lte("date", today_watch_str).in_("code", watch_codes).execute()
+                        if w_res_w.data:
+                            df_w_watch = pd.DataFrame(w_res_w.data)
+                            for code_val_w, group_val_w in df_w_watch.groupby('code'):
+                                c_code_w = str(code_val_w).strip().zfill(6)
+                                whale_realtime_w[c_code_w] = group_val_w[group_val_w['side'] == '매수']['amount_krw'].sum() / 1_000_000
+                    except Exception:
+                        pass
+
+                    try:
+                        sent_res_w = supabase.table("news_sentiment_daily").select("stock_code, trade_date, sentiment_score").in_("stock_code", watch_codes).order("trade_date", desc=True).execute()
+                        sent_map_w = {}
+                        if sent_res_w.data:
+                            for r in sent_res_w.data:
+                                if r['stock_code'] not in sent_map_w:
+                                    sent_map_w[r['stock_code']] = r['sentiment_score']
+                    except Exception:
+                        sent_map_w = {}
+
+                rows_watch = []
+                for w in watch_list:
+                    code_w = w['stock_code']
+                    name_w = w['stock_name']
+                    td_w = today_map_w.get(code_w)
+                    in_top200_today = td_w is not None
+
+                    if td_w:
+                        frgn_net_w = td_w['frgn_buy'] - td_w['frgn_sell']
+                        orgn_net_w = td_w['orgn_buy'] - td_w['orgn_sell']
+                    else:
+                        frgn_net_w = 0.0
+                        orgn_net_w = 0.0
+                    total_net_w = frgn_net_w + orgn_net_w
+
+                    rt_buy_w = whale_realtime_w.get(code_w, 0.0) / total_trading_days_w
+                    app_count_w = appear_counts_w.get(code_w, 0)
+                    warning_text_w = get_warning_text(name_w, global_meta_w)
+
+                    score_w = 25
+                    reasons_w = []
+
+                    if rt_buy_w >= 1000:
+                        score_w += 15
+                        reasons_w.append(f"🐋 고래매수 일평균 대량({rt_buy_w/100:.1f}억)")
+                    elif rt_buy_w >= 100:
+                        score_w += 9
+                        reasons_w.append(f"🐋 고래매수 일평균 포착({rt_buy_w/100:.1f}억)")
+                    elif rt_buy_w > 0:
+                        score_w += 5
+                        reasons_w.append("🐋 고래 소액 체결 포착")
+                    else:
+                        score_w -= 9
+                        reasons_w.append("⚠️ 실시간 고래 포착 미흡")
+
+                    if total_net_w >= 300:
+                        score_w += 15
+                    elif total_net_w >= 100:
+                        score_w += 12
+                    elif total_net_w >= 50:
+                        score_w += 9
+                    elif total_net_w >= 20:
+                        score_w += 6
+                    elif total_net_w > 0:
+                        score_w += 2
+
+                    if frgn_net_w > 0 and orgn_net_w > 0:
+                        score_w += 9
+                        reasons_w.append("🔥 외/기 동시 쌍끌이")
+                    elif frgn_net_w < -100 or orgn_net_w < -100:
+                        score_w -= 12
+                        reasons_w.append("⚠️ 외인/기관 한쪽 대량 덤핑(-100억 이상)")
+
+                    if app_count_w >= total_trading_days_w:
+                        score_w += 9
+                        reasons_w.append(f"👑 {total_trading_days_w}일 연속 수급 장악")
+                    elif app_count_w > 0 and app_count_w >= total_trading_days_w - 1:
+                        score_w += 5
+                        reasons_w.append("✨ 수급 지속성 우수")
+
+                    if name_w in upper_names_w:
+                        if app_count_w > 0 and app_count_w >= total_trading_days_w - 1:
+                            score_w += 6
+                            reasons_w.append("🚀 상한가 후 수급 유지")
+                        else:
+                            score_w -= 18
+                            reasons_w.append("⚠️ 상한가 후 수급 이탈 이력")
+
+                    if not warning_text_w:
+                        score_w += 3
+                    else:
+                        score_w -= 9
+                        reasons_w.append(f"🚨 {warning_text_w}")
+
+                    if not reasons_w:
+                        reasons_w.append("수급 순매수 우상향")
+
+                    score_w = max(0, min(score_w, 100))
+
+                    rows_watch.append({
+                        "종목명": name_w,
+                        "코드": code_w,
+                        "골든점수": score_w,
+                        "오늘 TOP200": "✅" if in_top200_today else "❌",
+                        "🟣외/기 순매수(억)": total_net_w,
+                        "🟣외국인 순매수(억)": frgn_net_w,
+                        "🟡기관 순매수(억)": orgn_net_w,
+                        "📰 뉴스감성": sent_map_w.get(code_w),
+                        "핵심 포인트": " | ".join(reasons_w),
+                    })
+
+                df_watch = pd.DataFrame(rows_watch).sort_values(by="골든점수", ascending=False).reset_index(drop=True)
+                st.caption("⚠️ '오늘 TOP200'이 ❌인 종목은 외국인/기관 순매수 TOP 100(코스피)+TOP 100(코스닥)에 들지 못해 외/기 수급이 0으로 처리된 상태입니다 (골든점수가 실제보다 낮게 나올 수 있음).")
+
+                # 🌟 [신규 2026-07-30] "고래 골든픽" 화면과 동일하게 뉴스감성 점수에 색상 적용
+                # (호재=빨강/악재=파랑/중립=회색). 골든픽 화면의 _get_sentiment_color와 동일 로직이지만
+                # 서로 다른 elif 분기(화면)라 세션 내에서 공유되지 않아 이 화면에도 동일 함수를 둠.
+                def _get_sentiment_color_watch(val):
+                    if pd.isna(val):
+                        return 'color: #777777;'
+                    if val > 0:
+                        return 'color: #ff4b4b;'
+                    elif val < 0:
+                        return 'color: #4B89B5;'
+                    return 'color: #aaaaaa;'
+
+                styled_watch = df_watch.style.applymap(_get_sentiment_color_watch, subset=['📰 뉴스감성'])
+
+                st.markdown('<div class="no-header-icon"></div>', unsafe_allow_html=True)
+                st.dataframe(
+                    styled_watch,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "골든점수": st.column_config.NumberColumn("골든점수", format="%,d점"),
+                        "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
+                        "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
+                        "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
+                        "📰 뉴스감성": st.column_config.NumberColumn(format="%+d"),
+                    }
+                )
+
+                st.write("---")
+                st.markdown("<div style='font-size:13px; color:#aaa; margin-bottom:6px;'>🗑️ 관심종목 삭제</div>", unsafe_allow_html=True)
+                del_cols = st.columns(4)
+                for idx_w, w in enumerate(watch_list):
+                    with del_cols[idx_w % 4]:
+                        if st.button(f"❌ {w['stock_name']}", key=f"watch_del_{w['stock_code']}", use_container_width=True):
+                            try:
+                                supabase.table("user_watchlist").delete().eq("username", watch_username).eq("stock_code", w['stock_code']).execute()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"삭제 실패: {e}")
+
+        elif scrn_select == "테마 랭킹":
+            st.markdown("<h4 style='color:#FFD400; border-left: 4px solid #FFD400; padding-left: 10px;'>👑 테마킹 - 오늘의 테마 모멘텀 랭킹</h4>", unsafe_allow_html=True)
+            st.caption("오늘 외국인/기관 순매수 TOP 100(코스피)+TOP 100(코스닥)에 오른 종목들을 테마별로 묶어, 어떤 테마에 수급이 몰리고 있는지 보여줍니다.")
+            st.caption("⚠️ 테마 매핑 데이터가 현재 약 100개 종목에 한해 등록되어 있어, 테마 매핑이 없는 종목은 집계에서 빠질 수 있습니다.")
+
+            today_theme = get_latest_market_open_date()
+            today_theme_str = today_theme.strftime("%Y-%m-%d")
+
+            with st.spinner("🏷️ 오늘의 테마 모멘텀을 집계하는 중입니다..."):
+                try:
+                    theme_top_res = supabase.table("daily_whale_top200").select("*").eq("trade_date", today_theme_str).execute()
+                    df_theme_top = pd.DataFrame(theme_top_res.data) if theme_top_res.data else pd.DataFrame()
+                except Exception:
+                    df_theme_top = pd.DataFrame()
+
+            if df_theme_top.empty:
+                st.warning("⚠️ 오늘자 수급 데이터가 아직 준비되지 않았습니다.")
+            else:
+                df_theme_top['frgn_net'] = df_theme_top['frgn_buy'] - df_theme_top['frgn_sell']
+                df_theme_top['orgn_net'] = df_theme_top['orgn_buy'] - df_theme_top['orgn_sell']
+                df_theme_top['total_net'] = df_theme_top['frgn_net'] + df_theme_top['orgn_net']
+
+                theme_map_today = get_themes_for_stocks(df_theme_top['stock_name'].tolist())
+
+                theme_agg = {}
+                for _, r_t in df_theme_top.iterrows():
+                    theme_str_t = theme_map_today.get(r_t['stock_name'], "")
+                    if not theme_str_t:
+                        continue
+                    for t_name in [t.strip() for t in theme_str_t.split(',') if t.strip()]:
+                        if t_name not in theme_agg:
+                            theme_agg[t_name] = {"total_net": 0.0, "stocks": []}
+                        theme_agg[t_name]["total_net"] += r_t['total_net']
+                        theme_agg[t_name]["stocks"].append((r_t['stock_name'], r_t['total_net']))
+
+                if not theme_agg:
+                    st.info("오늘 TOP 200 종목 중 테마 매핑이 확인된 종목이 없습니다.")
+                else:
+                    theme_rows = []
+                    for t_name, info_t in theme_agg.items():
+                        top_stocks_t = sorted(info_t["stocks"], key=lambda x: x[1], reverse=True)[:3]
+                        top_stocks_str_t = ", ".join([f"{n}({v:,.0f}억)" for n, v in top_stocks_t])
+                        theme_rows.append({
+                            "테마명": t_name,
+                            "종목수": len(info_t["stocks"]),
+                            "합산 외/기 순매수(억)": info_t["total_net"],
+                            "대표 종목": top_stocks_str_t,
+                        })
+
+                    df_theme_rank = pd.DataFrame(theme_rows).sort_values(by="합산 외/기 순매수(억)", ascending=False).reset_index(drop=True)
+                    df_theme_rank.insert(0, "순위", df_theme_rank.index + 1)
+
+                    st.dataframe(
+                        df_theme_rank,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=600,
+                        column_config={
+                            "순위": st.column_config.NumberColumn("순위", format="%,d위"),
+                            "합산 외/기 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
+                        }
+                    )
 
         elif scrn_select == "상선고 화면":
             st.markdown("<h4 style='color:#FF8C00; border-left: 4px solid #FF8C00; padding-left: 10px;'>📡 상한가 선행 고래 포착 레이더 (상선고)</h4>", unsafe_allow_html=True)
