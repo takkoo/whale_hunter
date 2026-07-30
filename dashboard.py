@@ -105,7 +105,7 @@ apply_query_params(raw_qs)
 if not st.session_state.get('authenticated', False):
     _scrn = st.session_state.get('scrn_select_radio', "체결 로그")
     _search = st.session_state.get('search_input_val', "")
-    if _scrn in ["TOP 10 화면", "수익율 화면", "상선고 화면", "기간 누적 폭주", "고래 골든픽"] or st.session_state.get('upper_limit_filter', False) or _search:
+    if _scrn in ["TOP 10 화면", "수익율 화면", "상선고 화면", "기간 누적 폭주"] or st.session_state.get('upper_limit_filter', False) or _search:
         st.session_state['scrn_select_radio'] = "체결 로그"
         st.session_state['upper_limit_filter'] = False
         st.session_state['last_search_keyword'] = ""
@@ -148,105 +148,42 @@ if "mock_stock" in st.query_params and "mock_date" in st.query_params:
 
 import google.generativeai as genai
 from bs4 import BeautifulSoup
-import json
-import os
-
-@st.cache_data(ttl=60)
-def get_global_stock_metadata():
-    """백그라운드에서 수집된 시장경보 및 52주 고/저가 캐시 파일 읽기 (60초 캐싱)
-    클라우드 동기화를 위해 먼저 Supabase에서 읽고, 실패 시 로컬 파일 읽기"""
-    try:
-        res = supabase.table("system_settings").select("key, value").like("key", "stock_meta_%").execute()
-        if res.data:
-            chunks = sorted(res.data, key=lambda x: int(x['key'].split('_')[-1]))
-            full_str = "".join([c['value'] for c in chunks])
-            return json.loads(full_str)
-    except Exception as e:
-        print(f"☁️ Supabase 메타데이터 로드 실패 (로컬로 폴백): {e}")
-        
-    metadata_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_metadata.json")
-    if os.path.exists(metadata_path):
-        try:
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-def append_warning_badge(stock_name, metadata, html=False):
-    """종목명에 시장경보 뱃지 추가"""
-    clean_name = stock_name.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
-    info = metadata.get(clean_name, {})
-    warnings = info.get("warnings", [])
-    if warnings:
-        # 투자경고, 투자위험, 관리종목 등 가장 심각한 것 1개만 표시
-        for w in ['투자위험', '투자경고', '관리종목', '거래정지', '단기과열', '투자주의', '투자주의환기종목', '환기종목']:
-            if w in warnings:
-                if html:
-                    return f"{stock_name} <span style='color: #FADB5F; font-size: 13px;'>🚨{w}</span>"
-                else:
-                    return stock_name # 표본 분리 모드에서는 종목명에 추가하지 않음
-        if html:
-            return f"{stock_name} <span style='color: #FADB5F; font-size: 13px;'>🚨{warnings[0]}</span>"
-        else:
-            return stock_name
-    return stock_name
-
-def get_warning_text(stock_name, metadata):
-    clean_name = stock_name.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
-    info = metadata.get(clean_name, {})
-    warnings = info.get("warnings", [])
-    if warnings:
-        for w in ['투자위험', '투자경고', '관리종목', '거래정지', '단기과열', '투자주의', '투자주의환기종목', '환기종목']:
-            if w in warnings:
-                return f"🚨{w}"
-        return f"🚨{warnings[0]}"
-    return ""
 
 @st.cache_data(ttl=86400)
-def get_naver_company_summary(stock_name, stock_code):
-    summary_text = ""
-    news_md = ""
-    news_raw = ""
-    fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A', 'roe': 'N/A', 'warnings': []}
-
-    # 1. 네이버 금융 시도
+def get_naver_company_summary(stock_code):
     try:
         url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Referer': 'https://finance.naver.com/'
-        }
-        res = requests.get(url, headers=headers, timeout=3)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            summary_p = soup.select_one('.summary_info p')
-            if summary_p and summary_p.text.strip():
-                summary_text = summary_p.text.strip()
-            
-            news_links = soup.select('.news_section ul li a')
-            news_html_items = []
-            news_raw_items = []
-            for a in news_links:
-                title = a.text.strip()
-                if "관련" not in title and title:
-                    href = a.get('href', '')
-                    if href.startswith('/'):
-                        href = "https://finance.naver.com" + href
-                    news_html_items.append(f"<li style='margin-bottom: 6px; margin-left: 20px;'><a href='{href}' target='_blank' style='color: #FADB5F; text-decoration: none;'>{title}</a></li>")
-                    news_raw_items.append(f"- {title}")
-                    
-            if news_html_items:
-                news_md = f"<ul style='margin-top: 5px; margin-bottom: 0;'>{''.join(news_html_items[:5])}</ul>"
-                news_raw = "\n".join(news_raw_items[:5])
-
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, 'html.parser')
+        summary_p = soup.select_one('.summary_info p')
+        summary_text = summary_p.text.strip() if summary_p else "네이버 금융에서 기업개요를 찾을 수 없습니다."
+        
+        news_links = soup.select('.news_section ul li a')
+        news_md_items = []
+        news_raw_items = []
+        for a in news_links:
+            title = a.text.strip()
+            if "관련" not in title and title:
+                href = a.get('href', '')
+                if href.startswith('/'):
+                    href = "https://finance.naver.com" + href
+                news_md_items.append(f"- [{title}]({href})")
+                news_raw_items.append(f"- {title}")
+                
+        news_md = "\n".join(news_md_items[:5]) if news_md_items else "최근 관련 뉴스가 없습니다."
+        news_raw = "\n".join(news_raw_items[:5]) if news_raw_items else "최근 관련 뉴스가 없습니다."
+        
+        fin_info = {'price': 'N/A', 'high52': 'N/A', 'low52': 'N/A', 'per': 'N/A', 'pbr': 'N/A', 'warnings': []}
+        try:
+            # 시장경보 (투자주의, 투자경고, 투자위험, 관리종목 등)
             warnings = set()
             for em in soup.select('.description em'):
                 blind = em.select_one('.blind')
-                if blind and blind.text.strip() in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '투자주의환기종목']:
-                    warnings.add(blind.text.strip())
+                if blind:
+                    text = blind.text.strip()
+                    if text in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '투자주의환기종목']:
+                        warnings.add(text)
             for img in soup.select('.description img'):
                 alt = img.get('alt', '')
                 if alt in ['투자주의', '투자경고', '투자위험', '단기과열', '거래정지', '관리종목', '환기종목']:
@@ -271,6 +208,7 @@ def get_naver_company_summary(stock_name, stock_code):
             pbr_tag = soup.select_one('#_pbr')
             if pbr_tag: fin_info['pbr'] = pbr_tag.text.strip()
             
+            # ROE 추출
             cop_table = soup.select_one('.cop_analysis')
             if cop_table:
                 for th in cop_table.select('th'):
@@ -280,82 +218,11 @@ def get_naver_company_summary(stock_name, stock_code):
                         if vals:
                             fin_info['roe'] = vals[-1]
                         break
-    except Exception:
-        pass
-
-    # 2. 다음 금융 API 2차 구원 투수 (네이버 실패 또는 개요 누락 시)
-    if not summary_text or fin_info['price'] == 'N/A':
-        try:
-            d_url = f"https://finance.daum.net/api/quotes/A{stock_code}"
-            d_headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'Referer': 'https://finance.daum.net/'
-            }
-            d_res = requests.get(d_url, headers=d_headers, timeout=3)
-            if d_res.status_code == 200:
-                d_json = d_res.json()
-                if not summary_text:
-                    d_sum = d_json.get('companySummary', '').strip()
-                    if d_sum:
-                        summary_text = d_sum
-                if fin_info['price'] == 'N/A' and d_json.get('tradePrice'):
-                    fin_info['price'] = f"{int(d_json['tradePrice']):,}"
-                if fin_info['high52'] == 'N/A' and d_json.get('high52wPrice'):
-                    fin_info['high52'] = f"{int(d_json['high52wPrice']):,}"
-                if fin_info['low52'] == 'N/A' and d_json.get('low52wPrice'):
-                    fin_info['low52'] = f"{int(d_json['low52wPrice']):,}"
-                if fin_info['per'] == 'N/A' and d_json.get('per'):
-                    fin_info['per'] = str(d_json['per'])
-                if fin_info['pbr'] == 'N/A' and d_json.get('pbr'):
-                    fin_info['pbr'] = str(d_json['pbr'])
-        except Exception:
-            pass
-
-    # 3. KRX 상장 데이터 3차 보완
-    if not summary_text:
-        try:
-            import pandas as pd
-            krx_df = get_cached_krx_listing()
-            if not krx_df.empty:
-                stock_row = krx_df[krx_df['Code'] == stock_code]
-                if not stock_row.empty:
-                    sector = stock_row.iloc[0].get('Sector', '')
-                    industry = stock_row.iloc[0].get('Industry', '')
-                    if pd.notna(sector) and pd.notna(industry) and sector and industry:
-                        summary_text = f"동사는 {sector} 섹터에 속하는 기업으로, 주요 사업으로 {industry}을(를) 영위하고 있음."
-        except Exception:
-            pass
-
-    if not summary_text:
-        summary_text = f"동사는 국내 시장에 상장된 주요 기업으로, 사업 영역을 지속적으로 확장해 나가고 있음."
-
-    # 4. 최근 뉴스 구글 RSS 4차 보완
-    if not news_md:
-        try:
-            import urllib.parse
-            gnews_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(stock_name + ' 주식')}&hl=ko&gl=KR&ceid=KR:ko"
-            g_res = requests.get(gnews_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=4)
-            g_soup = BeautifulSoup(g_res.text, 'xml')
-            items = g_soup.find_all('item')[:5]
-            md_items = []
-            raw_items = []
-            for item in items:
-                title = item.title.text if item.title else ""
-                link = item.link.text if item.link else ""
-                if title:
-                    md_items.append(f"<li style='margin-bottom: 6px; margin-left: 20px;'><a href='{link}' target='_blank' style='color: #FADB5F; text-decoration: none;'>{title}</a></li>")
-                    raw_items.append(f"- {title}")
-            if md_items:
-                news_md = f"<ul style='margin-top: 5px; margin-bottom: 0;'>{''.join(md_items)}</ul>"
-                news_raw = "\n".join(raw_items)
-        except Exception:
-            pass
-
-    if not news_md:
-        news_md = "최근 관련 뉴스를 불러올 수 없습니다."
-        news_raw = "최근 관련 뉴스가 없습니다."
-
-    return summary_text, news_md, news_raw, fin_info
+        except Exception: pass
+        
+        return summary_text, news_md, news_raw, fin_info
+    except Exception as e:
+        return f"요약 정보를 가져오는 중 오류가 발생했습니다: {e}", "", "", {}
 
 def get_chatgpt_company_summary(stock_name, news_text=""):
     gpt_stock_key = f"[GPT]{stock_name}"
@@ -471,15 +338,23 @@ def get_gemini_company_summary(stock_name, news_text=""):
 
     return summary
 
+@st.cache_data(ttl=86400)
+def get_cached_krx_listing():
+    import FinanceDataReader as fdr
+    return fdr.StockListing('KRX')
+
+# 🔧 [복원 2026-07-30] BackUp/dashboard_bk.py에는 있었는데 현재 파일에서 누락되어 있던 함수.
+# AI 분석 결과(Gemini/ChatGPT)를 "1. 기업개요"/"2. 현재상황및평가" 굵은 빨간 헤더 + "[호재]/[악재]/[전망]" 주홍색 태그 +
+# 다크 그린 배경 박스로 예쁘게 렌더링해준다. 이게 빠져있어서 AI 분석창이 그냥 st.success()의 밋밋한 텍스트로만 나오고 있었음.
 def render_ai_summary_box(text):
     if not text:
         return
     import re
-    
+
     # 1. 굵은 글씨 및 줄바꿈 처리
     html_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     html_text = html_text.replace("\n", "<br>")
-    
+
     # 2. "1. 기업 개요", "2. 현재 상황 및 평가" -> 빨간색 (Red: #ff4b4b), 아이콘 이모지 제거
     red_style = "color: #ff4b4b; font-weight: bold; font-size: 1.05em;"
     html_text = re.sub(
@@ -492,7 +367,7 @@ def render_ai_summary_box(text):
         rf'<span style="{red_style}">2. 현재 상황 및 평가</span>',
         html_text
     )
-    
+
     # 3. "[호재]", "[악재]", "[전망]" -> 주홍색 (Orange: #ff7f50)
     orange_style = "color: #ff7f50; font-weight: bold;"
     html_text = re.sub(
@@ -500,7 +375,7 @@ def render_ai_summary_box(text):
         rf'<span style="{orange_style}">\1</span>',
         html_text
     )
-    
+
     # 4. 시인성 높은 다크 그린 배경 컨테이너 렌더링
     container_html = f"""
     <div style="background-color: rgba(30, 50, 35, 0.45); border: 1px solid rgba(46, 125, 50, 0.5); border-radius: 8px; padding: 16px; font-size: 0.95em; line-height: 1.7; color: #e0e0e0; margin-bottom: 12px;">
@@ -511,7 +386,6 @@ def render_ai_summary_box(text):
 
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
-    st.markdown("""<style>div[data-testid="stDialog"] button[aria-label="Close"] {display: none;}</style>""", unsafe_allow_html=True)
     import FinanceDataReader as fdr
     if not stock_code:
         try:
@@ -534,7 +408,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     # 렌더링 전 정보 가져오기
     with st.spinner("정보를 가져오는 중..."):
         if stock_code:
-            naver_summary, naver_news_md, naver_news_raw, fin_info = get_naver_company_summary(stock_name, stock_code)
+            naver_summary, naver_news_md, naver_news_raw, fin_info = get_naver_company_summary(stock_code)
         else:
             naver_summary, naver_news_md, naver_news_raw, fin_info = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", "", {}
 
@@ -553,60 +427,26 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
         
         roe_str = f"{roe}%" if roe != 'N/A' else 'N/A'
         
-        progress_html = ""
-        try:
-            h_val = int(str(high52).replace(',', ''))
-            l_val = int(str(low52).replace(',', ''))
-            p_val = int(str(price).replace(',', ''))
-            if h_val > l_val:
-                ratio = (p_val - l_val) / (h_val - l_val) * 100
-                ratio = max(0, min(100, ratio))
-                
-                progress_html = f"""
-<div style='margin-top: 15px; margin-bottom: 5px; width: 100%; padding: 10px; background-color: #1a1c24; border-radius: 8px; border: 1px solid #333; box-sizing: border-box;'>
-    <div style='display: flex; justify-content: space-between; font-size: 12px; color: #e0e0e0; margin-bottom: 6px;'>
-        <span>📉 최저 {low52}</span>
-        <span style='color: #FFD700; font-weight: bold; font-size: 13px;'>현재 {price}</span>
-        <span>📈 최고 {high52}</span>
-    </div>
-    <div style='position: relative; height: 8px; background-color: #2a2d3a; border-radius: 4px; width: 100%;'>
-        <div style='position: absolute; left: 0; top: 0; height: 100%; width: {ratio}%; background: linear-gradient(90deg, #1e90ff, #ff4b4b); border-radius: 4px;'></div>
-        <div style='position: absolute; left: {ratio}%; top: -3px; height: 14px; width: 4px; background-color: white; border-radius: 2px; transform: translateX(-50%); box-shadow: 0 0 5px rgba(255,255,255,0.8);'></div>
-    </div>
-    <div style='text-align: center; font-size: 11px; color: #a0a0a0; margin-top: 6px;'>52주 최고/최저가 대비 현재 주가 위치</div>
-</div>
-"""
-        except Exception:
-            pass
-        
         metrics_html = f"""
-<div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
-    <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
-    <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
-        [ <span style='color: #90EE90;'>PER</span> {per} / <span style='color: #90EE90;'>PBR</span> {pbr} / <span style='color: #90EE90;'>ROE</span> {roe_str} ]
-    </div>
-</div>
-{progress_html}
-"""
+        <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
+            <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
+            <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
+                [ PER {per} / PBR {pbr} / ROE {roe_str} ]<br>
+                [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
+            </div>
+        </div>
+        """
         st.markdown(metrics_html, unsafe_allow_html=True)
     else:
         st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 10px;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>", unsafe_allow_html=True)
     
-    tab1, tab2, tab3 = st.tabs(["📊 기업개요", "🤖 Gemini AI 분석", "💡 ChatGPT AI 분석"])
+    tab1, tab2, tab3 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석", "💡 ChatGPT AI 분석"])
     
     with tab1:
         st.markdown("##### 🏢 기업 개요")
-        st.markdown(f"""
-        <div style="background-color: rgba(28, 131, 225, 0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #e0e0e0; font-size: 0.95em; line-height: 1.5;">
-            {naver_summary}
-        </div>
-        """, unsafe_allow_html=True)
+        st.info(naver_summary)
         st.markdown("##### 📰 최근 주요 뉴스")
-        st.markdown(f"""
-        <div style="background-color: rgba(255, 193, 7, 0.05); padding: 15px; border-radius: 8px; color: #FADB5F; font-size: 0.95em; line-height: 1.5;">
-            {naver_news_md}
-        </div>
-        """, unsafe_allow_html=True)
+        st.warning(naver_news_md if naver_news_md else "최근 뉴스가 없습니다.")
         
     with tab2:
         # 1. 먼저 DB에 캐시된 요약본이 있는지 빠르게 확인 (UI 블로킹 방지)
@@ -655,9 +495,9 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
             if db_summary_gpt:
                 render_ai_summary_box(db_summary_gpt)
             else:
-                st.info("💡 처음 조회하는 뉴스이거나 기존 분석이 만료(30일 경과)되었습니다. 아래 버튼을 눌러 AI 분석을 갱신하세요.")
+                st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
                 if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
-                    with st.spinner("ChatGPT가 뉴스를 바탕으로 분석 중입니다..."):
+                    with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
                         try:
                             chatgpt_summary = get_chatgpt_company_summary(stock_name, naver_news_raw)
                             render_ai_summary_box(chatgpt_summary)
@@ -723,8 +563,8 @@ def mock_data_dialog(stock, date_str):
                 market = matched.iloc[0]['Market']
                 market_type = "KOSPI" if market in ["KOSPI", "KOSPI200"] else "KOSDAQ"
                 
-                # Fetch price via ultra-fast Naver/Daum API
-                df_price = fetch_kis_daily_volume(code)
+                # Fetch price
+                df_price = fdr.DataReader(code, start=date_str, end=date_str)
                 if df_price.empty:
                     st.error(f"⚠️ {date_str}의 주가 데이터가 없습니다. (휴장일이거나 거래 정지 상태)")
                     return
@@ -791,6 +631,26 @@ def get_pure_stock_codes():
 # ------------------------------------------------------------------
 # 🏷️ [테마 칩셋] Supabase를 활용한 테마 저장소
 # ------------------------------------------------------------------
+
+def get_global_stock_metadata():
+    try:
+        import json, os
+        meta_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_metadata.json")
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def get_warning_text(stock_name, global_meta):
+    if not global_meta or stock_name not in global_meta:
+        return ""
+    info = global_meta.get(stock_name, {})
+    if isinstance(info, dict):
+        return info.get('warning', '') or info.get('special_note', '') or ""
+    return ""
+
 def get_themes_for_stocks(stock_names):
     if not stock_names:
         return {}
@@ -802,123 +662,51 @@ def get_themes_for_stocks(stock_names):
 
 
 @st.cache_data(ttl=600)
-def fetch_kis_daily_volume(stock_code, start_date=None):
-    """
-    FinanceDataReader의 해외 IP(Streamlit Cloud) 차단 문제를 원천 방지하기 위해 
-    네이버/다음 전용 API 체인으로 일별 OHLCV 및 거래대금 데이터를 초고속(0.1초)으로 가져옵니다.
-    """
-    code = str(stock_code).strip().zfill(6)
-    
-    # 1. 네이버 차트 XML API (fchart - 해외 IP 차단 없음, 0.1초 소요)
+def fetch_kis_daily_volume(stock_code, start_date):
     try:
-        url = f"https://fchart.stock.naver.com/sise.nhn?symbol={code}&timeframe=day&count=45&requestType=0"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        res = requests.get(url, headers=headers, timeout=3)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'xml')
-            items = soup.find_all('item')
-            records = []
-            for item in items:
-                data_str = item.get('data', '')
-                parts = data_str.split('|')
-                if len(parts) >= 6:
-                    d_str, op, hp, lp, cp, vol = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
-                    try:
-                        d_obj = datetime.strptime(d_str, '%Y%m%d').date()
-                        open_p = float(op)
-                        high_p = float(hp)
-                        low_p = float(lp)
-                        close_p = float(cp)
-                        volume_p = float(vol)
-                        if volume_p > 0 and close_p > 0:
-                            records.append({
-                                'Date': pd.to_datetime(d_obj),
-                                'date': d_obj,
-                                'Open': open_p,
-                                'High': high_p,
-                                'Low': low_p,
-                                'Close': close_p,
-                                'Volume': volume_p,
-                                'acml_tr_pbmn': close_p * volume_p
-                            })
-                    except ValueError:
-                        continue
-            if records:
-                return pd.DataFrame(records)
-    except Exception:
-        pass
-
-    # 2. 다음 금융 일별 API (Daum Days API)
-    try:
-        d_url = f"https://finance.daum.net/api/quote/A{code}/days?symbolCode=A{code}&page=1&perPage=45"
-        d_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://finance.daum.net/'}
-        res = requests.get(d_url, headers=d_headers, timeout=3)
-        if res.status_code == 200:
-            items = res.json().get('data', [])
-            records = []
-            for item in items:
-                try:
-                    d_str = item.get('date', '').split(' ')[0]
-                    d_obj = datetime.strptime(d_str, '%Y-%m-%d').date()
-                    open_p = float(item.get('openingPrice', 0))
-                    high_p = float(item.get('highPrice', 0))
-                    low_p = float(item.get('lowPrice', 0))
-                    close_p = float(item.get('tradePrice', 0))
-                    volume_p = float(item.get('accTradeVolume', 0))
-                    amount_p = float(item.get('accTradePrice', close_p * volume_p))
-                    if volume_p > 0 and close_p > 0:
-                        records.append({
-                            'Date': pd.to_datetime(d_obj),
-                            'date': d_obj,
-                            'Open': open_p,
-                            'High': high_p,
-                            'Low': low_p,
-                            'Close': close_p,
-                            'Volume': volume_p,
-                            'acml_tr_pbmn': amount_p
-                        })
-                except ValueError:
-                    continue
-            if records:
-                df = pd.DataFrame(records)
-                return df.sort_values('date').reset_index(drop=True)
-    except Exception:
-        pass
-
-    # 3. FDR 최후 보완 (백업)
-    try:
-        start = start_date if start_date else (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
-        df = fdr.DataReader(code, start)
-        if not df.empty:
-            df = df[df['Volume'] > 0]
-            df['acml_tr_pbmn'] = df['Volume'] * df['Close']
-            df['date'] = df.index.date
-            df['Date'] = pd.to_datetime(df['date'])
-            return df.reset_index()
-    except Exception:
-        pass
-
-    return pd.DataFrame()
+        # FDR을 사용하여 안정적으로 종가 및 거래량 가져오기 (API 키 필요 없음)
+        df = fdr.DataReader(stock_code, start_date)
+        if df.empty:
+            return pd.DataFrame()
+            
+        # 거래정지(단기과열 등)로 인해 거래량이 아예 없는 날(Open=0 등)은 차트에서 제외
+        df = df[df['Volume'] > 0]
+        if df.empty:
+            return pd.DataFrame()
+        
+        # 거래대금 = 거래량 * 종가 (근사치이지만 매우 정확함)
+        df['acml_tr_pbmn'] = df['Volume'] * df['Close']
+        df['date'] = df.index.date
+        return df.reset_index()
+    except Exception as e:
+        return pd.DataFrame()
 # ------------------------------------------------------------------
 # 📊 [투자자별 매매동향] 한투 KIS OpenAPI 연동
 # ------------------------------------------------------------------
-@st.cache_data(ttl=82800) # 23시간 (82,800초) 메모리 캐싱
+@st.cache_data(ttl=600) # Streamlit 프로세스 메모리 캐시는 짧게만(10분) — 진짜 유효기간 판단은 아래 Supabase 기록 기준
 def get_kis_access_token():
     import json
     import time
-    import os
-    
-    token_file = "kis_token.json"
-    
-    # 1. 로컬 파일에서 유효한 토큰 읽기 시도 (서버 재시작으로 인한 재발급 방지)
-    if os.path.exists(token_file):
-        try:
-            with open(token_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if time.time() - data.get("timestamp", 0) < 82800:
-                    return data["token"]
-        except Exception:
-            pass
+
+    # 🔧 [버그 수정 2026-07-30] 로컬 파일(kis_token.json) 대신 Supabase system_settings에 저장/조회하도록 변경.
+    # 대시보드는 Streamlit Cloud(클라우드)에서 실행되고 수집기(FindingWhale.py)는 사용자 PC(로컬)에서 실행되므로,
+    # 로컬 파일은 애초에 서로 공유될 수 없었음 — 대시보드는 매번 자기만의 로컬 파일(클라우드 컨테이너 안의 파일,
+    # 그마저도 재시작되면 사라짐)만 보고 있었고, 그래서 수집기가 멀쩡한 토큰을 갖고 있어도 항상 별도로 새
+    # 토큰을 발급받고 있었음 (한투 서버 과다 요청 위험). 이제 두 프로그램이 같은 DB 레코드를 공유한다.
+    TOKEN_KEY = "kis_access_token"
+    # 🔧 재사용 기준도 82800초(23시간) → 84600초(23시간30분)로 통일 — 수집기의 자체 예약 갱신 주기와 동일하게
+    # 맞춰서, 수집기가 스스로 갱신하기 전에 다른 쪽이 "낡았다"고 오판해 중복 발급하는 문제를 없앰.
+    TOKEN_TTL = 84600
+
+    # 1. Supabase에서 유효한 토큰 읽기 시도
+    try:
+        res = supabase.table("system_settings").select("value").eq("key", TOKEN_KEY).execute()
+        if res.data:
+            data = json.loads(res.data[0]["value"])
+            if time.time() - data.get("timestamp", 0) < TOKEN_TTL:
+                return data["token"]
+    except Exception:
+        pass
 
     # 2. 토큰이 없거나 만료된 경우 API로 새로 발급
     APP_KEY = st.secrets["kis"]["app_key"]
@@ -926,13 +714,13 @@ def get_kis_access_token():
     url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
     headers = {"content-type": "application/json"}
     body = {"grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET}
-    res = requests.post(url, headers=headers, json=body, timeout=5)
+    res = requests.post(url, headers=headers, json=body)
     if res.status_code == 200:
         new_token = res.json()["access_token"]
-        # 새 토큰을 파일에 저장
+        # 새 토큰을 Supabase에 기록 (수집기와 공유)
         try:
-            with open(token_file, "w", encoding="utf-8") as f:
-                json.dump({"token": new_token, "timestamp": time.time()}, f)
+            payload = json.dumps({"token": new_token, "timestamp": time.time()})
+            supabase.table("system_settings").upsert({"key": TOKEN_KEY, "value": payload}, on_conflict="key").execute()
         except Exception:
             pass
         return new_token
@@ -958,7 +746,7 @@ def fetch_investor_net_buying(stock_code):
         "FID_COND_MRKT_DIV_CODE": "J",
         "FID_INPUT_ISCD": stock_code
     }
-    res = requests.get(url, headers=headers, params=params, timeout=5)
+    res = requests.get(url, headers=headers, params=params)
     if res.status_code == 200:
         data = res.json().get("output", [])
         if not data:
@@ -1893,18 +1681,15 @@ def draw_whale_bar_chart(target_code, target_name, df):
     thirty_days_ago = today - timedelta(days=30)
     kis_df = fetch_kis_daily_volume(target_code, thirty_days_ago)
     
-    valid_dates = merged_df['date_str'].unique()
-
     if not kis_df.empty:
         kis_df['date_str'] = pd.to_datetime(kis_df['date']).dt.strftime('%m-%d')
         kis_df['amount_100m'] = kis_df['acml_tr_pbmn'] / 100000000
-        # 🚨 [축 왜곡 방지]: 30일 범위(valid_dates) 밖의 묵은 데이터는 잘라내어 X축이 60일로 벌어지는 현상 차단
-        kis_df = kis_df[kis_df['date_str'].isin(valid_dates)]
 
     # 투자자별 매매동향 (외국인/기관) 가져오기
     investor_df = fetch_investor_net_buying(target_code)
+    valid_dates = merged_df['date_str'].unique()
     if not investor_df.empty:
-        # 30일(달력기준) 이내의 데이터만 남기기
+        # 30일(달력기준) 이내의 데이터만 남기기 (주말 등 제외로 데이터가 많아지는 현상 방지)
         investor_df = investor_df[investor_df['date_str'].isin(valid_dates)]
     
     # 4. 차트 레이아웃 구성 (위: 고래 수급, 2: 시장 거래대금, 3: 외인/기관 수급, 4: 캔들차트)
@@ -1916,10 +1701,184 @@ def draw_whale_bar_chart(target_code, target_name, df):
         subplot_titles=(f"[{target_name}] 고래 수급 누적 (30일)", "시장 전체 일일 거래대금", "외국인/기관 상세 수급", "주가 흐름 (OHLC)")
     )
     
+    # 🌟 [초지능형 튜닝]: 최근 30일 일별 골든스코어(Golden Score) 실시간 정밀 산출
+    golden_scores = {}
+    golden_scores_breakdown = {}
+    is_trading_day = {}
+    try:
+        fortyfive_days_str = (today - timedelta(days=45)).strftime("%Y-%m-%d")
+        clean_target_name = target_name.replace("🚀","").replace("👑","").replace("🔥","").replace("💥","").replace("✨","").replace("🌱","").strip()
+        
+        # 🎯 안전한 예외 없는 2중 쿼리로 Supabase APIError 원천 차단
+        hist_top_res = supabase.table("daily_whale_top200").select("*").gte("trade_date", fortyfive_days_str).eq("stock_name", clean_target_name).order("trade_date", desc=True).limit(1000).execute()
+        if not hist_top_res.data:
+            hist_top_res = supabase.table("daily_whale_top200").select("*").gte("trade_date", fortyfive_days_str).eq("stock_code", target_code).order("trade_date", desc=True).limit(1000).execute()
+        
+        hist_top_dict = {}
+        if hist_top_res.data:
+            for r_item in hist_top_res.data:
+                d_m = pd.to_datetime(r_item['trade_date']).strftime('%m-%d')
+                hist_top_dict[d_m] = r_item
+                
+        # 🎯 실제 DB에 수집된 거래일 목록만 가져오기 (스크래퍼 누락 시 억울한 점수 삭감 방지)
+        all_db_trade_dates_res = supabase.table("daily_whale_top200").select("trade_date").gte("trade_date", fortyfive_days_str).order("trade_date", desc=True).limit(5000).execute()
+        all_db_trade_dates = sorted(list(set([pd.to_datetime(r['trade_date']).date() for r in all_db_trade_dates_res.data]))) if all_db_trade_dates_res.data else []
+
+        investor_dict = {}
+        if not investor_df.empty:
+            for _, inv_row in investor_df.iterrows():
+                investor_dict[inv_row['date_str']] = (inv_row['frgn_net_100m'], inv_row['orgn_net_100m'])
+
+        upper_res = supabase.table("upper_limit_stocks").select("recorded_date").eq("name", clean_target_name).execute()
+        upper_dates = set([pd.to_datetime(r['recorded_date']).strftime('%m-%d') for r in upper_res.data]) if upper_res.data else set()
+
+        global_meta = get_global_stock_metadata()
+        warning_text = get_warning_text(clean_target_name, global_meta)
+
+        # 🌟 [초지능형 튜닝]: 오늘 실시간 데이터를 백만 단위로 집계 (rt_buy 용도)
+        whale_daily_buy = {}
+        if not merged_df.empty:
+            w_grouped = merged_df[merged_df['side'] == '매수'].groupby('date_str')['amount_krw'].sum() / 1_000_000
+            whale_daily_buy = w_grouped.to_dict()
+
+        # 🐳 14일 롤링 고래 수급 합산을 위한 과거 45일 로그 가져오기 (PostgREST 1000건 리밋 우회 위해 최신순 정렬)
+        # 🔧 [버그 수정 2026-07-29]: name(종목명) exact-match는 whale_log에 이모지/공백 등 표기 변형이 섞여 있으면
+        # 조용히 일부 행을 놓친다 (골든픽 화면은 Python 쪽에서 이모지를 지우고 매칭해서 덜 놓쳤음 → 두 화면 rt_buy 불일치 원인).
+        # code(종목코드)는 표기 변형이 없는 고유값이라 여기로 통일.
+        w_hist_res = supabase.table("whale_log").select("date, side, amount_krw").gte("date", fortyfive_days_str).eq("code", target_code).order("date", desc=True).limit(5000).execute()
+        whale_history = pd.DataFrame(w_hist_res.data) if w_hist_res.data else pd.DataFrame(columns=['date', 'side', 'amount_krw'])
+        if not whale_history.empty:
+            whale_history['date'] = pd.to_datetime(whale_history['date']).dt.date
+
+        holidays = get_market_holidays()
+
+        for d_dt in merged_df['date'].unique():
+            if isinstance(d_dt, str):
+                d_dt = pd.to_datetime(d_dt).date()
+            d_str = d_dt.strftime('%m-%d')
+
+            r_val = hist_top_dict.get(d_str)
+            has_investor = d_str in investor_dict
+            has_whale = d_str in whale_daily_buy and whale_daily_buy[d_str] > 0
+            
+            # 주말/휴장일 판독 (DB 수급, 외인/기관 수급, 고래 체결이 모두 없으면 휴장일)
+            if not r_val and not has_investor and not has_whale:
+                is_trading_day[d_str] = False
+                golden_scores[d_str] = None
+                continue
+                
+            is_trading_day[d_str] = True
+            
+            if r_val:
+                f_buy = int(r_val.get('frgn_buy', 0))
+                f_sell = int(r_val.get('frgn_sell', 0))
+                o_buy = int(r_val.get('orgn_buy', 0))
+                o_sell = int(r_val.get('orgn_sell', 0))
+                frgn_net = f_buy - f_sell
+                orgn_net = o_buy - o_sell
+            elif has_investor:
+                frgn_net, orgn_net = investor_dict[d_str]
+            else:
+                frgn_net, orgn_net = 0, 0
+                
+            total_net = frgn_net + orgn_net
+
+            score = 25
+            start_date_dt = d_dt - timedelta(days=14)
+
+            # 🌟 [튜닝 2026-07-29] 고래매수 일평균을 위해 14일 윈도의 "실제 거래일수"를 먼저 구한다 (아래 rt_buy에서 사용)
+            period_trading_days = [td for td in all_db_trade_dates if start_date_dt <= td <= d_dt]
+            total_trading_days = len(period_trading_days) if period_trading_days else 1
+
+            # 🌟 14일 롤링 고래 수급 (과거 14일 DB 합계)
+            past_14_buy_sum = 0
+            if not whale_history.empty:
+                # Dashboard와 완벽히 동일하게 당일(d_dt) 포함 합산
+                w_14d = whale_history[(whale_history['date'] >= start_date_dt) & (whale_history['date'] <= d_dt)]
+                past_14_buy_sum = w_14d[w_14d['side'] == '매수']['amount_krw'].sum() / 1_000_000
+
+            # 🔧 [버그 수정 2026-07-29]: whale_history 쿼리는 gte(45일 전)만 걸려있어 '오늘' 체결분까지 이미 포함됨.
+            # 예전엔 여기서 today_rt_buy(=merged_df/chart_df 기준 당일 매수액)를 별도로 한 번 더 더했는데,
+            # 그러면 당일 매수액이 과거 14일 합계 안에 이미 들어있는 채로 중복 가산되어 버렸음.
+            # 🔧 [튜닝 2026-07-29] 14일 "합계"를 그대로 문턱값과 비교하면 거래일이 쌓일수록 점수가 계속 부풀려지므로,
+            # 실제 거래일수(total_trading_days)로 나눈 "일평균 고래매수"를 점수 산출에 사용 (골든픽 화면과 동일한 기준으로 통일)
+            rt_buy = past_14_buy_sum / total_trading_days
+
+            # 🔧 [튜닝 2026-07-29] 강세장에서 여러 종목이 동시에 100점 상한에 몰려 변별력이 사라지는 문제 수정.
+            # 기존 만점 총합(25+25+25+15+15+10+5=120, 100점 클리핑)을 실질 상한 82점대로 압축 (약 0.6배율, 아래 전 항목 동일 적용).
+            if rt_buy >= 1000: s_rt = 15
+            elif rt_buy >= 100: s_rt = 9
+            elif rt_buy > 0: s_rt = 5
+            else: s_rt = -9
+            score += s_rt
+
+            if total_net >= 300: s_tot = 15
+            elif total_net >= 100: s_tot = 12
+            elif total_net >= 50: s_tot = 9
+            elif total_net >= 20: s_tot = 6
+            elif total_net > 0: s_tot = 2
+            else: s_tot = 0
+            score += s_tot
+
+            if frgn_net > 0 and orgn_net > 0: s_pair = 9
+            elif frgn_net < -100 or orgn_net < -100: s_pair = -12
+            else: s_pair = 0
+            score += s_pair
+
+            # 🌟 [신규 튜닝] 수급 지속성(연속 출현) 판단 — 위에서 구한 14일 윈도(period_trading_days) 재사용
+            app_count = sum(1 for td in period_trading_days if td.strftime('%m-%d') in hist_top_dict)
+
+            # 🔧 [버그 수정 2026-07-29]: DB 쿼리가 일시적으로 비어있으면(네트워크 지연 등) app_count=0,
+            # total_trading_days=1로 폴백되는데, "0 >= 1-1(=0)"이 참이 되어 실제로는 단 하루도
+            # TOP200에 출현하지 않은 종목에게 "수급 지속성 우수" 보너스가 잘못 부여되는 함정이 있었음
+            # (같은 종목/같은 날짜인데도 화면마다 골든스코어가 달라지던 원인 중 하나로 추정).
+            # app_count>0(실제로 최소 1일은 출현) 조건을 추가해 이 오탐을 차단.
+            if app_count >= total_trading_days: s_cont = 9
+            elif app_count > 0 and app_count >= total_trading_days - 1: s_cont = 5
+            else: s_cont = 0
+            score += s_cont
+
+            # 🌟 [신규 튜닝] 상한가 이력 판독 14일 윈도우 계산
+            # Dashboard는 최근 14일 이내 상한가 이력이 있으면 가산점을 부여하므로, Chart도 동일하게 맞춤
+            upper_in_14d = any(start_date_dt <= pd.to_datetime(f"{today.year}-{u_d}").date() <= d_dt for u_d in upper_dates)
+
+            if upper_in_14d:
+                # 🔧 [버그 수정 2026-07-29]: 위와 동일한 app_count>0 함정 방지
+                if app_count > 0 and app_count >= total_trading_days - 1: s_upper = 6
+                else: s_upper = -18
+            else:
+                s_upper = 0
+            score += s_upper
+
+            if not warning_text: s_warn = 3
+            else: s_warn = -9
+            score += s_warn
+
+            golden_scores[d_str] = max(0, min(score, 100))
+            golden_scores_breakdown[d_str] = {
+                "s_base": 25, "s_rt": s_rt, "s_tot": s_tot, 
+                "s_pair": s_pair, "s_cont": s_cont, "s_upper": s_upper, "s_warn": s_warn
+            }
+    except Exception as e:
+        print(f"Chart Golden Score Calc Error: {e}")
+
     # 상단 막대그래프 (매수/매도/방향미상)
     buy_df = merged_df[merged_df['side'] == '매수']
     sell_df = merged_df[merged_df['side'] == '매도']
     unknown_df = merged_df[merged_df['side'] == '방향미상']
+
+    # 🏆 [골든스코어 호버 트레이스 인가] (주말/휴장일은 깔끔하게 휴장일 표출, 평일 거래일은 정밀 점수 표출!)
+    score_y = [golden_scores.get(d) if golden_scores.get(d) is not None else 0 for d in buy_df['date_str']]
+    score_text = [f"<b>{golden_scores.get(d)}점</b>" if golden_scores.get(d) is not None else "휴장일" for d in buy_df['date_str']]
+
+    fig_bar.add_trace(go.Scatter(
+        x=buy_df['date_str'], y=score_y,
+        name="🏆 골든스코어",
+        mode="markers",
+        marker=dict(size=0, color="#FFD700"),
+        text=score_text,
+        hovertemplate="%{text}<extra></extra>"
+    ), row=1, col=1)
     
     fig_bar.add_trace(go.Bar(
         x=buy_df['date_str'], y=buy_df['amount_krw_100m'],
@@ -1954,20 +1913,20 @@ def draw_whale_bar_chart(target_code, target_name, df):
     
     # 3번째: 외국인/기관 상세 수급 (순매수로 변경)
     if not investor_df.empty:
-        # 외국인 순매수 (offset=-0.41, width=0.38 -> [-0.41, -0.03])
+        # 외국인 순매수
         fig_bar.add_trace(go.Bar(
             x=investor_df['date_str'], y=investor_df['frgn_net_100m'],
             name="외국인 순매수", marker_color='#FFB000', opacity=0.9,
-            offset=-0.41, width=0.38,
+            offset=-0.2, width=0.4,
             text=investor_df['frgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if x != 0 else ""),
             textposition='auto', textfont=dict(size=10, color='white')
         ), row=3, col=1)
         
-        # 기관 순매수 (offset=0.03, width=0.38 -> [+0.03, +0.41] -> 경계선 0.5 내부 안착!)
+        # 기관 순매수
         fig_bar.add_trace(go.Bar(
             x=investor_df['date_str'], y=investor_df['orgn_net_100m'],
             name="기관 순매수", marker_color='#00FA9A', opacity=0.9,
-            offset=0.03, width=0.38,
+            offset=0.2, width=0.4,
             text=investor_df['orgn_net_100m'].apply(lambda x: f"{x:,.0f}억" if x != 0 else ""),
             textposition='auto', textfont=dict(size=10, color='black')
         ), row=3, col=1)
@@ -2000,13 +1959,13 @@ def draw_whale_bar_chart(target_code, target_name, df):
                         row=4, col=1
                     )
     
-    # 5. 차트 영점 조절 및 일별 시인성 극대화 튜닝
+    # 5. 차트 영점 조절
     fig_bar.update_layout(
         template='plotly_dark',
         plot_bgcolor='#11111b', paper_bgcolor='#11111b',
-        barmode='group',
-        bargap=0.2, # 일별 막대 간격 정돈
-        hovermode='x unified', # 4개 차트를 관통하는 수직 호버 가이드라인
+        barmode='group', # 다시 group으로 복구 (각 row가 독립적인 막대 너비를 가짐)
+        bargap=0.2,
+        hovermode='x unified', # 🎯 4개 차트를 관통하는 수직 호버 가이드라인 & 통합 박스!
         legend=dict(title="", orientation="h", yanchor="bottom", y=1.05, xanchor="left", x=0.0),
         height=850, margin=dict(l=20, r=20, t=60, b=40),
         xaxis_rangeslider_visible=False,
@@ -2035,10 +1994,11 @@ def draw_whale_bar_chart(target_code, target_name, df):
     fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, row=2, col=1, **grid_style)
     fig_bar.update_xaxes(type='category', categoryorder='category descending', showticklabels=False, row=3, col=1, **grid_style)
     
-    fig_bar.update_yaxes(title_text="고래 수급 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", row=1, col=1)
-    fig_bar.update_yaxes(title_text="전체 대금 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", row=2, col=1)
-    fig_bar.update_yaxes(title_text="외인/기관 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", row=3, col=1)
-    fig_bar.update_yaxes(title_text="주가 (원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", row=4, col=1)
+    # 🔧 [수정 2026-07-30] 호버(마우스오버) 툴팁 숫자도 1000단위 콤마가 보이도록 hoverformat 명시 추가
+    fig_bar.update_yaxes(title_text="고래 수급 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", hoverformat=",.0f", row=1, col=1)
+    fig_bar.update_yaxes(title_text="전체 대금 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", hoverformat=",.0f", row=2, col=1)
+    fig_bar.update_yaxes(title_text="외인/기관 (억원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", hoverformat=",.0f", row=3, col=1)
+    fig_bar.update_yaxes(title_text="주가 (원)", gridcolor='rgba(255, 255, 255, 0.12)', tickformat=",.0f", hoverformat=",.0f", row=4, col=1)
     
     # 🔍 줌(확대) 기능 추가
     zoom_key = f'zoom_{target_code}'
@@ -2790,40 +2750,6 @@ if choice == "🏠 홈화면":
             font-weight: bold !important;
             line-height: 1 !important;
         }
-
-        /* 🏆 골든픽 버튼 (보라색/황금색) 스타일 */
-        div.element-container:has(.btn-style-purple) { display: none; }
-        div.element-container:has(.btn-style-purple) + div.element-container button { 
-            background-color: #9c27b0 !important; 
-            border: 1px solid #7b1fa2 !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
-            padding-top: 2px !important;
-            padding-bottom: 2px !important;
-            min-height: 32px !important;
-        }
-        div.element-container:has(.btn-style-purple) + div.element-container button p { 
-            font-size: 13px !important; 
-            color: #ffffff !important;
-            font-weight: bold !important;
-            line-height: 1 !important;
-        }
-        div.element-container:has(.btn-style-purple-active) { display: none; }
-        div.element-container:has(.btn-style-purple-active) + div.element-container button { 
-            background-color: transparent !important;
-            border: 2px solid #e040fb !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
-            padding-top: 2px !important;
-            padding-bottom: 2px !important;
-            min-height: 32px !important;
-        }
-        div.element-container:has(.btn-style-purple-active) + div.element-container button p { 
-            font-size: 13px !important; 
-            color: #e040fb !important;
-            font-weight: bold !important;
-            line-height: 1 !important;
-        }
         
         /* 기폭주 버튼 활성화 상태 */
         div.element-container:has(.btn-style-red-active) { display: none; }
@@ -2836,9 +2762,47 @@ if choice == "🏠 홈화면":
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-red-active) + div.element-container button p { 
-            font-size: 13px !important; 
+        div.element-container:has(.btn-style-red-active) + div.element-container button p {
+            font-size: 13px !important;
             color: #ff4b4b !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+
+        /* 🔧 [수정 2026-07-30] "외/기" 버튼 전용 진한 빨간색 (TOP10/기폭주의 #ff4b4b와 구분되는 톤) */
+        div.element-container:has(.btn-style-darkred) { display: none; }
+        div.element-container:has(.btn-style-darkred) + div.element-container button {
+            background-color: #B22222 !important;
+            border: 1px solid #8B0000 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-darkred) + div.element-container button p {
+            font-size: 13px !important;
+            color: #ffffff !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+        div.element-container:has(.btn-style-darkred) + div.element-container button:hover {
+            background-color: #8B0000 !important;
+        }
+
+        div.element-container:has(.btn-style-darkred-active) { display: none; }
+        div.element-container:has(.btn-style-darkred-active) + div.element-container button {
+            background-color: transparent !important;
+            border: 2px solid #B22222 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-darkred-active) + div.element-container button p {
+            font-size: 13px !important;
+            color: #B22222 !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
@@ -2937,7 +2901,7 @@ if choice == "🏠 홈화면":
             background-color: transparent !important;
             border: 1px solid rgba(212, 0, 0, 1) !important;
             padding-left: 10px !important; 
-            padding-right: 10px !important; 
+            padding-right: 10px !important;
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important; 
@@ -3079,32 +3043,69 @@ if choice == "🏠 홈화면":
                     st.rerun()
 
     is_radar_active = (current_scrn == "상선고 화면")
+    is_golden_active = (current_scrn == "고래 골든픽")
+
+    # 🌟 [버튼 재배치 2026-07-30] 2번째 줄 신설 — 1번째 줄과 동일하게 게스트/일반/관리자 모두에게 보이되,
+    # 실제 사용은 정회원(authenticated)/관리자만 가능. "골든픽"을 여기로 이전하고, 기존 "외/기 탑100"도 이전(라벨은 "외/기"로 축약).
+    btn_col5, btn_col6, btn_col7, btn_col8 = st.sidebar.columns([1, 1, 1, 1])
+    with btn_col5:
+        cls_golden = "btn-style-purple-active" if is_golden_active else "btn-style-purple"
+        st.markdown(f'<div class="{cls_golden}"></div>', unsafe_allow_html=True)
+        if st.button("골든픽", key="btn_golden_pick", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if st.session_state.get('scrn_select_radio') != "고래 골든픽":
+                    st.session_state['scrn_select_radio'] = "고래 골든픽"
+                    st.rerun()
+    with btn_col6:
+        # 🔧 [수정 2026-07-30] 다른 버튼들과 동일한 동작(평상시 빨간 배경+흰 글씨 / 활성 시 굵은 빨간 테두리+빨간 글씨)로 통일
+        is_iogi_active = (current_scrn == "외기 TOP 100 화면")
+        cls_iogi = "btn-style-darkred-active" if is_iogi_active else "btn-style-darkred"
+        st.markdown(f'<div class="{cls_iogi}"></div>', unsafe_allow_html=True)
+        if st.button("외/기", key="btn_iogi", use_container_width=True):
+            if not st.session_state.get('authenticated', False):
+                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
+                import time
+                time.sleep(1.5)
+                guest_msg.empty()
+            else:
+                if st.session_state.get('scrn_select_radio') != "외기 TOP 100 화면":
+                    st.session_state['scrn_select_radio'] = "외기 TOP 100 화면"
+                    st.rerun()
+    with btn_col7:
+        st.markdown('<div class="btn-style-gray"></div>', unsafe_allow_html=True)
+        if st.button("예비1", key="btn_reserve_1", use_container_width=True): pass
+    with btn_col8:
+        st.markdown('<div class="btn-style-gray"></div>', unsafe_allow_html=True)
+        if st.button("예비2", key="btn_reserve_2", use_container_width=True): pass
+
+    # 🌟 [버튼 재배치 2026-07-30] 3번째 줄 (구 2번째 줄) — 관리자에게만 보이고 관리자만 사용 가능 (기존 규칙 그대로)
     if st.session_state.get('is_admin', False):
-        btn_col5, btn_col6, btn_col7, btn_col8 = st.sidebar.columns([1, 1, 1, 1])
-        with btn_col5:
+        btn_col9, btn_col10, btn_col11, btn_col12 = st.sidebar.columns([1, 1, 1, 1])
+        with btn_col9:
             cls_radar = "btn-style-orange-active" if is_radar_active else "btn-style-orange"
             st.markdown(f'<div class="{cls_radar}"></div>', unsafe_allow_html=True)
             if st.button("상선고", key="btn_radar_orange", use_container_width=True):
                 if st.session_state.get('scrn_select_radio') != "상선고 화면":
                     st.session_state['scrn_select_radio'] = "상선고 화면"
                     st.rerun()
-        with btn_col6:
+        with btn_col10:
             cls_res1 = "btn-style-red-active" if scrn_select == "기간 누적 폭주" else "btn-style-red"
             st.markdown(f'<div class="{cls_res1}"></div>', unsafe_allow_html=True)
             if st.button("기폭주", key="btn_res1", use_container_width=True):
                 if st.session_state.get('scrn_select_radio') != "기간 누적 폭주":
                     st.session_state['scrn_select_radio'] = "기간 누적 폭주"
                     st.rerun()
-        with btn_col7:
-            cls_res2 = "btn-style-purple-active" if scrn_select == "고래 골든픽" else "btn-style-purple"
-            st.markdown(f'<div class="{cls_res2}"></div>', unsafe_allow_html=True)
-            if st.button("골든픽", key="btn_res2", use_container_width=True):
-                if st.session_state.get('scrn_select_radio') != "고래 골든픽":
-                    st.session_state['scrn_select_radio'] = "고래 골든픽"
-                    st.rerun()
-        with btn_col8:
-            st.markdown(f'<div class="btn-style-gray"></div>', unsafe_allow_html=True)
+        with btn_col11:
+            st.markdown('<div class="btn-style-gray"></div>', unsafe_allow_html=True)
             if st.button("예비3", key="btn_res3", use_container_width=True): pass
+        with btn_col12:
+            st.markdown('<div class="btn-style-gray"></div>', unsafe_allow_html=True)
+            if st.button("예비4", key="btn_reserve_4", use_container_width=True): pass
 
 
     exact_match = st.sidebar.toggle("🎯 검색어 완전 일치 (Exact Match)", value=True)
@@ -3135,7 +3136,7 @@ if choice == "🏠 홈화면":
     # 체결 로그(목록보기) 상태이고 검색어가 없을 때는 세션에 저장된 limit 만큼 가져옵니다.
     if scrn_select == "체결 로그" and not search_keyword.strip():
         fetch_limit = st.session_state['log_fetch_limit']
-    elif scrn_select in ["TOP 10 화면", "수익율 화면", "고래 골든픽"]:
+    elif scrn_select in ["TOP 10 화면", "수익율 화면"]:
         fetch_limit = 0 # 개별 화면은 전역 글로벌 데이터가 필요 없음
     else:
         fetch_limit = None
@@ -3161,7 +3162,7 @@ if choice == "🏠 홈화면":
     market_type = st.session_state['market_type_val']
 
     # 지능형 펌프 가동! (검색어 조건과 선택된 기간에 맞춰서 데이터를 퍼옵니다)
-    if fetch_limit == 0 or scrn_select in ["수익율 자랑", "상선고 화면"]:
+    if fetch_limit == 0 or scrn_select in ["수익율 자랑", "상선고 화면", "고래 골든픽"]:
         df = pd.DataFrame(columns=['id', 'date', 'time', 'code', 'name', 'side', 'amount_krw', 'price', 'volume', 'asset_type', 'market_type', 'datetime', 'date_parsed'])
     else:
         if not search_keyword.strip():
@@ -3204,28 +3205,15 @@ if choice == "🏠 홈화면":
     # --- [ SideBar: Personal Selectors ] ---
     st.sidebar.markdown('<div class="spacer-logout"></div>', unsafe_allow_html=True)
     
-    brag_col, top200_col = st.sidebar.columns([1, 1])
-    with brag_col:
-        st.markdown('<div class="btn-style-brag"></div>', unsafe_allow_html=True)
-        if st.button("💖 수익율 자랑", use_container_width=True):
-            st.session_state['scrn_select_radio'] = "수익율 자랑"
-            st.session_state["brag_view_mode"] = "list"
-            st.session_state["brag_selected_post"] = None
-            st.session_state["show_brag_form"] = False
-            st.rerun()
-    with top200_col:
-        st.markdown('<div class="btn-style-top100"></div>', unsafe_allow_html=True)
-        if st.button("📊 외/기 탑백", use_container_width=True):
-            if not st.session_state.get('authenticated', False):
-                guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
-                import time
-                time.sleep(1.5)
-                guest_msg.empty()
-            else:
-                if st.session_state.get('scrn_select_radio') != "외기 TOP 100 화면":
-                    st.session_state['scrn_select_radio'] = "외기 TOP 100 화면"
-                    st.rerun()
-        
+    # 🌟 [버튼 재배치 2026-07-30] "외/기 탑100" 버튼은 2번째 줄로 이전됨 — 이 자리는 "수익율 자랑" 버튼이 통째로 차지 (긴 버튼)
+    st.sidebar.markdown('<div class="btn-style-brag"></div>', unsafe_allow_html=True)
+    if st.sidebar.button("💖 수익율 자랑", use_container_width=True):
+        st.session_state['scrn_select_radio'] = "수익율 자랑"
+        st.session_state["brag_view_mode"] = "list"
+        st.session_state["brag_selected_post"] = None
+        st.session_state["show_brag_form"] = False
+        st.rerun()
+
     if st.session_state.get('authenticated', False):
         st.sidebar.markdown('<div class="btn-style-logout"></div>', unsafe_allow_html=True)
         if st.sidebar.button("로그아웃 🔌"):
@@ -3233,6 +3221,17 @@ if choice == "🏠 홈화면":
             st.session_state['is_admin'] = False
             st.session_state['current_user'] = ""
             st.rerun()
+
+    # 🔧 [추가 2026-07-30] 투자 유의 문구 (사이드바 맨 하단, 로그아웃 버튼 색상보다 살짝 밝게)
+    st.sidebar.markdown(
+        """
+        <div style="font-family:'굴림체','GulimChe','Gulim',sans-serif; font-size:8pt; color:#c8c8c8; line-height:1.4; margin-top:6px;">
+        본 사이트에서 제공하는 모든 정보는 투자 판단의 자료이며, 수익을 절대 보장하지 않습니다.<br>
+        원금 손실이 발생할 수 있으며, 그 손실은 투자자 본인에게 책임이 있습니다.
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     if df.empty and scrn_select not in ["TOP 10 화면", "수익율 화면", "상선고 화면", "수익율 자랑", "기간 누적 폭주", "고래 골든픽"]:
         st.warning("⚠️ 해당 조건의 고래 데이터가 없거나, 아직 수집 전입니다!")
@@ -3301,12 +3300,9 @@ if choice == "🏠 홈화면":
                     stock_names_list = top10_df['name'].tolist()
                     themes_dict = get_themes_for_stocks(stock_names_list)
                     
-                    global_meta = get_global_stock_metadata()
-                    
                     def format_name_with_theme(row):
-                        raw_name = row['name']
-                        name = append_warning_badge(raw_name, global_meta, html=True)
-                        theme = themes_dict.get(raw_name, "")
+                        name = row['name']
+                        theme = themes_dict.get(name, "")
                         if theme:
                             # 콤마로 구분된 여러 테마를 줄바꿈(<br>)하여 세로로 배치
                             theme_list = [t.strip() for t in theme.split(',') if t.strip()]
@@ -3641,7 +3637,7 @@ if choice == "🏠 홈화면":
                                     progress_text.text(f"주가 데이터 조회 중: {name} ({idx+1}/{total_stocks})")
                                     
                                     try:
-                                        price_df = fetch_kis_daily_volume(code)
+                                        price_df = fdr.DataReader(code, str_start, str_end)
                                         if not price_df.empty and len(price_df) > 0:
                                             start_price = price_df.iloc[0]['Open']
                                             end_price = price_df.iloc[-1]['Close']
@@ -4075,6 +4071,368 @@ if choice == "🏠 홈화면":
 
             except Exception as e:
                 st.error(f"요청 게시판 처리 중 오류 발생: {e}")
+        elif scrn_select == "고래 골든픽":
+            col_gold_left, col_gold_right = st.columns([1.8, 1])
+            
+            with col_gold_left:
+                st.markdown("<h4 style='color:#E040FB; border-left: 4px solid #E040FB; padding-left: 10px; margin-top: 0;'>🏆 고래 골든픽 (황금 승률 추천 TOP 20)</h4>", unsafe_allow_html=True)
+                st.caption("시장 세력 수급, 외인/기관 쌍끌이, 상한가 족보, 실시간 고래 활동 및 위험 배지를 입체 종합 분석하여 산출된 1~20위 최정예 추천 종목입니다. 🚀")
+                st.write("")
+
+
+            with col_gold_right:
+                # 📅 골든픽 전용 커스텀 HTML 달력 연동
+                now_kst = datetime.utcnow() + timedelta(hours=9)
+                if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
+                    target_dt = now_kst - timedelta(days=1)
+                else:
+                    target_dt = now_kst
+                target_dt = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
+                today_kor = get_latest_market_open_date(target_dt)
+                min_date = today_kor - timedelta(days=90)
+                
+                import calendar
+                from st_click_detector import click_detector
+                
+                if 'golden_cal_year' not in st.session_state:
+                    st.session_state.golden_cal_year = today_kor.year
+                    st.session_state.golden_cal_month = today_kor.month
+                    st.session_state.golden_selected_date = today_kor
+                    st.session_state.golden_cal_reset = 0
+                
+                cal_year = st.session_state.golden_cal_year
+                cal_month = st.session_state.golden_cal_month
+                selected_date = st.session_state.golden_selected_date
+                
+                html_cal = f"""
+                <div style="max-width: 230px; margin-left: auto; background: #1a1c24; padding: 10px; border-radius: 10px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; color: white;">
+                        <a href='#' id='gcal_prev' style='color: #888; text-decoration: none; padding: 3px 8px; background: #2a2d3a; border-radius: 4px; font-weight: bold; font-size: 12px;'>&lt;</a>
+                        <strong style="font-size: 14px;">{cal_year}년 {cal_month}월</strong>
+                        <a href='#' id='gcal_next' style='color: #888; text-decoration: none; padding: 3px 8px; background: #2a2d3a; border-radius: 4px; font-weight: bold; font-size: 12px;'>&gt;</a>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 3px; font-size: 11px; font-weight: bold; margin-bottom: 5px;">
+                        <div style="color: #ff4b4b;">일</div>
+                        <div style="color: #aaa;">월</div>
+                        <div style="color: #aaa;">화</div>
+                        <div style="color: #aaa;">수</div>
+                        <div style="color: #aaa;">목</div>
+                        <div style="color: #aaa;">금</div>
+                        <div style="color: #4B89B5;">토</div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 3px; font-size: 11px;">
+                """
+                
+                c = calendar.Calendar(firstweekday=6)
+                for week in c.monthdatescalendar(cal_year, cal_month):
+                    for day in week:
+                        if day.month == cal_month:
+                            bg_color = "transparent"
+                            color = "white"
+                            border = "1px solid transparent"
+                            
+                            if day == selected_date:
+                                bg_color = "#FFD700"
+                                color = "#111"
+                            elif day.weekday() == 6:
+                                color = "#ff4b4b"
+                            elif day.weekday() == 5:
+                                color = "#4B89B5"
+                                
+                            if day == today_kor and day != selected_date:
+                                border = "1px solid #FFD700"
+                                
+                            if day > today_kor or day < min_date:
+                                html_cal += f"<div style='padding: 4px; color: #444; border: {border}; border-radius: 4px;'>{day.day}</div>"
+                            else:
+                                html_cal += f"<a href='#' id='gcal_date_{day.strftime('%Y-%m-%d')}' style='padding: 4px; background: {bg_color}; color: {color}; border: {border}; text-decoration: none; border-radius: 4px; display: block; font-weight: bold;'>{day.day}</a>"
+                        else:
+                            html_cal += "<div></div>"
+                            
+                html_cal += "</div></div>"
+                
+                g_clicked = click_detector(html_cal, key=f"golden_cal_ui_{st.session_state.golden_cal_reset}")
+            
+            if g_clicked:
+                if g_clicked == 'gcal_prev':
+                    if st.session_state.golden_cal_month == 1:
+                        st.session_state.golden_cal_month = 12
+                        st.session_state.golden_cal_year -= 1
+                    else:
+                        st.session_state.golden_cal_month -= 1
+                    st.session_state.golden_cal_reset += 1
+                    st.rerun()
+                elif g_clicked == 'gcal_next':
+                    if st.session_state.golden_cal_month == 12:
+                        st.session_state.golden_cal_month = 1
+                        st.session_state.golden_cal_year += 1
+                    else:
+                        st.session_state.golden_cal_month += 1
+                    st.session_state.golden_cal_reset += 1
+                    st.rerun()
+                elif g_clicked.startswith('gcal_date_'):
+                    date_str = g_clicked.split('gcal_date_')[1]
+                    st.session_state.golden_selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    st.session_state.golden_cal_reset += 1
+                    st.rerun()
+
+            st.write("---")
+
+            global_meta = get_global_stock_metadata()
+
+            # 선택된 날짜 기준 최근 10일 수급 데이터 로딩
+            sel_date_dt = datetime.combine(selected_date, datetime.min.time())
+            start_date_str = (sel_date_dt - timedelta(days=14)).strftime("%Y-%m-%d")
+            sel_date_str = selected_date.strftime("%Y-%m-%d")
+
+            with st.spinner(f"🚀 {selected_date.strftime('%Y년 %m월 %d일')} 기준 최정예 골든 픽 종목을 종합 분석 중입니다..."):
+                # 🎯 해당 선택 날짜 전용 1000개 한도 쿼리로 누락 방지!
+                top_res = supabase.table("daily_whale_top200").select("*").eq("trade_date", sel_date_str).limit(1000).execute()
+                # 수급 지속성 계산용 과거 14일 쿼리
+                hist_res = supabase.table("daily_whale_top200").select("stock_code, trade_date").gte("trade_date", start_date_str).lte("trade_date", sel_date_str).limit(5000).execute()
+                
+                if not top_res.data:
+                    st.warning("⚠️ 해당 날짜의 수급 데이터가 준비되지 않았습니다.")
+                else:
+                    df_latest_gp = pd.DataFrame(top_res.data)
+                    if hist_res.data:
+                        df_hist = pd.DataFrame(hist_res.data)
+                        all_dates = sorted(df_hist['trade_date'].unique(), reverse=True)
+                        total_trading_days = len(all_dates) if all_dates else 1
+                        appear_counts = df_hist.groupby('stock_code')['trade_date'].nunique().to_dict()
+                    else:
+                        total_trading_days = 1
+                        appear_counts = {}
+
+                    # 🔧 [버그 수정 2026-07-29]: 상단(.lte) 상한선이 없어서 선택한 날짜(sel_date_str) 이후의
+                    # 미래 상한가 기록까지 새어 들어올 수 있었음 (차트 쪽 계산은 d_dt를 상한으로 걸어서 이미 막고 있었음).
+                    upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", start_date_str).lte("recorded_date", sel_date_str).execute()
+                    upper_names = set([r['name'] for r in upper_res.data]) if upper_res.data else set()
+
+                    whale_realtime = {}
+                    
+                    # 1. 14일치 DB 고래 수급 데이터 조회 (항상 실행하여 과거 14일 이내 고래 포착 여부 누적 반영)
+                    try:
+                        all_w_data = []
+                        page_size = 1000
+                        start = 0
+                        # 최대 5만건까지 페이지네이션 (PostgREST 1000건 제한 우회)
+                        while start < 50000:
+                            # 🔧 [버그 수정 2026-07-29]: name(종목명) exact-match/이모지 클린 매칭은 whale_log에 섞인
+                            # 표기 변형(이모지, 공백 등)에 취약해서 일부 행을 놓친다 → 차트/골든픽 rt_buy 불일치 원인.
+                            # code(종목코드)는 표기 변형이 없는 고유값이라 여기로 통일.
+                            w_res = supabase.table("whale_log").select("code, side, amount_krw").gte("date", start_date_str).lte("date", sel_date_str).order("date", desc=True).order("time", desc=True).range(start, start + page_size - 1).execute()
+                            if not w_res.data:
+                                break
+                            all_w_data.extend(w_res.data)
+                            if len(w_res.data) < page_size:
+                                break
+                            start += page_size
+
+                        if all_w_data:
+                            df_w_db = pd.DataFrame(all_w_data)
+                            for code_val, group_val in df_w_db.groupby('code'):
+                                c_code = str(code_val).strip().zfill(6)
+                                b_sum = group_val[group_val['side'] == '매수']['amount_krw'].sum() / 1_000_000
+                                s_sum = group_val[group_val['side'] == '매도']['amount_krw'].sum() / 1_000_000
+                                whale_realtime[c_code] = (b_sum, s_sum)
+                    except Exception:
+                        pass
+
+                    # 2. 당일 실시간 데이터(df)가 있으면 기존 DB 합산값에 누적 (당일 포착분 추가)
+                    if not df.empty and 'side' in df.columns and 'code' in df.columns:
+                        for code_val, group_val in df.groupby('code'):
+                            c_code = str(code_val).strip().zfill(6)
+                            b_sum = group_val[group_val['side'] == '매수']['amount_krw'].sum() / 1_000_000
+                            s_sum = group_val[group_val['side'] == '매도']['amount_krw'].sum() / 1_000_000
+                            existing_b, existing_s = whale_realtime.get(c_code, (0, 0))
+                            whale_realtime[c_code] = (existing_b + b_sum, existing_s + s_sum)
+
+                    candidates = []
+                    for _, r_val in df_latest_gp.iterrows():
+                        name_str = r_val['stock_name']
+                        clean_n = name_str.replace("🚀","").replace("👑","").replace("🔥","").replace("💥","").replace("✨","").replace("🌱","").strip()
+                        code_str = r_val['stock_code']
+                        market_str = r_val['market']
+                        frgn_net = (r_val['frgn_buy'] - r_val['frgn_sell'])
+                        orgn_net = (r_val['orgn_buy'] - r_val['orgn_sell'])
+                        total_net = frgn_net + orgn_net
+
+                        warning_text = get_warning_text(name_str, global_meta)
+                        app_count = appear_counts.get(code_str, 0)
+
+                        score = 25
+                        reasons = []
+
+                        # 🔧 [버그 수정 2026-07-29]: 이름(clean_n/name_str) 대신 종목코드로 조회 (whale_realtime도 code 기준으로 통일됨)
+                        rt_buy, rt_sell = whale_realtime.get(str(code_str).strip().zfill(6), (0, 0))
+                        # 🔧 [튜닝 2026-07-29] whale_realtime은 14일 구간 "합계"라서 그대로 쓰면 거래일이 쌓일수록
+                        # 점수가 계속 부풀려짐. 실제 거래일수(total_trading_days)로 나눈 "일평균 고래매수"로 통일 (차트와 동일 기준).
+                        rt_buy = rt_buy / total_trading_days
+                        # 🔧 [튜닝 2026-07-29] 강세장에서 여러 종목이 동시에 100점 상한에 몰려 변별력이 사라지는 문제 수정.
+                        # 기존 만점 총합(25+25+25+15+15+10+5=120, 100점 클리핑)을 실질 상한 82점대로 압축 (약 0.6배율, 차트와 동일하게 전 항목 적용).
+                        # 🔧 [버그 수정 2026-07-29]: rt_buy는 "백만원" 단위라 "억원" 표시는 /100이 맞는데 /1000으로 10배 작게 표시되던 버그도 같이 수정.
+                        if rt_buy >= 1000:
+                            score += 15
+                            reasons.append(f"🐋 고래매수 일평균 대량({rt_buy/100:.1f}억)")
+                        elif rt_buy >= 100:
+                            score += 9
+                            reasons.append(f"🐋 고래매수 일평균 포착({rt_buy/100:.1f}억)")
+                        elif rt_buy > 0:
+                            score += 5
+                            reasons.append("🐋 고래 소액 체결 포착")
+                        else:
+                            score -= 9
+                            reasons.append("⚠️ 실시간 고래 포착 미흡")
+
+                        if total_net >= 300:
+                            score += 15
+                        elif total_net >= 100:
+                            score += 12
+                        elif total_net >= 50:
+                            score += 9
+                        elif total_net >= 20:
+                            score += 6
+                        elif total_net > 0:
+                            score += 2
+
+                        if frgn_net > 0 and orgn_net > 0:
+                            score += 9
+                            reasons.append("🔥 외/기 동시 쌍끌이")
+                        elif frgn_net < -100 or orgn_net < -100:
+                            score -= 12
+                            reasons.append("⚠️ 외인/기관 한쪽 대량 덤핑(-100억 이상)")
+
+                        # 🔧 [버그 수정 2026-07-29]: DB 쿼리가 일시적으로 비어있으면(네트워크 지연 등) app_count=0,
+                        # total_trading_days=1로 폴백되는데, "0 >= 1-1(=0)"이 참이 되어 실제로는 단 하루도
+                        # TOP200에 출현하지 않은 종목에게 "수급 지속성 우수" 보너스가 잘못 부여되는 함정이 있었음
+                        # (차트와 골든픽 화면이 같은 종목/같은 날짜인데도 점수가 다르게 나오던 원인 중 하나로 추정).
+                        # app_count>0(실제로 최소 1일은 출현) 조건을 추가해 이 오탐을 차단 (차트 로직과 동일하게 통일).
+                        if app_count >= total_trading_days:
+                            score += 9
+                            reasons.append(f"👑 {total_trading_days}일 연속 수급 장악")
+                        elif app_count > 0 and app_count >= total_trading_days - 1:
+                            score += 5
+                            reasons.append("✨ 수급 지속성 우수")
+
+                        if clean_n in upper_names or name_str in upper_names:
+                            if app_count > 0 and app_count >= total_trading_days - 1:
+                                score += 6
+                                reasons.append("🚀 상한가 후 수급 유지")
+                            else:
+                                score -= 18
+                                reasons.append("⚠️ 상한가 후 수급 이탈 이력")
+
+                        if not warning_text:
+                            score += 3
+                        else:
+                            score -= 9
+                            reasons.append(f"🚨 {warning_text}")
+
+                        if not reasons:
+                            reasons.append("수급 순매수 우상향")
+
+                        candidates.append({
+                            "code": code_str,
+                            "name": name_str,
+                            "market": market_str,
+                            "score": max(0, min(score, 100)),
+                            "total_net": total_net,
+                            "frgn_net": frgn_net,
+                            "orgn_net": orgn_net,
+                            "warning": warning_text if warning_text else "정상",
+                            "rt_buy": round(rt_buy, 1),
+                            "reason": " | ".join(reasons)
+                        })
+
+                    df_cand = pd.DataFrame(candidates)
+                    if not df_cand.empty:
+                        df_cand = df_cand.sort_values(by=["score", "total_net"], ascending=[False, False]).reset_index(drop=True)
+                        top20_gp = df_cand.head(20).copy()
+                        top20_gp.insert(0, "순위", range(1, len(top20_gp) + 1))
+
+                        st.markdown("<h5 style='color:#FFD700; margin-top:15px;'>🥇 오늘의 TOP 3 골든 픽 명예의 전당</h5>", unsafe_allow_html=True)
+                        c1_gp, c2_gp, c3_gp = st.columns(3)
+                        medals = ["🥇 1위", "🥈 2위", "🥉 3위"]
+                        colors = ["#FFD700", "#C0C0C0", "#CD7F32"]
+                        cols_gp = [c1_gp, c2_gp, c3_gp]
+
+                        for i in range(min(3, len(top20_gp))):
+                            row_gp = top20_gp.iloc[i]
+                            with cols_gp[i]:
+                                st.markdown(f"""
+                                <div style="background:#1a1c24; border: 2px solid {colors[i]}; border-radius:12px; padding:15px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+                                    <div style="color:{colors[i]}; font-weight:bold; font-size:16px; margin-bottom:5px;">{medals[i]} {row_gp['name']}</div>
+                                    <div style="font-size:24px; font-weight:900; color:#00E676; margin-bottom:8px;">{row_gp['score']}점 <span style="font-size:12px; color:#aaa;">/ 100점</span></div>
+                                    <div style="font-size:13px; color:#ddd; margin-bottom:4px;">🏛️ 외/기 합산: <b>{row_gp['total_net']:,.0f}억 원</b></div>
+                                    <div style="font-size:12px; color:#ff9800; margin-bottom:8px;">(외인 {row_gp['frgn_net']:,.0f}억 / 기관 {row_gp['orgn_net']:,.0f}억)</div>
+                                    <div style="font-size:11px; color:#64B5F6; background:#12131c; padding:6px; border-radius:6px; min-height:38px;">💡 {row_gp['reason']}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                        st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
+                        st.markdown("<h5 style='color:#FFFFFF;'>📋 골든 픽 TOP 20 전체 순위 전광판</h5>", unsafe_allow_html=True)
+                        st.write("")
+                        click_action_gp = st.radio(
+                            "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
+                            ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
+                            horizontal=True,
+                            key="gp_click_action_radio"
+                        )
+
+                        top20_key_gp = f"golden_pick_table_{st.session_state.get('gp_reset_counter', 0)}"
+
+                        display_gp = top20_gp[['순위', 'name', 'market', 'score', 'warning', 'total_net', 'frgn_net', 'orgn_net', 'rt_buy', 'reason']].copy()
+                        display_gp = display_gp.rename(columns={
+                            'name': '종목명', 'market': '시장', 'score': '황금점수',
+                            'warning': '특이사항', 'total_net': '🟣외/기 순매수(억)',
+                            'frgn_net': '🟣외국인 순매수(억)', 'orgn_net': '🟡기관 순매수(억)',
+                            'rt_buy': '🐋고래매수 일평균(백만)', 'reason': '핵심 추천 포인트'
+                        })
+
+                        event_gp = st.dataframe(
+                            display_gp,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=580,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key=top20_key_gp,
+                            column_config={
+                                # 🔧 [수정 2026-07-30] 숫자 가독성을 위해 1000단위 콤마(,) 포맷 전면 적용
+                                "순위": st.column_config.NumberColumn("순위", format="%,d위"),
+                                "황금점수": st.column_config.NumberColumn("황금점수", format="%,d점"),
+                                "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
+                                "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
+                                "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
+                                "🐋고래매수 일평균(백만)": st.column_config.NumberColumn(format="%,.0f백만"),
+                            }
+                        )
+
+                        if event_gp and "selection" in event_gp:
+                            rows_gp = event_gp["selection"]["rows"]
+                            if rows_gp and rows_gp[0] < len(top20_gp):
+                                selected_stock_gp = top20_gp.iloc[rows_gp[0]]['name']
+                                clean_stock_gp = selected_stock_gp.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
+                                row_stock_code_gp = top20_gp.iloc[rows_gp[0]]['code']
+
+                                if click_action_gp == "💬 AI 요약 보기 (팝업)":
+                                    trigger_gp = st.session_state.get('dialog_trigger_id', 0) + 1
+                                    st.session_state['dialog_trigger_id'] = trigger_gp
+                                    st.session_state['show_summary_dialog'] = {
+                                        "stock": clean_stock_gp,
+                                        "code": row_stock_code_gp,
+                                        "trigger_id": trigger_gp
+                                    }
+                                    st.session_state['gp_reset_counter'] = st.session_state.get('gp_reset_counter', 0) + 1
+                                    st.rerun()
+                                else:
+                                    st.session_state['pending_search'] = clean_stock_gp
+                                    st.session_state['last_search_keyword'] = ""
+                                    st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
+                                    st.session_state['scrn_select_radio'] = "체결 로그"
+                                    st.rerun()
+
         elif scrn_select == "상선고 화면":
             st.markdown("<h4 style='color:#FF8C00; border-left: 4px solid #FF8C00; padding-left: 10px;'>📡 상한가 선행 고래 포착 레이더 (상선고)</h4>", unsafe_allow_html=True)
             
@@ -4232,16 +4590,16 @@ if choice == "🏠 홈화면":
                         # 5. HTML/SVG 표 렌더링 준비
                         html_parts = []
                         html_parts.append(f"""
-                        <div style="overflow-x: auto; margin-top: 20px; background-color: transparent; padding: 15px; border-radius: 10px;">
+                        <div style="overflow-x: auto; margin-top: 20px; background-color: #1E1E1E; padding: 15px; border-radius: 10px;">
                             <table style="width: 100%; border-collapse: collapse; color: white; text-align: center; font-size: 13px; table-layout: fixed;">
                                 <thead>
                                     <tr>
-                                        <th style="width: 230px; border-bottom: 2px solid #555; border-right: 1px solid #555; padding: 5px; text-align: left; padding-left: 10px;"><span style="margin-right: 15px;" title="시계열 추적 차트">📊</span><span style="margin-right: 25px; color: #4b8bff; font-weight: bold; font-size: 14px;" title="AI 기업 요약">AI</span>종목명 (상한가일수)</th>
+                                        <th style="width: 120px; border-bottom: 2px solid #555; padding: 5px;">종목명 (상한가일)</th>
                         """)
                         # 헤더 생성
                         for d in trading_days:
                             day_str = d[-2:] # "01", "15" 등
-                            html_parts.append(f'<th style="width: 35px; border-bottom: 2px solid #555; padding: 5px;">{day_str}일</th>')
+                            html_parts.append(f'<th style="width: 40px; border-bottom: 2px solid #555; padding: 5px;">{day_str}일</th>')
                         html_parts.append("""
                                     </tr>
                                 </thead>
@@ -4250,10 +4608,8 @@ if choice == "🏠 홈화면":
                         
                         # 종목별 행 생성
                         import math
-                        global_meta = get_global_stock_metadata()
                         for _, row in upper_grouped.iterrows():
-                            stock_raw = row['name']
-                            stock_display = append_warning_badge(stock_raw, global_meta, html=True)
+                            stock = row['name']
                             u_dates = row['recorded_date']
                             
                             # (절대 금액 5단계 평가를 위해 max_amt 계산은 제거)
@@ -4270,10 +4626,10 @@ if choice == "🏠 홈화면":
                             
                             html_parts.append(f"""
                                     <tr>
-                                        <td style="border-bottom: 1px solid #333; border-right: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; padding-left: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock_raw}">
-                                            <a href="javascript:void(0);" id="goto___{stock_raw}___{render_id}" style="text-decoration: none; margin-right: 12px; font-size: 16px; color: #888;" title="{stock_raw} 시계열 추적 화면으로 이동">☐</a>
-                                            <a href="javascript:void(0);" id="summary___{stock_raw}___{render_id}" style="text-decoration: none; margin-right: 12px; font-size: 16px; color: #4b8bff;" title="{stock_raw} 기업 요약(AI) 보기">💬</a>
-                                            {stock_display} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
+                                        <td style="border-bottom: 1px solid #333; padding: 8px; font-weight: normal; font-size: 15px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{stock}">
+                                            <a href="javascript:void(0);" id="goto___{stock}___{render_id}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #888;" title="{stock} 시계열 추적 화면으로 이동">☐</a>
+                                            <a href="javascript:void(0);" id="summary___{stock}___{render_id}" style="text-decoration: none; margin-right: 6px; font-size: 16px; color: #4b8bff;" title="{stock} 기업 요약(AI) 보기">💬</a>
+                                            {stock} <span style="color:#FF4B4B; font-size:12px;">{badge}</span>
                                         </td>
                             """)
                             
@@ -4283,9 +4639,9 @@ if choice == "🏠 홈화면":
                                 
                                 amt = 0
                                 cnt = 0
-                                if stock_raw in daily_whale and d in daily_whale[stock_raw]:
-                                    amt = daily_whale[stock_raw][d]['amt']
-                                    cnt = daily_whale[stock_raw][d]['cnt']
+                                if stock in daily_whale and d in daily_whale[stock]:
+                                    amt = daily_whale[stock][d]['amt']
+                                    cnt = daily_whale[stock][d]['cnt']
                                     
                                 inner_html = ""
                                 if d in u_dates:
@@ -4343,7 +4699,7 @@ if choice == "🏠 홈화면":
                                     
                                 html_parts.append(f"""
                                         <td style="{border_style} background-color: {cell_bg}; height: 40px; padding: 0; position: relative; vertical-align: bottom;">
-                                            <a href="javascript:void(0);" id="{stock_raw}___{d}___{render_id}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
+                                            <a href="javascript:void(0);" id="{stock}___{d}___{render_id}" style="display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; min-height: 40px; cursor: pointer; position: relative;" title="{d} (고래 체결: {cnt}건)">
                                                 {inner_html}
                                             </a>
                                         </td>
@@ -4526,8 +4882,8 @@ if choice == "🏠 홈화면":
                         
                         # 합산 필드 만들어서 정렬 (합산 순매수 기준)
                         df_top['외/기 합산 순매수(억)'] = (df_top["frgn_buy"] - df_top["frgn_sell"]) + (df_top["orgn_buy"] - df_top["orgn_sell"])
-                        df_top['🟣외국인 순매수(억)'] = df_top["frgn_buy"] - df_top["frgn_sell"]
-                        df_top['🟡기관 순매수(억)'] = df_top["orgn_buy"] - df_top["orgn_sell"]
+                        df_top['🟣외국인 매수세(억)'] = df_top["frgn_buy"] - df_top["frgn_sell"]
+                        df_top['🟡기관 매수세(억)'] = df_top["orgn_buy"] - df_top["orgn_sell"]
                         df_top = df_top.sort_values(by="외/기 합산 순매수(억)", ascending=False)
 
                         
@@ -4542,54 +4898,29 @@ if choice == "🏠 홈화면":
                             "orgn_sell": "🟢기관 매도(억)"
                         })
                         
-                        # 합산 필드 이름도 이모지 추가 (외/기 순매수로 변경)
-                        df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 순매수(억)"}, inplace=True)
-                        
-                        # 🚨 [시장 경보] 투자경고 배지 부여 (전용 칼럼으로 분리)
-                        global_meta = get_global_stock_metadata()
-                        df_top['특이사항'] = df_top['종목명'].apply(lambda x: get_warning_text(x, global_meta))
+                        # 합산 필드 이름도 이모지 추가
+                        df_top.rename(columns={"외/기 합산 순매수(억)": "🟣외/기 합산(억)"}, inplace=True)
 
-                        display_cols = ["날짜", "시장", "종목명", "특이사항", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟣외국인 순매수(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟡기관 순매수(억)", "🟣외/기 순매수(억)"]
+                        display_cols = ["날짜", "시장", "종목명", "🔴외국인 매수(억)", "🔵외국인 매도(억)", "🟣외국인 매수세(억)", "🟠기관 매수(억)", "🟢기관 매도(억)", "🟡기관 매수세(억)", "🟣외/기 합산(억)"]
                         display_df = df_top[display_cols]
                         
                         top100_key = f"top100_dataframe_{st.session_state.get('top100_reset_counter', 0)}"
                         t2 = time.time()
                         
-                        # 🎨 [셀 단위 렌더링]: 음수(-) 값일 경우 같은 색상 계열에서 톤다운(어둡게) 렌더링
-                        def get_cell_style(col):
-                            styles = []
-                            for val in col:
-                                col_name = col.name
-                                if col_name == "🔴외국인 매수(억)":
-                                    styles.append("color: #ff4b4b;")       # 빨강
-                                elif col_name == "🔵외국인 매도(억)":
-                                    styles.append("color: #1e90ff;")     # 파랑
-                                elif col_name == "🟣외국인 순매수(억)":
-                                    if isinstance(val, (int, float)) and val < 0:
-                                        styles.append("color: #7c5295;")  # 음수: 톤다운된 보라 (순매도)
-                                    else:
-                                        styles.append("color: #b388ff;")  # 양수: 밝은 보라 (순매수)
-                                elif col_name == "🟠기관 매수(억)":
-                                    styles.append("color: #ff7f50;")       # 주홍
-                                elif col_name == "🟢기관 매도(억)":
-                                    styles.append("color: #2e8b57;")       # 진녹
-                                elif col_name == "🟡기관 순매수(억)":
-                                    if isinstance(val, (int, float)) and val < 0:
-                                        styles.append("color: #998028;")  # 음수: 톤다운된 황갈색 (순매도)
-                                    else:
-                                        styles.append("color: #ffd54f;")  # 양수: 밝은 노랑 (순매수)
-                                elif col_name == "🟣외/기 순매수(억)":
-                                    if isinstance(val, (int, float)) and val < 0:
-                                        styles.append("color: #856a85;")  # 음수: 톤다운된 연보라 (순매도)
-                                    else:
-                                        styles.append("color: #d8bfd8;")  # 양수: 옅은 보라 (순매수)
-                                elif col_name == "특이사항":
-                                    styles.append("color: #FADB5F; font-weight: bold;") # 노란색
-                                else:
-                                    styles.append("")
-                            return styles
+                        # 형님이 원하셨던 '글자 색상' 스크립트 복원!
+                        def get_col_color(col_name):
+                            if col_name == "🔴외국인 매수(억)": return "color: #ff4b4b;"       # 빨강
+                            elif col_name == "🔵외국인 매도(억)": return "color: #1e90ff;"     # 파랑
+                            elif col_name == "🟣외국인 매수세(억)": return "color: #b388ff;"   # 밝은 보라
+                            elif col_name == "🟠기관 매수(억)": return "color: #ff7f50;"       # 주홍
+                            elif col_name == "🟢기관 매도(억)": return "color: #2e8b57;"       # 진녹
+                            elif col_name == "🟡기관 매수세(억)": return "color: #ffd54f;"     # 노랑
+                            elif col_name == "🟣외/기 합산(억)": return "color: #d8bfd8;"       # 옅은 보라
+                            return ""
                             
-                        styled_df = display_df.style.apply(get_cell_style, axis=0)
+                        styled_df = display_df.style.apply(
+                            lambda col: [get_col_color(col.name)] * len(col), axis=0
+                        )
                         
                         st.caption(f"⏱️ DB조회: {t1-t0:.2f}초 | Pandas가공: {t2-t1:.2f}초 | (색상 렌더링 복구 완료!)")
                         
@@ -4602,13 +4933,14 @@ if choice == "🏠 홈화면":
                             selection_mode="single-row",
                             key=top100_key,
                             column_config={
-                                "🔴외국인 매수(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🔵외국인 매도(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🟠기관 매수(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🟢기관 매도(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%.2f"),
-                                "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%.2f")
+                                # 🔧 [수정 2026-07-30] 숫자 가독성을 위해 1000단위 콤마(,) 포맷 전면 적용
+                                "🔴외국인 매수(억)": st.column_config.NumberColumn(format="%,.2f"),
+                                "🔵외국인 매도(억)": st.column_config.NumberColumn(format="%,.2f"),
+                                "🟣외국인 매수세(억)": st.column_config.NumberColumn(format="%,.2f"),
+                                "🟠기관 매수(억)": st.column_config.NumberColumn(format="%,.2f"),
+                                "🟢기관 매도(억)": st.column_config.NumberColumn(format="%,.2f"),
+                                "🟡기관 매수세(억)": st.column_config.NumberColumn(format="%,.2f"),
+                                "🟣외/기 합산(억)": st.column_config.NumberColumn(format="%,.2f")
                             }
                         )
                         
@@ -4642,235 +4974,6 @@ if choice == "🏠 홈화면":
                             st.session_state.pop('last_summary_stock_top100', None)
                     else:
                         st.info("해당 날짜의 수급 데이터가 아직 수집되지 않았거나 휴장일입니다. (또는 너무 오래된 과거입니다)")
-
-        elif scrn_select == "고래 골든픽":
-            st.markdown("<h4 style='color:#E040FB; border-left: 4px solid #E040FB; padding-left: 10px;'>🏆 고래 골든픽 (황금 승률 추천 TOP 20)</h4>", unsafe_allow_html=True)
-            st.write("시장 세력 수급, 외인/기관 쌍끌이, 상한가 족보, 실시간 고래 활동 및 위험 배지를 입체 종합 분석하여 산출된 1~20위 최정예 추천 종목입니다. 🚀")
-
-            global_meta = get_global_stock_metadata()
-
-            # 1. 10일간 수급 데이터 가져오기 (연속 출현 횟수 판독용)
-            start_date_str = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-            top_res = supabase.table("daily_whale_top200").select("*").gte("trade_date", start_date_str).order("trade_date", desc=True).execute()
-            if not top_res.data:
-                st.warning("⚠️ 최근 수급 데이터가 준비되지 않았습니다.")
-            else:
-                df_top_gp = pd.DataFrame(top_res.data)
-                all_dates = sorted(df_top_gp['trade_date'].unique(), reverse=True)
-                total_trading_days = len(all_dates) if all_dates else 1
-                latest_date_gp = all_dates[0]
-                df_latest_gp = df_top_gp[df_top_gp['trade_date'] == latest_date_gp].copy()
-
-                # 종목별 최근 거래일 출현 횟수 (수급 지속성)
-                appear_counts = df_top_gp.groupby('stock_code')['trade_date'].nunique().to_dict()
-
-                # 2. 상한가 족보 종목 명단
-                upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")).execute()
-                upper_names = set([r['name'] for r in upper_res.data]) if upper_res.data else set()
-
-                # 3. 실시간 및 누적 고래 수급 (df 실시간 체결 + DB whale_log 보완)
-                whale_realtime = {}
-                if not df.empty and 'side' in df.columns:
-                    for name_val, group_val in df.groupby('name'):
-                        b_sum = group_val[group_val['side'] == '매수']['amount_krw'].sum() / 1_000_000
-                        s_sum = group_val[group_val['side'] == '매도']['amount_krw'].sum() / 1_000_000
-                        whale_realtime[name_val] = (b_sum, s_sum)
-
-                if not whale_realtime:
-                    try:
-                        w_date = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
-                        w_res = supabase.table("whale_log").select("name, side, amount_krw").gte("date", w_date).limit(5000).execute()
-                        if w_res.data:
-                            df_w_db = pd.DataFrame(w_res.data)
-                            for name_val, group_val in df_w_db.groupby('name'):
-                                c_name = name_val.replace("🚀","").replace("👑","").replace("🔥","").replace("💥","").replace("✨","").replace("🌱","").strip()
-                                b_sum = group_val[group_val['side'] == '매수']['amount_krw'].sum() / 1_000_000
-                                s_sum = group_val[group_val['side'] == '매도']['amount_krw'].sum() / 1_000_000
-                                whale_realtime[c_name] = (b_sum, s_sum)
-                    except Exception:
-                        pass
-
-                candidates = []
-                for _, r_val in df_latest_gp.iterrows():
-                    name_str = r_val['stock_name']
-                    clean_n = name_str.replace("🚀","").replace("👑","").replace("🔥","").replace("💥","").replace("✨","").replace("🌱","").strip()
-                    code_str = r_val['stock_code']
-                    market_str = r_val['market']
-                    frgn_net = (r_val['frgn_buy'] - r_val['frgn_sell'])
-                    orgn_net = (r_val['orgn_buy'] - r_val['orgn_sell'])
-                    total_net = frgn_net + orgn_net
-
-                    warning_text = get_warning_text(name_str, global_meta)
-                    app_count = appear_counts.get(code_str, 0)
-
-                    score = 25 # 기본 점수 25점
-                    reasons = []
-
-                    # 1) 🐋 [고래 실체 체결 점수] (Whale Hunter의 핵심 정체성!)
-                    rt_buy, rt_sell = whale_realtime.get(clean_n, (0, 0))
-                    if rt_buy == 0:
-                        rt_buy, rt_sell = whale_realtime.get(name_str, (0, 0))
-                    if rt_buy >= 1000: # 10억 이상 고래 매수
-                        score += 25
-                        reasons.append(f"🐋 실시간 고래 대량 매수({rt_buy/1000:.1f}억)")
-                    elif rt_buy >= 100: # 1억 이상 고래 매수
-                        score += 15
-                        reasons.append(f"🐋 실시간 고래 매수 포착({rt_buy/1000:.1f}억)")
-                    elif rt_buy > 0:
-                        score += 8
-                        reasons.append("🐋 고래 소액 체결 포착")
-                    else: # 자이에스앤디처럼 고래 포착이 전혀 안 된 종목 감점
-                        score -= 15
-                        reasons.append("⚠️ 실시간 고래 포착 미흡")
-
-                    # 2) 🏛️ [수급 규모 점수] (대형 수급 우선)
-                    if total_net >= 300:
-                        score += 25
-                    elif total_net >= 100:
-                        score += 20
-                    elif total_net >= 50:
-                        score += 15
-                    elif total_net >= 20:
-                        score += 10
-                    elif total_net > 0:
-                        score += 3
-
-                    # 3) 🔥 쌍끌이 프리미엄 vs ⚠️ 한쪽 대량 덤핑 폭탄 차감 (셀트리온 -278억 외인 매도 차감)
-                    if frgn_net > 0 and orgn_net > 0:
-                        score += 15
-                        reasons.append("🔥 외/기 동시 쌍끌이")
-                    elif frgn_net < -100 or orgn_net < -100:
-                        score -= 20
-                        reasons.append("⚠️ 외인/기관 한쪽 대량 덤핑(-100억 이상)")
-
-                    # 4) 👑 N일 연속 수급 지속성 (max +15)
-                    if app_count >= total_trading_days:
-                        score += 15
-                        reasons.append(f"👑 {total_trading_days}일 연속 수급 장악")
-                    elif app_count >= total_trading_days - 1:
-                        score += 8
-                        reasons.append("✨ 수급 지속성 우수")
-
-                    # 5) ⚡ 상한가 족보
-                    if clean_n in upper_names or name_str in upper_names:
-                        if app_count >= total_trading_days - 1:
-                            score += 10
-                            reasons.append("⚡ 상한가 후 수급 유지")
-                        else:
-                            score -= 30
-                            reasons.append("⚠️ 상한가 후 수급 이탈 이력")
-
-                    # 6) 클린 종목 가산점 (+5)
-                    if not warning_text:
-                        score += 5
-                    else:
-                        score -= 15
-                        reasons.append(f"🚨 {warning_text}")
-
-                    if not reasons:
-                        reasons.append("수급 순매수 우상향")
-
-                    candidates.append({
-                        "code": code_str,
-                        "name": name_str,
-                        "market": market_str,
-                        "score": max(0, min(score, 100)),
-                        "total_net": total_net,
-                        "frgn_net": frgn_net,
-                        "orgn_net": orgn_net,
-                        "warning": warning_text if warning_text else "정상",
-                        "rt_buy": round(rt_buy, 1),
-                        "reason": " | ".join(reasons)
-                    })
-
-                df_cand = pd.DataFrame(candidates)
-                if not df_cand.empty:
-                    df_cand = df_cand.sort_values(by=["score", "total_net"], ascending=[False, False]).reset_index(drop=True)
-                    top20_gp = df_cand.head(20).copy()
-                    top20_gp.insert(0, "순위", range(1, len(top20_gp) + 1))
-
-                    # 🥇 1~3위 명예의 전당 메트릭 카드
-                    st.markdown("<h5 style='color:#FFD700; margin-top:15px;'>🥇 오늘의 TOP 3 골든 픽 명예의 전당</h5>", unsafe_allow_html=True)
-                    c1_gp, c2_gp, c3_gp = st.columns(3)
-                    medals = ["🥇 1위", "🥈 2위", "🥉 3위"]
-                    colors = ["#FFD700", "#C0C0C0", "#CD7F32"]
-                    cols_gp = [c1_gp, c2_gp, c3_gp]
-
-                    for i in range(min(3, len(top20_gp))):
-                        row_gp = top20_gp.iloc[i]
-                        with cols_gp[i]:
-                            st.markdown(f"""
-                            <div style="background:#1a1c24; border: 2px solid {colors[i]}; border-radius:12px; padding:15px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
-                                <div style="color:{colors[i]}; font-weight:bold; font-size:16px; margin-bottom:5px;">{medals[i]} {row_gp['name']}</div>
-                                <div style="font-size:24px; font-weight:900; color:#00E676; margin-bottom:8px;">{row_gp['score']}점 <span style="font-size:12px; color:#aaa;">/ 100점</span></div>
-                                <div style="font-size:13px; color:#ddd; margin-bottom:4px;">🏛️ 외/기 합산: <b>{row_gp['total_net']:,.0f}억 원</b></div>
-                                <div style="font-size:12px; color:#ff9800; margin-bottom:8px;">(외인 {row_gp['frgn_net']:,.0f}억 / 기관 {row_gp['orgn_net']:,.0f}억)</div>
-                                <div style="font-size:11px; color:#64B5F6; background:#12131c; padding:6px; border-radius:6px; min-height:38px;">💡 {row_gp['reason']}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                    st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
-                    st.markdown("<h5 style='color:#FFFFFF;'>📋 골든 픽 TOP 20 전체 순위 전광판</h5>", unsafe_allow_html=True)
-
-                    # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼
-                    click_action_gp = st.radio(
-                        "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
-                        ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
-                        horizontal=True,
-                        key="gp_click_action_radio"
-                    )
-
-                    top20_key_gp = f"golden_pick_table_{st.session_state.get('gp_reset_counter', 0)}"
-
-                    display_gp = top20_gp[['순위', 'name', 'market', 'score', 'warning', 'total_net', 'frgn_net', 'orgn_net', 'rt_buy', 'reason']].copy()
-                    display_gp = display_gp.rename(columns={
-                        'name': '종목명', 'market': '시장', 'score': '황금점수',
-                        'warning': '특이사항', 'total_net': '🟣외/기 순매수(억)',
-                        'frgn_net': '🟣외국인 순매수(억)', 'orgn_net': '🟡기관 순매수(억)',
-                        'rt_buy': '🐋실시간 매수(백만)', 'reason': '핵심 추천 포인트'
-                    })
-
-                    event_gp = st.dataframe(
-                        display_gp,
-                        use_container_width=True,
-                        hide_index=True,
-                        height=580,
-                        on_select="rerun",
-                        selection_mode="single-row",
-                        key=top20_key_gp,
-                        column_config={
-                            "순위": st.column_config.NumberColumn("순위", format="%d위"),
-                            "황금점수": st.column_config.NumberColumn("황금점수", format="%d점"),
-                            "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%.0f억"),
-                            "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%.0f억"),
-                            "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%.0f억"),
-                            "🐋실시간 매수(백만)": st.column_config.NumberColumn(format="%.0f백만"),
-                        }
-                    )
-
-                    if event_gp and "selection" in event_gp:
-                        rows_gp = event_gp["selection"]["rows"]
-                        if rows_gp and rows_gp[0] < len(top20_gp):
-                            selected_stock_gp = top20_gp.iloc[rows_gp[0]]['name']
-                            clean_stock_gp = selected_stock_gp.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
-                            row_stock_code_gp = top20_gp.iloc[rows_gp[0]]['code']
-
-                            if click_action_gp == "💬 AI 요약 보기 (팝업)":
-                                trigger_gp = st.session_state.get('dialog_trigger_id', 0) + 1
-                                st.session_state['dialog_trigger_id'] = trigger_gp
-                                st.session_state['show_summary_dialog'] = {
-                                    "stock": clean_stock_gp,
-                                    "code": row_stock_code_gp,
-                                    "trigger_id": trigger_gp
-                                }
-                                st.session_state['gp_reset_counter'] = st.session_state.get('gp_reset_counter', 0) + 1
-                                st.rerun()
-                            else:
-                                st.session_state['pending_search'] = clean_stock_gp
-                                st.session_state['last_search_keyword'] = ""
-                                st.session_state['scrn_select_radio'] = "체결 로그"
-                                st.session_state['gp_reset_counter'] = st.session_state.get('gp_reset_counter', 0) + 1
-                                st.rerun()
 
         elif scrn_select == "수익율 자랑":
             is_admin_view = st.session_state.get('is_admin', False)
@@ -5439,8 +5542,6 @@ if choice == "🏠 홈화면":
                 # 🚨 [놀빅 AI 탐지] 실시간 매수 폭주 종목 렌더링
                 hot_signals = get_hot_signals(main_df)
                 
-                global_meta = get_global_stock_metadata()
-                
                 st.markdown("#### 🚨 [놀빅 AI 탐지] 실시간 매수 폭주 종목 (Top 3)")
                 hot_cols = st.columns(3) # 항상 3자리를 고정으로 유지
                 
@@ -5449,9 +5550,6 @@ if choice == "🏠 홈화면":
                         if idx < len(hot_signals):
                             signal = hot_signals[idx]
                             score = signal['score']
-                            # 종목명에 시장경보 뱃지 추가
-                            display_name = append_warning_badge(signal['name'], global_meta, html=True)
-                            
                             if score >= 95:
                                 bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #332700 0%, #1a1400 100%)", "#FFD700", "#FFD700", "rgba(255, 215, 0, 0.4)"
                             elif score >= 90:
@@ -5463,7 +5561,7 @@ if choice == "🏠 홈화면":
 
                             st.markdown(f"""
                             <div style="background: {bg_grad}; border: 1px solid {border_col}; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 0 15px {shadow_col};">
-                                <div style="font-size: 18px; font-weight: bold; color: #ffffff;">{display_name}</div>
+                                <div style="font-size: 18px; font-weight: bold; color: #ffffff;">{signal['name']}</div>
                                 <div style="font-size: 15px; color: {text_col}; font-weight: bold; margin-top: 8px;">{signal['icon']} 파워 스코어: {score:.1f}점</div>
                                 <div style="font-size: 13px; color: #a0a0a0; margin-top: 5px;">순매수 강도: {int(signal['net_buy'] // 1000000):,}백만원 ({int(signal['buy_count'])}회 고래 매집)</div>
                             </div>
@@ -5500,14 +5598,11 @@ if choice == "🏠 홈화면":
                         except Exception as e:
                             pass
                             
+                    # 🔥 [데이터프레임 시각화 강화] 핫 시그널 종목에 등급별 뱃지 부여
                     if 'hot_signals' in locals() and hot_signals:
                         hot_dict = {s['name']: s['icon'] for s in hot_signals}
                         # 이름에 이미 🚀가 붙어있을 수 있으므로 기존 이름 기준으로 맵핑
                         display_df['name'] = display_df['name'].apply(lambda x: x + f" {hot_dict[x.replace(' 🚀', '')]}" if x.replace(' 🚀', '') in hot_dict else x)
-                        
-                    # 🚨 [시장 경보] 투자경고, 관리종목 등 배지 부여 (전용 칼럼으로 분리)
-                    global_meta = get_global_stock_metadata()
-                    display_df['특이사항'] = display_df['name'].apply(lambda x: get_warning_text(x, global_meta))
                     
                     # ⚡ [안전 퓨즈] 혹시나 테이블 데이터에 'side' 컬럼 신호가 비어있다면 에러 방지용 기본값 주입
                     if 'side' not in display_df.columns:
@@ -5537,10 +5632,6 @@ if choice == "🏠 홈화면":
                         # ⏰ [광대역 필터] 15:20:00 포함, 그 이후에 들어오는 모든 장마감/장후 틱 처리
                         if row['time'] >= '15:20:00': 
                             styles[row.index.get_loc('time')] = 'background-color: #5c1d1d; color: #ff9999; font-weight: bold;'
-                        
-                        # 🚨 특이사항 컬럼은 무조건 노란색 고정
-                        if '특이사항' in row and row['특이사항']:
-                            styles[row.index.get_loc('특이사항')] = 'color: #FADB5F; font-weight: bold;'
 
                         # 🐋 매수/매도 레일별 고래 LED 하이라이트
                         total_amt_raw = row['amount_krw']
@@ -5586,19 +5677,19 @@ if choice == "🏠 홈화면":
                     grid_key = f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}_{st.session_state.get('df_reset_counter', 0)}"
                     event = st.dataframe(
                         styled_df, 
-                        # 🛠️ [교정 3] 출력 전광판에서 '방미금액(unknown_amount)' 컬럼을 제거하고 매수/매도 중심의 깔끔한 컬럼 배치 적용!
-                        column_order=["No.", "date", "time", "name", "특이사항", "price", "volume", "buy_amount", "sell_amount", "market_type"],
+                        # 🛠️ [교정 3] 출력 전광판 순서에서 amount_krw를 폐기하고, 신형 듀얼 레일을 배치합니다!
+                        column_order=["No.", "date", "time", "name", "price", "volume", "buy_amount", "sell_amount", "unknown_amount", "market_type"],
                         
                         column_config={
-                            "No.": st.column_config.NumberColumn("순번", format="%d"),
+                            "No.": st.column_config.NumberColumn("순번", format="%,d"),
                             "date": "체결일자",
                             "time": "체결시간",
                             "name": "종목명",
-                            "특이사항": st.column_config.TextColumn("특이사항", width="medium"),
-                            "price": st.column_config.NumberColumn(("\u00A0" * 16) + "체결가 (원)"),
-                            "volume": st.column_config.NumberColumn(("\u00A0" * 16) + "체결량 (주)"),
-                            "buy_amount": st.column_config.NumberColumn("매수금액 (백만)"), 
-                            "sell_amount": st.column_config.NumberColumn("매도금액 (백만)"), 
+                            "price": st.column_config.NumberColumn(("\u00A0" * 16) + "체결가 (원)", format="%,d"),
+                            "volume": st.column_config.NumberColumn(("\u00A0" * 16) + "체결량 (주)", format="%,d"),
+                            "buy_amount": st.column_config.NumberColumn("매수금액 (백만)", format="%,d"), 
+                            "sell_amount": st.column_config.NumberColumn("매도금액 (백만)", format="%,d"), 
+                            "unknown_amount": st.column_config.NumberColumn("방미금액 (백만)", format="%,d"),
                             "market_type": "시장구분"
                         },
                         hide_index=True,  
