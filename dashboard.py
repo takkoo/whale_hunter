@@ -415,6 +415,141 @@ def get_gemini_company_summary(stock_name, news_text=""):
 
     return summary
 
+# ------------------------------------------------------------------
+# 🌟 [신규 2026-07-31] "테마킹" 화면 — 테마별 AI 요약 기능
+# 개별 종목 AI요약(get_gemini/chatgpt_company_summary)과 동일한 패턴이지만,
+# 하나의 종목이 아니라 "테마에 속한 대표 종목 몇 개"의 뉴스를 한꺼번에 모아서
+# "왜 이 테마 전체가 오늘 강세/약세인지"를 분석하도록 프롬프트만 테마용으로 교체.
+# 캐싱도 동일한 gemini_summaries 테이블을 재사용하되, stock_name 컬럼에
+# "[THEME]테마명" / "[GPT-THEME]테마명" 같은 접두어를 붙여 종목 요약과 겹치지 않게 함.
+# ------------------------------------------------------------------
+def _fetch_theme_news_headlines(theme_name, rep_stocks, max_stocks=5, max_news_per_stock=3):
+    """
+    테마 대표 종목(rep_stocks: [{'name':.., 'code':.., 'net':..}, ...] 순매수 큰 순 정렬)
+    상위 max_stocks개에 대해 네이버 금융 뉴스 제목을 긁어와 하나의 텍스트로 합쳐줌.
+    반환: (합산 뉴스 원문 텍스트(AI 프롬프트용), 합산 뉴스 마크다운(화면 표시용))
+    """
+    combined_raw_parts = []
+    combined_md_parts = []
+    for stock_info in rep_stocks[:max_stocks]:
+        s_name = stock_info.get('name', '')
+        s_code = stock_info.get('code', '')
+        if not s_code:
+            continue
+        try:
+            _, news_md_one, news_raw_one, _ = get_naver_company_summary(s_code)
+        except Exception:
+            continue
+        if news_raw_one and news_raw_one != "최근 관련 뉴스가 없습니다.":
+            # 뉴스 개수 제한 (종목당 최대 max_news_per_stock개)
+            raw_lines = news_raw_one.split("\n")[:max_news_per_stock]
+            combined_raw_parts.append(f"[{s_name}]\n" + "\n".join(raw_lines))
+            md_lines = news_md_one.split("\n")[:max_news_per_stock]
+            combined_md_parts.append(f"**{s_name}**\n" + "\n".join(md_lines))
+
+    combined_raw = "\n\n".join(combined_raw_parts) if combined_raw_parts else "최근 관련 뉴스가 없습니다."
+    combined_md = "\n\n".join(combined_md_parts) if combined_md_parts else "최근 관련 뉴스가 없습니다."
+    return combined_raw, combined_md
+
+def get_gemini_theme_summary(theme_name, news_text=""):
+    import google.generativeai as genai
+
+    api_key = st.secrets.get("gemini", {}).get("api_key", None)
+    if not api_key:
+        raise ValueError("API_KEY_MISSING")
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-flash-latest')
+
+    prompt = f"""한국 주식 시장의 '{theme_name}' 테마(업종/섹터)에 대해 다음 두 가지 항목으로 나누어 분석해줘.
+주의: 답변 내용에 '(1~2줄)', '(3~4줄)' 같은 분량 지시어는 절대 출력하지 마.
+
+**1. 테마 개요**
+이 테마가 최근 시장에서 왜 주목받고 있는지 핵심 배경을 1~2줄로 요약해줘.
+
+**2. 대표 종목 동향 및 평가**
+아래는 이 테마의 대표 종목들에 대한 최근 뉴스 제목들이야. 이를 바탕으로 이 테마 전체의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘.
+(반드시 아래 예시 포맷을 지켜서 작성할 것)
+- [호재] ~~~
+- [악재] ~~~
+- [전망] ~~~
+
+※ 주의사항: 요약할 때 기사에 언급된 특정 기업명, 기관명, 고유명사 등을 뭉뚱그리지 말고 구체적인 명칭을 반드시 그대로 명시할 것.
+
+뉴스 제목이 없다면 일반적인 최근 시장에서의 이 테마 평가를 위 포맷으로 적어줘.
+
+[대표 종목별 최근 뉴스 제목]
+{news_text}
+"""
+    response = model.generate_content(
+        prompt,
+        request_options={"timeout": 60.0, "retry": None}
+    )
+    summary = response.text
+
+    try:
+        theme_key = f"[THEME]{theme_name}"
+        supabase.table("gemini_summaries").delete().eq("stock_name", theme_key).execute()
+        supabase.table("gemini_summaries").insert({
+            "stock_name": theme_key,
+            "news_text": news_text,
+            "summary": summary
+        }).execute()
+    except Exception:
+        pass
+
+    return summary
+
+def get_chatgpt_theme_summary(theme_name, news_text=""):
+    api_key = st.secrets.get("openai", {}).get("api_key", None)
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY_MISSING")
+
+    client = openai.OpenAI(api_key=api_key)
+
+    prompt = f"""한국 주식 시장의 '{theme_name}' 테마(업종/섹터)에 대해 다음 두 가지 항목으로 나누어 분석해줘.
+주의: 답변 내용에 '(1~2줄)', '(3~4줄)' 같은 분량 지시어는 절대 출력하지 마.
+
+**1. 테마 개요**
+이 테마가 최근 시장에서 왜 주목받고 있는지 핵심 배경을 1~2줄로 요약해줘.
+
+**2. 대표 종목 동향 및 평가**
+아래는 이 테마의 대표 종목들에 대한 최근 뉴스 제목들이야. 이를 바탕으로 이 테마 전체의 호재, 악재, 전망을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 명확하게 요약해 줘.
+(반드시 아래 예시 포맷을 지켜서 작성할 것)
+- [호재] ~~~
+- [악재] ~~~
+- [전망] ~~~
+
+※ 주의사항: 요약할 때 기사에 언급된 특정 기업명, 기관명, 고유명사 등을 뭉뚱그리지 말고 구체적인 명칭을 반드시 그대로 명시할 것.
+
+뉴스 제목이 없다면 일반적인 최근 시장에서의 이 테마 평가를 위 포맷으로 적어줘.
+
+[대표 종목별 최근 뉴스 제목]
+{news_text}
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "당신은 증권가 최고의 주식 애널리스트입니다."},
+            {"role": "user", "content": prompt}
+        ],
+        timeout=30.0
+    )
+    summary = response.choices[0].message.content
+
+    try:
+        theme_key = f"[GPT-THEME]{theme_name}"
+        supabase.table("gemini_summaries").delete().eq("stock_name", theme_key).execute()
+        supabase.table("gemini_summaries").insert({
+            "stock_name": theme_key,
+            "news_text": news_text,
+            "summary": summary
+        }).execute()
+    except Exception as e:
+        return f"ChatGPT 테마 요약 저장 중 오류 발생: {e}"
+
+    return summary
+
 @st.cache_data(ttl=86400)
 def get_cached_krx_listing():
     import FinanceDataReader as fdr
@@ -461,6 +596,28 @@ def render_ai_summary_box(text):
     """
     st.markdown(container_html, unsafe_allow_html=True)
 
+# 🔧 [위치 이동 2026-07-31] 원래는 이 아래 TOP10 화면 쪽에 정의되어 있었는데,
+# show_summary_dialog()가 종목 테마 표시를 위해 이 함수를 호출하게 되면서 문제가 생김:
+# 이 스크립트는 위에서 아래로 한 번에 실행되는데, 만약 이 dialog가 (아래 세션스테이트 트리거 블록에서)
+# 이 함수의 원래 정의 위치보다 앞에서 먼저 호출되면 "get_themes_for_stocks가 아직 정의 안 됨" 에러가 남.
+# 그래서 호출부(show_summary_dialog, 그 아래 트리거 블록)보다 앞으로 정의를 옮김. supabase 클라이언트만
+# 있으면 되는 함수라 위치를 옮겨도 동작은 완전히 동일함.
+def get_themes_for_stocks(stock_names):
+    if not stock_names:
+        return {}
+    try:
+        res = supabase.table('stock_themes').select('stock_name, theme_names').in_('stock_name', stock_names).execute()
+        return {row['stock_name']: row['theme_names'] for row in res.data}
+    except Exception as e:
+        return {}
+
+# 🔧 [수정 2026-07-31, 3번째] table 레이아웃으로 바꾼 뒤에도 다이얼로그 기본 폭이 좁아서
+# 그 안에서 텍스트가 원치 않게 줄바꿈되는 문제(종목코드가 이름 아래로, 52주고저/현재가가
+# 2줄로 분리)가 있어 사용자가 지적함 → 처음엔 width="large"로 시도했으나 사용자가 "너무 넓어졌다,
+# 이상해 보인다"고 피드백 → width="large"(large/small 이분법이라 세밀 조절 불가)는 제거하고,
+# 원래 기본(small) 폭 그대로 두되 CSS로 다이얼로그 컨테이너 자체의 폭만 20% 정도 더 넓힘
+# ([수정 2026-07-31, 4번째] 아래 CSS 참고) + metrics_html의 이름/코드, PER정보 두 줄 각각에
+# white-space: nowrap을 줘서 웬만하면 줄바꿈 자체가 안 일어나게 함.
 @st.dialog("🏢 기업 요약 및 AI 분석")
 def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     import FinanceDataReader as fdr
@@ -469,8 +626,17 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     # X로 닫으면 Streamlit이 스크립트 rerun을 트리거하지 않아서(Streamlit 공식 이슈 #8507) 우리 쪽
     # session_state['show_summary_dialog'] 정리 코드가 아예 실행이 안 되고, 그래서 다음 자동새로고침 때
     # 창이 또 뜨는 버그가 있었음. "닫기 (확인)"/"관심종목 추가" 버튼만 쓰도록 X를 아예 숨김.
+    #
+    # 🔧 [수정 2026-07-31, 4번째] width="large" 파라미터가 너무 큰 폭 점프(작음↔큼 이분법)라
+    # 사용자가 "이상해 보인다"고 피드백함 → 대신 기본(small) 다이얼로그에 CSS로 직접
+    # width/max-width를 지정해서 기존 대비 약 20%만 넓힘(기본 small 폭이 대략 500px대라고
+    # 알려져 있어 20% 증가분인 ~620px로 설정 — 정확한 기본값은 Streamlit 버전마다 조금씩 다를 수
+    # 있어서 근사치임. 더 좁게/넓게 보이면 이 px 값만 조정하면 됨).
     st.markdown(
-        '<style>div[aria-label="dialog"]>button[aria-label="Close"] { display: none !important; }</style>',
+        '<style>'
+        'div[aria-label="dialog"]>button[aria-label="Close"] { display: none !important; }'
+        'div[aria-label="dialog"] { width: 620px !important; max-width: 620px !important; }'
+        '</style>',
         unsafe_allow_html=True
     )
 
@@ -499,34 +665,85 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
         else:
             naver_summary, naver_news_md, naver_news_raw, fin_info = "종목 코드를 찾을 수 없어 요약을 가져올 수 없습니다.", "", "", {}
 
+    # 🌟 [신규 2026-07-31] 사용자 요청: 종목명 바로 아래에 이 종목이 속한 테마명을 표시.
+    # stock_themes 테이블(100개 종목만 매핑)을 기존 get_themes_for_stocks()로 조회 —
+    # 2개 이상의 테마에 속해도 최대 2개까지만, 각각 한 줄씩 보여줌. 매핑이 없으면 아예 표시 안 함.
+    theme_line_html = ""
+    try:
+        theme_map_dlg = get_themes_for_stocks([stock_name])
+        theme_str_dlg = theme_map_dlg.get(stock_name, "")
+        if theme_str_dlg:
+            theme_names_dlg = [t.strip() for t in theme_str_dlg.split(',') if t.strip()][:2]
+            if theme_names_dlg:
+                theme_line_html = (
+                    "<div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal; margin: 2px 0 8px 0;'>"
+                    + "<br>".join([f"🏷️ {t}" for t in theme_names_dlg])
+                    + "</div>"
+                )
+    except Exception:
+        theme_line_html = ""
+
     if fin_info:
         warnings = fin_info.get('warnings', [])
         if warnings:
             badges = " ".join([f"<span style='background-color:#ffebee; color:#d32f2f; padding:2px 6px; border-radius:4px; font-size:0.7em; font-weight:bold; margin-right:5px;'>🚨 {w}</span>" for w in warnings])
             st.markdown(badges, unsafe_allow_html=True)
-            
+
         per = fin_info.get('per', 'N/A')
         pbr = fin_info.get('pbr', 'N/A')
         roe = fin_info.get('roe', 'N/A')
         high52 = fin_info.get('high52', 'N/A')
         low52 = fin_info.get('low52', 'N/A')
         price = fin_info.get('price', 'N/A')
-        
+
         roe_str = f"{roe}%" if roe != 'N/A' else 'N/A'
-        
-        metrics_html = f"""
-        <div style='display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;'>
-            <h3 style='margin: 0; padding: 0;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>
-            <div style='font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal;'>
-                [ PER {per} / PBR {pbr} / ROE {roe_str} ]<br>
-                [ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]
-            </div>
-        </div>
-        """
+
+        # 🔧 [수정 2026-07-31, 재수정] 처음엔 종목명→테마→PER 순으로 전부 세로로 쌓았는데, 사용자가
+        # "PER 등의 표시는 원래 그대로(옆 빈공간에 두려고 일부러 그렇게 만든 것) 두고, 테마 태그만
+        # 지금처럼(이름 바로 아래, 왼쪽정렬) 추가해달라"고 정정함 — 즉 세로 스택 길이가 늘어나는 걸
+        # 최소화하고 싶다는 의도. 그래서 원래의 가로 배치(flex row) 레이아웃은 그대로 복원하되,
+        # "종목명 + 테마"만 한 세로 컬럼으로 묶어서 그 컬럼 전체를 PER 정보 옆(오른쪽 빈 공간)에 배치함.
+        # → 종목명 바로 아래에 테마가 오면서도(왼쪽정렬 유지), PER 정보는 예전처럼 옆에 그대로 남음.
+        #
+        # 🐛 [버그 수정 2026-07-31] 삼성전기(테마 매핑 없는 종목, theme_line_html="")에서 팝업이
+        # HTML 태그가 그대로 텍스트로 노출되는 코드블록처럼 깨져 보이는 문제 발견(삼성전자는 정상).
+        # 원인: 위 템플릿을 여러 줄 들여쓰기된 f-string(""" ... """)으로 작성했는데, theme_line_html이
+        # 빈 문자열이면 그 줄이 "공백만 있는 빈 줄"이 되고, Markdown은 "빈 줄 다음에 오는 4칸 이상
+        # 들여쓰기된 텍스트"를 코드블록으로 해석하는 규칙이 있어서, 이후의 모든 HTML이 그대로
+        # 문자로 노출돼버림(테마가 있는 종목은 그 줄이 비지 않아서 우연히 문제가 안 드러났던 것).
+        # 해결: 줄바꿈/들여쓰기가 전혀 없는 한 줄짜리 문자열로 합쳐서 Markdown의 블록 파싱 규칙에
+        # 애초에 걸리지 않도록 함 — 빈 테마든 아니든 항상 안전하게 렌더링됨.
+        #
+        # 🐛 [버그 수정 2026-07-31, 2번째] SK하이닉스(테마 1개, "AI 반도체")에서 PER/PBR/ROE 정보
+        # 전체가 이름 옆이 아니라 그 아래 새 줄로 뚝 떨어져서 다시 세로로 쌓이는 문제 발견.
+        # 원인: 위 flex 컨테이너에 flex-wrap: wrap이 걸려 있었는데, "종목명+테마" 컬럼에 테마 줄이
+        # 추가되면서 그 컬럼의 고유 너비(자기 내용 중 가장 넓은 줄 기준)가 넓어졌고, 그 결과 "이름+테마"
+        # 칸 + "PER정보" 칸의 합산 너비가 팝업 폭을 넘어서면서 flex-wrap이 PER정보 칸을 다음 줄로
+        # 밀어버린 것(테마가 없는 종목은 왼쪽 칸이 좁아서 안 걸렸던 것뿐). 즉 flex-wrap 자체가
+        # "옆 공간에 계속 붙어있어야 한다"는 요구사항과 상충함.
+        # 해결: flex 대신 CSS table 레이아웃(display: table/table-row/table-cell)으로 교체.
+        # table-cell은 내용이 넘치면 그 칸 안에서 줄바꿈될 뿐, flex처럼 칸 전체가 다음 "행"으로
+        # 떨어지는 일이 없어서 이름/테마 칸과 PER정보 칸이 항상 나란히 유지됨.
+        metrics_html = (
+            "<div style='display: table; width: 100%; margin-bottom: 10px;'>"
+            "<div style='display: table-row;'>"
+            "<div style='display: table-cell; vertical-align: top; padding-right: 16px; white-space: nowrap;'>"
+            f"<h3 style='margin: 0; padding: 0; white-space: nowrap;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>"
+            f"{theme_line_html}"
+            "</div>"
+            "<div style='display: table-cell; vertical-align: top; font-size: 0.85em; color: #e0e0e0; line-height: 1.4; font-weight: normal; white-space: nowrap;'>"
+            f"[ PER {per} / PBR {pbr} / ROE {roe_str} ]<br>"
+            f"[ 52주고/저 {high52} / {low52} ] &nbsp;&nbsp;[ 현재가 {price} ]"
+            "</div>"
+            "</div>"
+            "</div>"
+        )
         st.markdown(metrics_html, unsafe_allow_html=True)
     else:
-        st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 10px;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>", unsafe_allow_html=True)
-    
+        st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 4px;'>{stock_name} {f'({stock_code})' if stock_code else ''}</h3>", unsafe_allow_html=True)
+        if theme_line_html:
+            st.markdown(theme_line_html, unsafe_allow_html=True)
+
     tab1, tab2, tab3 = st.tabs(["📊 네이버 기업개요", "🤖 Gemini AI 분석", "💡 ChatGPT AI 분석"])
     
     with tab1:
@@ -638,6 +855,102 @@ if "summary_stock" in st.query_params and "summary_code" in st.query_params:
 if 'show_summary_dialog' in st.session_state:
     data = st.session_state['show_summary_dialog']
     show_summary_dialog(data['stock'], data.get('code', ''), data.get('trigger_id', 0))
+
+# ------------------------------------------------------------------
+# 🌟 [신규 2026-07-31] "테마킹" 화면 — 테마별 AI 요약 팝업
+# 개별 종목의 "🏢 기업 요약 및 AI 분석"(show_summary_dialog)과 동일한 UX(다이얼로그+탭)를
+# 테마 단위로 재구성. 테마 대표 종목 상위 몇 개의 뉴스를 모아 Gemini/ChatGPT에 넘겨 분석받음.
+# ------------------------------------------------------------------
+@st.dialog("🏷️ 테마 요약 및 AI 분석")
+def show_theme_summary_dialog(theme_name, rep_stocks, trigger_id=0):
+    # X 닫기 버튼 제거 (show_summary_dialog와 동일한 이유 — Streamlit #8507)
+    st.markdown(
+        '<style>div[aria-label="dialog"]>button[aria-label="Close"] { display: none !important; }</style>',
+        unsafe_allow_html=True
+    )
+
+    stock_names_str = ", ".join([s['name'] for s in rep_stocks[:5]])
+    st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 4px;'>🏷️ {theme_name}</h3>", unsafe_allow_html=True)
+    st.caption(f"대표 종목: {stock_names_str}")
+
+    with st.spinner("대표 종목들의 최근 뉴스를 모으는 중..."):
+        theme_news_raw, theme_news_md = _fetch_theme_news_headlines(theme_name, rep_stocks)
+
+    tab1_t, tab2_t, tab3_t = st.tabs(["📰 대표 종목 뉴스 모아보기", "🤖 Gemini AI 테마 분석", "💡 ChatGPT AI 테마 분석"])
+
+    with tab1_t:
+        st.markdown("##### 📰 대표 종목별 최근 뉴스")
+        st.warning(theme_news_md if theme_news_md else "최근 뉴스가 없습니다.")
+
+    with tab2_t:
+        db_summary_t = None
+        thirty_days_ago_t = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        theme_key_gemini = f"[THEME]{theme_name}"
+        try:
+            db_res_t = supabase.table("gemini_summaries").select("summary").eq("stock_name", theme_key_gemini).eq("news_text", theme_news_raw).gte("created_at", thirty_days_ago_t).limit(1).execute()
+            if db_res_t.data:
+                db_summary_t = db_res_t.data[0]['summary']
+        except Exception:
+            pass
+
+        if db_summary_t:
+            render_ai_summary_box(db_summary_t)
+        else:
+            st.info("💡 처음 조회하는 뉴스 조합이거나 기존 분석이 만료(30일 경과)되었습니다. 아래 버튼을 눌러 AI 분석을 갱신하세요.")
+            if st.button("🤖 Gemini AI 테마 분석 시작", key=f"gemini_theme_btn_{theme_name}"):
+                with st.spinner("Gemini AI가 테마 대표 종목 뉴스를 바탕으로 분석 중입니다..."):
+                    try:
+                        gemini_summary_t = get_gemini_theme_summary(theme_name, theme_news_raw)
+                        render_ai_summary_box(gemini_summary_t)
+                    except Exception as e:
+                        err_msg = str(e)
+                        if "API_KEY_MISSING" in err_msg:
+                            st.warning("⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.")
+                        elif "429" in err_msg or "quota" in err_msg.lower():
+                            st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)** — 잠시 후 다시 시도하거나 내일 다시 시도해주세요.")
+                        elif "504" in err_msg or "deadline" in err_msg.lower():
+                            st.error("⚠️ **구글 AI 서버 응답 지연 (504 Timeout)** — 잠시 후 버튼을 다시 눌러주세요.")
+                        elif "503" in err_msg or "high demand" in err_msg.lower():
+                            st.warning("⚠️ **구글 AI 서버 과부하 (503)** — 1~2분 후 다시 시도해 주세요.")
+                        else:
+                            st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
+
+    with tab3_t:
+        db_summary_gpt_t = None
+        theme_key_gpt = f"[GPT-THEME]{theme_name}"
+        thirty_days_ago_gpt_t = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        try:
+            db_res_gpt_t = supabase.table("gemini_summaries").select("summary").eq("stock_name", theme_key_gpt).eq("news_text", theme_news_raw).gte("created_at", thirty_days_ago_gpt_t).limit(1).execute()
+            if db_res_gpt_t.data:
+                db_summary_gpt_t = db_res_gpt_t.data[0]['summary']
+        except Exception:
+            pass
+
+        if db_summary_gpt_t:
+            render_ai_summary_box(db_summary_gpt_t)
+        else:
+            st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
+            if st.button("💡 ChatGPT AI 테마 분석 시작", key=f"chatgpt_theme_btn_{theme_name}"):
+                with st.spinner("ChatGPT(gpt-4o-mini)가 테마 대표 종목 뉴스를 바탕으로 분석 중입니다..."):
+                    try:
+                        chatgpt_summary_t = get_chatgpt_theme_summary(theme_name, theme_news_raw)
+                        render_ai_summary_box(chatgpt_summary_t)
+                    except Exception as e:
+                        err_msg = str(e)
+                        if "OPENAI_API_KEY_MISSING" in err_msg:
+                            st.warning("⚠️ `.streamlit/secrets.toml` 파일에 OpenAI API Key가 설정되지 않았습니다.")
+                        elif "429" in err_msg or "quota" in err_msg.lower() or "insufficient_quota" in err_msg.lower():
+                            st.warning("⚠️ **ChatGPT API 잔액 부족 또는 한도 초과**")
+                        else:
+                            st.error(f"ChatGPT API 호출 중 오류가 발생했습니다: {e}")
+
+    if st.button("닫기 (확인)", use_container_width=True, key=f"theme_dlg_close_{theme_name}_{trigger_id}"):
+        st.session_state.pop('show_theme_summary_dialog', None)
+        st.rerun()
+
+if 'show_theme_summary_dialog' in st.session_state:
+    data_t = st.session_state['show_theme_summary_dialog']
+    show_theme_summary_dialog(data_t['theme'], data_t.get('rep_stocks', []), data_t.get('trigger_id', 0))
 
 @st.dialog("🎯 가상 데이터 (Mock Data) 쾌속 입력")
 def mock_data_dialog(stock, date_str):
@@ -758,14 +1071,8 @@ def get_warning_text(stock_name, global_meta):
         return info.get('warning', '') or info.get('special_note', '') or ""
     return ""
 
-def get_themes_for_stocks(stock_names):
-    if not stock_names:
-        return {}
-    try:
-        res = supabase.table('stock_themes').select('stock_name, theme_names').in_('stock_name', stock_names).execute()
-        return {row['stock_name']: row['theme_names'] for row in res.data}
-    except Exception as e:
-        return {}
+# (get_themes_for_stocks 함수는 2026-07-31에 이 위치에서 파일 상단(show_summary_dialog 바로 위)으로
+#  이동함 — 이유는 그 이동 지점의 주석 참고. 이 자리엔 더 이상 정의가 없음, 삭제된 것 아님.)
 
 # 🔧 [수정 2026-07-30] "고래 골든픽" 화면이 화면 안의 아무 버튼(AI 요약 보기, 차트 이동 등)만 눌러도
 # 매번 daily_whale_top200/whale_log/upper_limit_stocks를 통째로 다시 조회하고 있어서 클릭할 때마다
@@ -1709,6 +2016,34 @@ def get_hot_signals(df):
             'icon': icon
         })
     return result
+
+# 🌟 [신규 2026-08-01] 사용자 요청: "실시간 놀빅 고래 체결 상황" 화면의 매수 폭주 Top3 카드
+# 폭을 30%씩 줄이고, 남는 공간에 미국 테마별 등락률 위젯을 배치. us_theme_performance
+# 테이블(FindingWhale.py의 독립 데몬 스레드가 매일 자동 수집)에서 최신 거래일 기준 상승/하락
+# 테마 순위를 뽑아옴. 30분 캐시(ttl=1800) — 어차피 하루 1회만 갱신되는 데이터라 충분히 여유있음.
+@st.cache_data(ttl=1800)
+def get_us_theme_top_movers(left_count=8):
+    try:
+        res = supabase.table("us_theme_performance").select("trade_date, theme_name, pct_change").order("trade_date", desc=True).limit(200).execute()
+        if not res.data:
+            return None, [], []
+        df_us = pd.DataFrame(res.data)
+        latest_date = df_us['trade_date'].max()
+        today_df = df_us[df_us['trade_date'] == latest_date].copy()
+        today_df['pct_change'] = today_df['pct_change'].astype(float)
+        # 🔧 [수정 2026-07-31, 4차] 이전에는 "상승 Top-N / 하락 Top-N"으로 나눠 뽑다 보니, 값
+        # 크기 순위로 딱 중간권(예: 15개 중 8위)에 있는 테마가 양쪽 컷 어디에도 안 들어가고
+        # 통째로 누락되는 문제가 있었음(사용자 발견: 반도체 +0.90%가 화면에 안 보임).
+        # → 등락률이 아니라 "순위"로만 좌/우를 나눔: 전체 테마를 값이 큰 순서(내림차순)로 한 줄
+        # 세운 뒤, 앞쪽 left_count개는 좌측 컬럼, 나머지는 전부 우측 컬럼에 배치 → 어떤 테마도
+        # 빠지지 않고 전부 표시됨. 좌/우는 순위 배치일 뿐이고, 색상(빨강/파랑)은 화면 렌더링
+        # 단계에서 각 항목의 실제 부호로 별도 판단(_us_row_html) — 좌/우 소속과 무관.
+        sorted_records = today_df.sort_values('pct_change', ascending=False).to_dict('records')
+        left_items = sorted_records[:left_count]
+        right_items = sorted_records[left_count:]
+        return latest_date, left_items, right_items
+    except Exception as e:
+        return None, [], []
 
 def get_accumulated_hot_signals(df):
     if df.empty:
@@ -5009,11 +5344,25 @@ if choice == "🏠 홈화면":
                 # AttributeError 발생 확인 → pandas 2.1+에서 applymap의 대체 메서드인 Styler.map으로 교체
                 styled_watch = df_watch.style.map(_get_sentiment_color_watch, subset=['📰 뉴스감성'])
 
+                # 🌟 [신규 2026-07-31] "고래 골든픽" 화면과 동일하게 표에서 종목(행)을 클릭하면
+                # 차트로 바로 이동하거나 AI 요약 팝업을 띄울 수 있도록 클릭 동작 라디오 + on_select 연결
+                click_action_watch = st.radio(
+                    "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:",
+                    ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"],
+                    horizontal=True,
+                    key="watch_click_action_radio"
+                )
+
+                watch_table_key = f"watchlist_table_{st.session_state.get('watch_reset_counter', 0)}"
+
                 st.markdown('<div class="no-header-icon"></div>', unsafe_allow_html=True)
-                st.dataframe(
+                event_watch = st.dataframe(
                     styled_watch,
                     use_container_width=True,
                     hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key=watch_table_key,
                     column_config={
                         "골든점수": st.column_config.NumberColumn("골든점수", format="%,d점"),
                         "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
@@ -5022,6 +5371,30 @@ if choice == "🏠 홈화면":
                         "📰 뉴스감성": st.column_config.NumberColumn(format="%+d"),
                     }
                 )
+
+                if event_watch and "selection" in event_watch:
+                    rows_watch_sel = event_watch["selection"]["rows"]
+                    if rows_watch_sel and rows_watch_sel[0] < len(df_watch):
+                        selected_stock_watch = df_watch.iloc[rows_watch_sel[0]]['종목명']
+                        clean_stock_watch = selected_stock_watch.replace(" 🚀", "").replace(" 👑", "").replace(" 🔥", "").replace(" 💥", "").replace(" ✨", "").replace(" 🌱", "").strip()
+                        row_stock_code_watch = df_watch.iloc[rows_watch_sel[0]]['코드']
+
+                        if click_action_watch == "💬 AI 요약 보기 (팝업)":
+                            trigger_watch = st.session_state.get('dialog_trigger_id', 0) + 1
+                            st.session_state['dialog_trigger_id'] = trigger_watch
+                            st.session_state['show_summary_dialog'] = {
+                                "stock": clean_stock_watch,
+                                "code": row_stock_code_watch,
+                                "trigger_id": trigger_watch
+                            }
+                            st.session_state['watch_reset_counter'] = st.session_state.get('watch_reset_counter', 0) + 1
+                            st.rerun()
+                        else:
+                            st.session_state['pending_search'] = clean_stock_watch
+                            st.session_state['last_search_keyword'] = ""
+                            st.session_state['df_reset_counter'] = st.session_state.get('df_reset_counter', 0) + 1
+                            st.session_state['scrn_select_radio'] = "체결 로그"
+                            st.rerun()
 
                 st.write("---")
                 st.markdown("<div style='font-size:13px; color:#aaa; margin-bottom:6px;'>🗑️ 관심종목 삭제</div>", unsafe_allow_html=True)
@@ -5064,11 +5437,13 @@ if choice == "🏠 홈화면":
                     theme_str_t = theme_map_today.get(r_t['stock_name'], "")
                     if not theme_str_t:
                         continue
+                    stock_code_t = r_t.get('stock_code', '')
                     for t_name in [t.strip() for t in theme_str_t.split(',') if t.strip()]:
                         if t_name not in theme_agg:
                             theme_agg[t_name] = {"total_net": 0.0, "stocks": []}
                         theme_agg[t_name]["total_net"] += r_t['total_net']
-                        theme_agg[t_name]["stocks"].append((r_t['stock_name'], r_t['total_net']))
+                        # 🌟 [2026-07-31] 테마별 AI 요약 시 대표 종목 뉴스를 긁어오려면 종목코드가 필요해서 튜플에 코드 추가
+                        theme_agg[t_name]["stocks"].append((r_t['stock_name'], r_t['total_net'], stock_code_t))
 
                 if not theme_agg:
                     st.info("오늘 TOP 200 종목 중 테마 매핑이 확인된 종목이 없습니다.")
@@ -5076,7 +5451,7 @@ if choice == "🏠 홈화면":
                     theme_rows = []
                     for t_name, info_t in theme_agg.items():
                         top_stocks_t = sorted(info_t["stocks"], key=lambda x: x[1], reverse=True)[:3]
-                        top_stocks_str_t = ", ".join([f"{n}({v:,.0f}억)" for n, v in top_stocks_t])
+                        top_stocks_str_t = ", ".join([f"{n}({v:,.0f}억)" for n, v, c in top_stocks_t])
                         theme_rows.append({
                             "테마명": t_name,
                             "종목수": len(info_t["stocks"]),
@@ -5087,16 +5462,144 @@ if choice == "🏠 홈화면":
                     df_theme_rank = pd.DataFrame(theme_rows).sort_values(by="합산 외/기 순매수(억)", ascending=False).reset_index(drop=True)
                     df_theme_rank.insert(0, "순위", df_theme_rank.index + 1)
 
+                    # 🌟 [신규 2026-07-31] Plotly 트리맵 시각화 — 박스 크기: 테마 합산 외/기 순매수(억) 절대값,
+                    # 박스 색상: 실제 순매수 방향/강도(빨강=매수 강세, 파랑=매도 강세). 사용자가 보여준 참고 이미지
+                    # (다른 사이트의 테마 모멘텀 트리맵)와 유사한 형태를 이 프로젝트의 매수/매도 색 관례(빨강/파랑)로 구현.
+                    st.markdown("<h5 style='color:#FFD400; margin-top:10px;'>🗺️ 테마 모멘텀 트리맵</h5>", unsafe_allow_html=True)
+                    st.caption("박스 크기 = 테마 합산 외/기 순매수 규모(단, 어느 테마도 전체 면적의 절반은 넘지 않도록 보정), 색상 = 매수(🔴)·매도(🔵) 강도. 박스를 클릭하면 바로 AI 요약이 뜹니다(혹시 클릭이 안 먹으면 아래 '테마별 AI 요약 보기' 버튼을 이용해주세요).")
+
+                    # 🌟 [신규 2026-07-31] 사용자 피드백: "AI 반도체"처럼 압도적으로 큰 테마 하나가
+                    # 트리맵 전체 면적을 거의 다 차지해버려서(예: 72,829억 vs 나머지 800억대)
+                    # 나머지 테마들이 화면 구석에 찌그러져 안 보이는 문제 발생 → "값이 아무리 커도
+                    # 각 레벨에서 전체 면적의 50%를 넘지 않도록" 해달라는 요청에 따라 면적 캡핑 함수 추가.
+                    # 실제 순매수 금액(색상/텍스트 표시용 "합산 외/기 순매수(억)")은 전혀 건드리지 않고,
+                    # 트리맵 "면적" 계산에만 쓰이는 별도 값("박스크기")만 이 함수로 보정함.
+                    def _cap_treemap_share(values, max_share=0.5):
+                        """
+                        형제 노드들(같은 레벨의 테마 박스들) 중 어느 하나도 전체 면적의 max_share
+                        비율을 넘지 않도록 값을 캡핑. 작은 값들은 서로 간의 상대 비율을 그대로 유지함.
+                        수학적 근거: v_i <= max_share * sum(전체) ⟺ v_i <= (max_share/(1-max_share)) * sum(다른 값들)
+                        → 가장 큰 값부터 이 조건을 만족할 때까지 반복적으로 깎아냄(유한 횟수 내 항상 수렴).
+                        """
+                        vals = list(values)
+                        n = len(vals)
+                        if n <= 1 or max_share >= 1:
+                            return vals
+                        factor = max_share / (1 - max_share)  # max_share=0.5 → factor=1.0
+                        for _ in range(n + 2):
+                            total = sum(vals)
+                            changed = False
+                            for i in range(n):
+                                other_sum = total - vals[i]
+                                allowed_max = factor * other_sum
+                                if vals[i] > allowed_max + 1e-9:
+                                    total = total - vals[i] + allowed_max
+                                    vals[i] = allowed_max
+                                    changed = True
+                            if not changed:
+                                break
+                        return vals
+
+                    df_treemap = df_theme_rank.copy()
+                    raw_treemap_sizes = df_treemap["합산 외/기 순매수(억)"].abs().clip(lower=0.1).tolist()
+                    df_treemap["박스크기"] = _cap_treemap_share(raw_treemap_sizes, max_share=0.5)
+
+                    fig_treemap = px.treemap(
+                        df_treemap,
+                        path=[px.Constant("전체 테마"), "테마명"],
+                        values="박스크기",
+                        color="합산 외/기 순매수(억)",
+                        color_continuous_scale=["#4B89B5", "#2b2f3a", "#ff4b4b"],
+                        color_continuous_midpoint=0,
+                        custom_data=["종목수", "대표 종목", "합산 외/기 순매수(억)"],
+                        hover_data=None,
+                    )
+                    fig_treemap.update_traces(
+                        texttemplate="<b>%{label}</b><br>%{customdata[2]:,.0f}억",
+                        hovertemplate="<b>%{label}</b><br>합산 외/기 순매수: %{customdata[2]:,.0f}억<br>종목수: %{customdata[0]}개<br>대표 종목: %{customdata[1]}<extra></extra>",
+                        textfont_size=14,
+                    )
+                    fig_treemap.update_layout(
+                        margin=dict(t=10, l=10, r=10, b=10),
+                        height=480,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font_color="#e0e0e0",
+                        coloraxis_showscale=False,
+                    )
+                    # 🌟 [신규 2026-07-31] 사용자 질문: "AI요약 버튼을 따로 만든 게 트리맵 셀 클릭이
+                    # 안 돼서 그런 건가? 되면 셀 클릭으로 바로 AI요약이 뜨면 좋겠다" → Streamlit이
+                    # st.dataframe처럼 st.plotly_chart에도 on_select="rerun"을 지원하므로 시도해봄.
+                    # ⚠️ 다만 treemap/sunburst/icicle 같은 계층형 차트는 Plotly 자체의 기본 클릭 동작이
+                    # "그 박스로 확대(drill-down)"라서, Streamlit의 on_select가 이 클릭을 selection으로
+                    # 제대로 잡아주는지는 이 샌드박스(plotly 미설치, 브라우저 클릭 테스트 불가)에서 직접
+                    # 검증하지 못했음 — 그래서 기존 "🤖 테마별 AI 요약 보기" 버튼 그리드는 그대로 남겨둠
+                    # (혹시 클릭이 안 먹거나 확대만 되고 끝나면, 버튼으로 여전히 접근 가능하도록 하는 안전망).
+                    theme_treemap_key = f"theme_treemap_chart_{st.session_state.get('theme_treemap_reset_counter', 0)}"
+                    event_treemap = st.plotly_chart(
+                        fig_treemap,
+                        use_container_width=True,
+                        on_select="rerun",
+                        selection_mode="points",
+                        key=theme_treemap_key,
+                    )
+
+                    if event_treemap and "selection" in event_treemap:
+                        points_treemap = event_treemap["selection"].get("points", [])
+                        if points_treemap:
+                            clicked_theme_label = points_treemap[0].get("label", "")
+                            # "전체 테마"(가상 루트 박스) 클릭은 무시 — theme_agg에 없는 키라 자동으로 걸러짐
+                            if clicked_theme_label and clicked_theme_label in theme_agg:
+                                rep_stocks_click = [
+                                    {"name": n, "net": v, "code": c}
+                                    for n, v, c in sorted(theme_agg[clicked_theme_label]["stocks"], key=lambda x: x[1], reverse=True)[:5]
+                                ]
+                                trigger_treemap = st.session_state.get('dialog_trigger_id', 0) + 1
+                                st.session_state['dialog_trigger_id'] = trigger_treemap
+                                st.session_state['show_theme_summary_dialog'] = {
+                                    "theme": clicked_theme_label,
+                                    "rep_stocks": rep_stocks_click,
+                                    "trigger_id": trigger_treemap
+                                }
+                                # 골든픽/내관심 표와 동일한 패턴: key를 바꿔 선택 상태를 리셋해서
+                                # 다이얼로그를 닫고 돌아왔을 때 같은 박스가 계속 "선택됨"으로 남아
+                                # 무한 재트리거되는 것을 방지.
+                                st.session_state['theme_treemap_reset_counter'] = st.session_state.get('theme_treemap_reset_counter', 0) + 1
+                                st.rerun()
+
+                    st.markdown("<h5 style='color:#FFFFFF; margin-top:20px;'>📋 테마 랭킹 표</h5>", unsafe_allow_html=True)
                     st.dataframe(
                         df_theme_rank,
                         use_container_width=True,
                         hide_index=True,
-                        height=600,
+                        height=400,
                         column_config={
                             "순위": st.column_config.NumberColumn("순위", format="%,d위"),
                             "합산 외/기 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
                         }
                     )
+
+                    # 🌟 [신규 2026-07-31] 테마별 AI 요약 진입점 — "내 관심종목" 삭제 버튼과 동일한
+                    # 4열 그리드 버튼 패턴 재사용. 클릭하면 해당 테마의 대표 종목(순매수 상위 5개) 뉴스를
+                    # 모아 AI 분석 팝업(show_theme_summary_dialog)을 띄움.
+                    st.write("---")
+                    st.markdown("<div style='font-size:13px; color:#aaa; margin-bottom:6px;'>🤖 테마별 AI 요약 보기</div>", unsafe_allow_html=True)
+                    theme_ai_cols = st.columns(4)
+                    for idx_theme, t_name_btn in enumerate(df_theme_rank["테마명"].tolist()):
+                        with theme_ai_cols[idx_theme % 4]:
+                            if st.button(f"🤖 {t_name_btn}", key=f"theme_ai_btn_{t_name_btn}", use_container_width=True):
+                                rep_stocks_for_dialog = [
+                                    {"name": n, "net": v, "code": c}
+                                    for n, v, c in sorted(theme_agg[t_name_btn]["stocks"], key=lambda x: x[1], reverse=True)[:5]
+                                ]
+                                trigger_theme = st.session_state.get('dialog_trigger_id', 0) + 1
+                                st.session_state['dialog_trigger_id'] = trigger_theme
+                                st.session_state['show_theme_summary_dialog'] = {
+                                    "theme": t_name_btn,
+                                    "rep_stocks": rep_stocks_for_dialog,
+                                    "trigger_id": trigger_theme
+                                }
+                                st.rerun()
 
         elif scrn_select == "상선고 화면":
             st.markdown("<h4 style='color:#FF8C00; border-left: 4px solid #FF8C00; padding-left: 10px;'>📡 상한가 선행 고래 포착 레이더 (상선고)</h4>", unsafe_allow_html=True)
@@ -6174,14 +6677,30 @@ if choice == "🏠 홈화면":
                 else:
                     filtered_df = filtered_df.sort_values(by='amount_krw', ascending=False)
             if not search_keyword:
-                log_col1, log_empty, log_col2, log_col3 = st.columns([3.0, 1.0, 1.4, 1.1])
-                with log_col1:
-                    if show_only_upper_limit:
-                        st.subheader(f"📋 놀빅 상한가 종목 고래 체결 목록")
-                    else:
-                        st.subheader(f"📋 실시간 놀빅 고래 체결 상황")
+                # 🔧 [수정 2026-07-31, 2번째] 사용자 포토샵 목업 기준 재배치: 타이틀은 단독 줄(전체
+                # 폭)로 위에 두고, 그 아래 한 줄에 안내문구(정보박스)와 자산유형/시장 필터 라디오
+                # 2개를 나란히 배치 — 같은 컬럼 행의 형제 요소들이라 상단이 자동으로 정렬됨(정보박스
+                # 상단 = 라디오 상단). 라디오 열은 이 행의 마지막 컬럼이라 우측 끝이 전체 컨테이너
+                # 폭에 맞춰지는데, 아래 "미국 테마 등락률" 위젯(hot_cols의 마지막 칸)도 동일하게
+                # 컨테이너 우측 끝에서 끝나므로 두 우측 끝이 자연히 서로 맞음.
+                if show_only_upper_limit:
+                    st.subheader(f"📋 놀빅 상한가 종목 고래 체결 목록")
+                else:
+                    st.subheader(f"📋 실시간 놀빅 고래 체결 상황")
+
+                # 🔧 [수정 2026-07-31, 4번째] 사용자 재피드백: 우측 정렬 CSS 시도는 Y축(상단 정렬)까지
+                # 살짝 어긋나게 만들어서 반려 → 우측 정렬 CSS/마커 전부 제거하고, 더 단순한 방법으로
+                # 전환: 라디오 옵션은 그대로 기본(좌측 정렬) 두고, 대신 컬럼 폭 자체를 조정해서
+                # asset_col(자산유형 라디오)의 "좌측" 시작 지점이 hot_cols의 "미국 테마 등락률" 위젯
+                # 좌측 시작 지점과 같은 비율(70%, hot_cols=[0.7,0.7,0.7,0.9]의 2.1/3.0 지점)에 오도록
+                # 맞춤. 같은 3.0 단위 스케일을 그대로 재사용해 [2.1, 0.5, 0.4]로 구성 — info_col이
+                # 2.1(=70%)을 차지하므로 그 다음 asset_col이 시작하는 지점이 정확히 hot_cols의 위젯
+                # 시작 지점(2.1/3.0)과 일치함.
+                info_col, asset_col, market_col = st.columns([2.1, 0.5, 0.4])
+                with info_col:
+                    if not show_only_upper_limit:
                         st.info("💡 당일 실시간 500 거래를 분석자료로 표시합니다.")
-                with log_col2:
+                with asset_col:
                     st.radio(
                         "🗂️ 자산 유형 필터",
                         ["개별 주식만 보기 🏢", "ETF만 보기 🌐", "전체 다 보기 📊"],
@@ -6191,7 +6710,7 @@ if choice == "🏠 홈화면":
                         label_visibility="collapsed",
                         on_change=sync_log_filters
                     )
-                with log_col3:
+                with market_col:
                     st.radio(
                         "🗂️ 시장 유형 필터",
                         ["전체 시장 🌍", "KOSPI 🏢", "KOSDAQ 🚀"],
@@ -6201,15 +6720,18 @@ if choice == "🏠 홈화면":
                         label_visibility="collapsed",
                         on_change=sync_log_filters
                     )
-                
+
                 st.write("") # 간격 띄우기
-                
+
                 # 🚨 [놀빅 AI 탐지] 실시간 매수 폭주 종목 렌더링
                 hot_signals = get_hot_signals(main_df)
-                
+
                 st.markdown("#### 🚨 [놀빅 AI 탐지] 실시간 매수 폭주 종목 (Top 3)")
-                hot_cols = st.columns(3) # 항상 3자리를 고정으로 유지
-                
+                # 🔧 [수정 2026-08-01] 사용자 요청: 카드 3개 폭을 각각 30%씩 줄이고, 남는 공간(전체의
+                # 약 23%)에 미국 테마 등락률 위젯을 배치. 기존 3등분(각 1칸)에서 각 칸을 0.7로 줄이면
+                # (1 - 0.7 = 0.3, 3칸 합산 0.9만큼 여유가 생김) 그 0.9를 새 위젯 칸에 배정.
+                hot_cols = st.columns([0.7, 0.7, 0.7, 0.9])
+
                 for idx in range(3):
                     with hot_cols[idx]:
                         if idx < len(hot_signals):
@@ -6240,6 +6762,50 @@ if choice == "🏠 홈화면":
                                 <div style="font-size: 13px; color: #4a5a4a; margin-top: 5px;">현재 폭주 종목 없음</div>
                             </div>
                             """, unsafe_allow_html=True)
+
+                # 🇺🇸 [신규 2026-08-01] 남는 4번째 칸에 미국 테마 등락률 위젯 배치.
+                # us_theme_performance 테이블(FindingWhale.py가 매일 자동 수집, 국내 장 휴장일과 무관)에서
+                # 최신 거래일 기준 테마 등락률을 뽑아서 컴팩트하게 보여줌.
+                # 🔧 [수정 2026-07-31, 4번째] 사용자 피드백 반영: "상승 Top7/하락 Top7"으로 나누던 방식은
+                # 값 크기 순위로 중간권(예: 15개 중 8위)에 있는 테마가 양쪽 다 못 들어가고 누락되는
+                # 문제가 있었음(반도체 +0.90%가 화면에 안 보이는 사례로 발견). → 좌/우를 "순위"로만
+                # 나눔: 전체 테마를 값 큰 순서(내림차순)로 세운 뒤 앞쪽 8개는 좌측, 나머지는 우측 —
+                # 어떤 테마도 빠지지 않음. 색상은 좌/우 소속과 무관하게 각 항목의 실제 부호로 판단
+                # (_us_row_html, 유지). 항목이 하나 더 늘어난 만큼 박스 높이도 아래로 살짝 키움.
+                with hot_cols[3]:
+                    us_latest_date, us_left_items, us_right_items = get_us_theme_top_movers(left_count=8)
+                    if us_latest_date:
+                        def _us_row_html(item):
+                            val = item['pct_change']
+                            if val >= 0:
+                                color, arrow = "#ff4b4b", "▲"
+                            else:
+                                color, arrow = "#4B89B5", "▼"
+                            return f"<div style='display:flex; justify-content:space-between; gap:6px; font-size:11px; color:{color}; padding:2px 0;'><span>{arrow} {item['theme_name']}</span><span>{val:+.2f}%</span></div>"
+
+                        us_left_html = "".join(_us_row_html(g) for g in us_left_items)
+                        us_right_html = "".join(_us_row_html(l) for l in us_right_items)
+                        us_widget_html = (
+                            "<div style='background: linear-gradient(135deg, #12151c 0%, #05070a 100%); border: 1px solid #333a45; border-radius: 8px; padding: 12px 12px 20px 12px; height: 100%;'>"
+                            "<div style='display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;'>"
+                            "<div style='font-size:13px; font-weight:bold; color:#e0e0e0;'>미국 테마 등락률</div>"
+                            f"<div style='font-size:15px; color:#888888;'>{us_latest_date} 마감 기준</div>"
+                            "</div>"
+                            "<div style='display:flex; gap:10px;'>"
+                            f"<div style='flex:1; min-width:0;'>{us_left_html}</div>"
+                            f"<div style='flex:1; min-width:0; border-left:1px solid #333a45; padding-left:10px;'>{us_right_html}</div>"
+                            "</div>"
+                            "</div>"
+                        )
+                        st.markdown(us_widget_html, unsafe_allow_html=True)
+                    else:
+                        st.markdown(
+                            "<div style='background: linear-gradient(135deg, #12151c 0%, #05070a 100%); border: 1px dashed #333a45; border-radius: 8px; padding: 12px; text-align:center; opacity:0.7; height: 100%;'>"
+                            "<div style='font-size:12px; color:#888888;'>미국 테마 데이터 대기 중...</div>"
+                            "</div>",
+                            unsafe_allow_html=True
+                        )
+
                 st.write("---")
 
             if len(filtered_df) > 0:
