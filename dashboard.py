@@ -13,6 +13,7 @@ import streamlit.components.v1 as components  # 🔌 독립 소자 인가를 위
 import hashlib
 import base64
 import re
+import math  # 🌟 [신규 2026-08-01] 골든점수 로그 스케일 계산용(get_market_force_score/get_pair_buy_score)
 import plotly.graph_objects as go  # 🟢 Multi-layer 차트용 소자 임포트
 from plotly.subplots import make_subplots
 from supabase import create_client  # 🔌 Supabase 커넥터 필수!
@@ -550,6 +551,221 @@ def get_chatgpt_theme_summary(theme_name, news_text=""):
 
     return summary
 
+# ------------------------------------------------------------------
+# 🌟 [신규 2026-08-01] "실시간" 화면 — 국내/미국/일본/중국 "증시 시황" AI 요약 버튼
+# 사용자 요청: 4개 버튼(국내/미국/일본/중국)을 누르면 팝업으로 "그 나라 증시 최근 상황"을
+# 간단히 요약해서 보여줌. 개별 종목/테마 AI요약과 달리 여기서는 특정 종목 뉴스가 아니라
+# "지수 자체의 등락"이 핵심 재료라서, 이미 프로젝트에서 쓰고 있는 FinanceDataReader(fdr)로
+# 코스피/코스닥/다우/나스닥/S&P500/니케이225/상해종합 등 지수 시세를 직접 가져와 그 숫자를
+# 근거로 Gemini에게 요약을 맡김. (네이버 "국내증시/해외증시" 뉴스 목록 페이지를 스크래핑하는
+# 방법도 검토했으나, 이번 세션은 네트워크 제약으로 그 페이지의 실제 HTML 구조를 라이브로
+# 검증할 수 없어 셀렉터가 정확한지 확신할 수 없었음 — 반면 지수 시세는 이미 이 파일 다른 곳
+# 에서도 안정적으로 쓰고 있는 fdr 라이브러리로 가져오므로 신뢰도가 더 높다고 판단해 이 방식을
+# 택함. 미국은 이미 수집 중인 us_theme_performance(테마별 등락률) 데이터도 곁들여
+# "어떤 섹터가 강세/약세였는지"까지 반영함.)
+#
+# 캐싱: 기존 종목/테마 AI요약과 동일하게 gemini_summaries 테이블을 재사용(신규 테이블 생성 없음),
+# stock_name 컬럼에 "[MARKET]국내" 같은 접두어를 붙여 종목/테마 요약과 겹치지 않게 함. 다만
+# 캐시 유효기간은 종목요약(30일)과 다르게 "최소 10분"으로 짧게 잡아(사용자 확정), 여러 번 눌러도
+# 10분 안에는 같은 요약을 재사용해 API를 다시 호출하지 않음(크레딧 절약). 나중에 비용이 감당할
+# 만하면 _MARKET_CACHE_MINUTES 값만 줄이면 더 자주 갱신되게 조정 가능. 모델은 비용 절감을 위해
+# Gemini 단일 모델만 사용(종목/테마 요약과 달리 ChatGPT 탭 없음 — 사용자가 직접 선택).
+# ------------------------------------------------------------------
+_MARKET_CACHE_MINUTES = 10
+
+_MARKET_INDEX_SYMBOLS = {
+    "국내": [("코스피", "KS11"), ("코스닥", "KQ11")],
+    "미국": [("다우존스", "DJI"), ("나스닥", "IXIC"), ("S&P500", "US500")],
+    "일본": [("니케이225", "JP225")],
+    "중국": [("상해종합", "SSEC")],
+}
+
+def _fetch_market_index_snapshot(market_type):
+    """market_type("국내"/"미국"/"일본"/"중국")에 해당하는 지수들의 최근 시세를 fdr로 가져와
+    (LLM 프롬프트용 원문 텍스트, 화면 표시용 마크다운, 최신 기준일 문자열) 튜플로 반환.
+    일부 지수 조회가 실패해도 나머지는 계속 진행(부분 실패 허용) — 휴장일 등으로 데이터가
+    비어있을 수도 있으므로 그런 경우엔 아예 실패 표시를 반환함."""
+    symbols = _MARKET_INDEX_SYMBOLS.get(market_type, [])
+    raw_lines = []
+    md_lines = []
+    latest_date_str = ""
+    end_dt = datetime.utcnow()
+    start_dt = end_dt - timedelta(days=12)
+
+    for label, code in symbols:
+        try:
+            df_idx = fdr.DataReader(code, start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
+            if df_idx is None or df_idx.empty:
+                continue
+            df_idx = df_idx.tail(5)  # 최근 5거래일만
+            last_row = df_idx.iloc[-1]
+            last_close = last_row['Close']
+            last_date = df_idx.index[-1].strftime("%Y-%m-%d")
+            if not latest_date_str or last_date > latest_date_str:
+                latest_date_str = last_date
+
+            if 'Change' in df_idx.columns and pd.notna(last_row.get('Change')):
+                chg_pct = last_row['Change'] * 100
+            elif len(df_idx) >= 2:
+                prev_close = df_idx.iloc[-2]['Close']
+                chg_pct = ((last_close - prev_close) / prev_close) * 100 if prev_close else 0.0
+            else:
+                chg_pct = 0.0
+
+            trend_str = ", ".join([f"{d.strftime('%m-%d')}:{r['Close']:,.2f}" for d, r in df_idx.iterrows()])
+            raw_lines.append(f"[{label}({code})] {last_date} 종가 {last_close:,.2f} (전일대비 {chg_pct:+.2f}%) / 최근5일 추이: {trend_str}")
+            arrow = "▲" if chg_pct >= 0 else "▼"
+            md_lines.append(f"- **{label}**: {last_close:,.2f} ({arrow} {chg_pct:+.2f}%) — {last_date} 종가 기준")
+        except Exception:
+            continue
+
+    # 🇺🇸 미국은 이미 수집돼 있는 테마별 등락률(us_theme_performance)도 곁들여 섹터 색깔을 더함
+    if market_type == "미국":
+        try:
+            us_date, us_left, us_right = get_us_theme_top_movers(left_count=5)
+            if us_date:
+                theme_parts = [f"{it['theme_name']} {it['pct_change']:+.2f}%" for it in (us_left + us_right)]
+                raw_lines.append(f"[미국 테마별 등락률({us_date} 마감 기준)] " + ", ".join(theme_parts))
+        except Exception:
+            pass
+
+    raw_text = "\n".join(raw_lines) if raw_lines else "지수 데이터를 가져오지 못했습니다."
+    md_text = "\n".join(md_lines) if md_lines else "지수 데이터를 가져오지 못했습니다 (휴장일이거나 일시적 오류일 수 있습니다)."
+    return raw_text, md_text, latest_date_str
+
+
+def get_gemini_market_briefing(market_type, index_data_text, latest_date_str=""):
+    import google.generativeai as genai
+
+    api_key = st.secrets.get("gemini", {}).get("api_key", None)
+    if not api_key:
+        raise ValueError("API_KEY_MISSING")
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-flash-latest')
+
+    # 🔧 [수정 2026-08-01] 사용자 요청: "1. 지수 동향" 제목에 그 자료가 몇일자 기준인지 표시해줘야
+    # 휴일에 화면을 봐도(전 거래일 자료가 표시되는 상황) 헷갈리지 않음. AI가 날짜를 직접 계산/추출하게
+    # 맡기면 틀릴 수 있어서, _fetch_market_index_snapshot이 이미 계산해둔 최신 기준일(latest_date_str,
+    # "YYYY-MM-DD")을 파이썬에서 "N월 N일" 형식으로 미리 변환해 프롬프트에 못박아 넣음.
+    date_label = ""
+    if latest_date_str:
+        try:
+            # 🔧 [주의] strftime의 "%-m"/"%-d"(0 안 채운 월/일)는 리눅스 전용 확장이라 배포
+            # 환경(OS)에 따라 깨질 수 있어, 이식성 안전한 방식으로 직접 "N월 N일" 조립.
+            _d = datetime.strptime(latest_date_str, "%Y-%m-%d")
+            date_label = f"{_d.month}월 {_d.day}일"
+        except Exception:
+            date_label = latest_date_str
+
+    date_instruction = (
+        f"'1. 지수 동향' 소제목 뒤에 반드시 ' - {date_label} 기준'을 그대로 덧붙여서 "
+        f"'1. 지수 동향 - {date_label} 기준'처럼 출력해줘(자료 기준일을 사용자가 한눈에 알 수 있게)."
+        if date_label else
+        "자료에 명확한 기준일이 없으면 '1. 지수 동향' 제목은 그대로 두고, 본문에서 데이터가 비어있거나 오래됐을 가능성을 언급해줘."
+    )
+
+    prompt = f"""아래는 '{market_type}' 증시의 최근 주요 지수 시세 데이터야. 이 데이터를 바탕으로 '{market_type}' 증시의 최근 시황을 간단하게 요약해줘.
+주의: 답변 내용에 '(1~2줄)' 같은 분량 지시어는 절대 출력하지 마.
+만약 데이터가 비어있거나 부족하면, 휴장일이거나 데이터 수집에 문제가 있었을 가능성을 언급해줘.
+
+**1. 지수 동향**
+주요 지수들의 최근 종가와 등락률을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 정리해줘.
+- [지수명] ~~~
+{date_instruction}
+
+**2. 특이사항 및 시사점**
+데이터에서 눈에 띄는 특징(강세/약세 업종, 변동성, 추세 등)을 서술식 말고 나열식으로 짧게 짚어줘.
+- [특징] ~~~
+
+[최근 지수 시세 데이터]
+{index_data_text}
+"""
+    response = model.generate_content(
+        prompt,
+        request_options={"timeout": 60.0, "retry": None}
+    )
+    summary = response.text
+
+    try:
+        market_key = f"[MARKET]{market_type}"
+        # 같은 시장의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다
+        supabase.table("gemini_summaries").delete().eq("stock_name", market_key).execute()
+        supabase.table("gemini_summaries").insert({
+            "stock_name": market_key,
+            "news_text": index_data_text,
+            "summary": summary
+        }).execute()
+    except Exception:
+        pass  # 저장 실패 시에도 정상적으로 요약본 반환
+
+    return summary
+
+
+@st.dialog("🌏 증시 시황 요약")
+def show_market_briefing_dialog(market_type, trigger_id=0):
+    # X 닫기 버튼 제거 (show_summary_dialog와 동일한 이유 — Streamlit #8507)
+    st.markdown(
+        '<style>div[aria-label="dialog"]>button[aria-label="Close"] { display: none !important; }</style>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 4px;'>🌏 {market_type} 증시 시황</h3>", unsafe_allow_html=True)
+
+    market_key = f"[MARKET]{market_type}"
+    cached_summary = None
+    try:
+        ten_min_ago = (datetime.utcnow() - timedelta(minutes=_MARKET_CACHE_MINUTES)).isoformat()
+        cache_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", market_key).gte("created_at", ten_min_ago).order("created_at", desc=True).limit(1).execute()
+        if cache_res.data:
+            cached_summary = cache_res.data[0]['summary']
+    except Exception:
+        pass
+
+    if cached_summary:
+        # 🔧 [수정 2026-08-01, 2번째] 사용자 요청: "캐시 — API 재호출 없음" 안내 캡션이 화면을
+        # 지저분하게 만든다고 판단해 제거. 캐시 여부는 이제 화면에 노출하지 않고 내부적으로만 사용.
+        render_ai_summary_box(cached_summary)
+    else:
+        # 🔧 [수정 2026-08-01] 사용자 요청: 캐시가 없을 때 "AI 요약 생성" 버튼을 한 번 더 누르게
+        # 하지 말고, 팝업이 뜨자마자 원클릭으로 바로 생성해서 보여줌. 대신 st.spinner로 "진행 중"임을
+        # 명확히 표시(사용자가 이 스피너 표시를 전제 조건으로 확인함) — 버튼 클릭이라는 안전장치가
+        # 빠지는 대신, 이 다이얼로그 자체가 사용자의 명시적 클릭(4개 버튼 중 하나)으로만 열리고
+        # 10분 캐시가 여전히 재호출을 막아주므로 크레딧 남용 위험은 낮음.
+        with st.spinner(f"{market_type} 증시 지수 시세를 가져오는 중..."):
+            index_raw, index_md, latest_date = _fetch_market_index_snapshot(market_type)
+
+        st.markdown("##### 📊 참고 지수 시세")
+        st.info(index_md)
+
+        with st.spinner(f"Gemini AI가 {market_type} 증시 지수 데이터를 바탕으로 시황을 요약하는 중입니다..."):
+            try:
+                briefing_summary = get_gemini_market_briefing(market_type, index_raw, latest_date)
+                render_ai_summary_box(briefing_summary)
+            except Exception as e:
+                err_msg = str(e)
+                if "API_KEY_MISSING" in err_msg:
+                    st.warning("⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.")
+                elif "429" in err_msg or "quota" in err_msg.lower():
+                    st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)** — 잠시 후 다시 시도하거나 내일 다시 시도해주세요.")
+                elif "504" in err_msg or "deadline" in err_msg.lower():
+                    st.error("⚠️ **구글 AI 서버 응답 지연 (504 Timeout)** — 잠시 후 창을 닫고 버튼을 다시 눌러주세요.")
+                elif "503" in err_msg or "high demand" in err_msg.lower():
+                    st.warning("⚠️ **구글 AI 서버 과부하 (503)** — 1~2분 후 다시 시도해 주세요.")
+                else:
+                    st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
+
+    if st.button("닫기 (확인)", use_container_width=True, key=f"market_dlg_close_{market_type}_{trigger_id}"):
+        st.session_state.pop('show_market_briefing_dialog', None)
+        st.rerun()
+
+# 🔧 [주의 2026-08-01] 이 다이얼로그의 세션스테이트 트리거 체크(if 'show_market_briefing_dialog' in
+# st.session_state: ...)는 일부러 여기(함수 정의 바로 아래)에 두지 않음! show_market_briefing_dialog가
+# 내부적으로 호출하는 render_ai_summary_box()와 get_us_theme_top_movers()가 이 지점보다 훨씬 아래에서
+# 정의되는데, 이 스크립트는 매 상호작용마다 위→아래로 전체 재실행되므로, 트리거 체크가 그 함수들의
+# def문보다 먼저 실행되면 "아직 정의 안 됨" NameError가 남(위 get_themes_for_stocks 이동 사례와 동일한
+# 함정). 그래서 트리거 체크는 실제 버튼이 있는 "실시간" 화면 섹션(하단, 두 함수 정의 이후 지점)에 배치함.
+
 @st.cache_data(ttl=86400)
 def get_cached_krx_listing():
     import FinanceDataReader as fdr
@@ -587,6 +803,32 @@ def render_ai_summary_box(text):
         rf'<span style="{orange_style}">\1</span>',
         html_text
     )
+
+    # 3.5 🌟 [신규 2026-08-01] "증시 시황 요약"(get_gemini_market_briefing) 전용 배색 —
+    # "1. 지수 동향" 섹션의 [지수명] 태그는 빨간색, "2. 특이사항 및 시사점" 섹션의 [특징] 태그는
+    # 진갈색/찐청색을 번갈아 적용(사용자가 참고 이미지로 요청한 배색 그대로). 이 함수는 종목/테마
+    # 요약에도 재사용되는 공용 함수라, "지수 동향" 문구가 있을 때(=시장 시황 요약일 때)만 이 로직을
+    # 타도록 조건을 걸어서 위 2)/3)번 색칠(종목/테마용 [호재]/[악재]/[전망])과 절대 안 겹치게 함.
+    if "지수 동향" in html_text:
+        market_red_style = "color: #ff4b4b; font-weight: bold;"
+        market_alt_colors = ["#8B4513", "#1565C0"]  # 진갈색, 찐청색 순서로 번갈아 적용
+
+        split_match = re.search(r'2\.\s*특이사항\s*및\s*시사점', html_text)
+        if split_match:
+            part1, part2 = html_text[:split_match.start()], html_text[split_match.start():]
+        else:
+            part1, part2 = html_text, ""
+
+        part1 = re.sub(r'(\[[^\[\]]+\])', rf'<span style="{market_red_style}">\1</span>', part1)
+
+        _alt_counter = [0]
+        def _market_alt_repl(m):
+            color = market_alt_colors[_alt_counter[0] % 2]
+            _alt_counter[0] += 1
+            return f'<span style="color:{color}; font-weight: bold;">{m.group(1)}</span>'
+        part2 = re.sub(r'(\[[^\[\]]+\])', _market_alt_repl, part2)
+
+        html_text = part1 + part2
 
     # 4. 시인성 높은 다크 그린 배경 컨테이너 렌더링
     container_html = f"""
@@ -799,7 +1041,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
             if db_summary_gpt:
                 render_ai_summary_box(db_summary_gpt)
             else:
-                st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
+                st.info("💡 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
                 if st.button("💡 ChatGPT AI 분석 시작", key=f"chatgpt_btn_{stock_name}"):
                     with st.spinner("ChatGPT(gpt-4o-mini)가 뉴스를 바탕으로 분석 중입니다..."):
                         try:
@@ -929,7 +1171,7 @@ def show_theme_summary_dialog(theme_name, rep_stocks, trigger_id=0):
         if db_summary_gpt_t:
             render_ai_summary_box(db_summary_gpt_t)
         else:
-            st.info("💡 구글 서버가 불안정할 때 훌륭한 대안입니다. 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
+            st.info("💡 버튼을 눌러 최근 30일 내의 새로운 분석을 시작하세요.")
             if st.button("💡 ChatGPT AI 테마 분석 시작", key=f"chatgpt_theme_btn_{theme_name}"):
                 with st.spinner("ChatGPT(gpt-4o-mini)가 테마 대표 종목 뉴스를 바탕으로 분석 중입니다..."):
                     try:
@@ -1073,6 +1315,93 @@ def get_warning_text(stock_name, global_meta):
 
 # (get_themes_for_stocks 함수는 2026-07-31에 이 위치에서 파일 상단(show_summary_dialog 바로 위)으로
 #  이동함 — 이유는 그 이동 지점의 주석 참고. 이 자리엔 더 이상 정의가 없음, 삭제된 것 아님.)
+
+# 🌟 [신규 2026-08-01] 골든점수 계산 공통 헬퍼: "시장세력수급"(총 순매수 로그 스케일)과
+# "쌍끌이/비쌍끌이"(외국인·기관 조합 로그 스케일) 점수 산출 로직을 한 곳에 모음.
+# 이 두 항목의 계산식은 원래 골든픽 화면(~4900번대 줄)/차트 호버(~2260번대 줄)/관심종목 화면
+# (~5250번대 줄) 이렇게 3곳에 완전히 동일하게 복제돼 있었는데, 이번 로그 스케일 전환을 계기로
+# 아예 공통 함수로 뽑아내 앞으로는 여기 한 곳만 고치면 3곳 모두에 반영되게 함.
+#
+# 배경(2026-08-01, 사용자 지적): 기존 방식은 총 순매수 300억만 넘으면 무조건 만점(+15)을 줘서
+# 300억짜리와 4만억짜리 종목이 똑같이 취급되는 변별력 문제가 있었음. 또한 "외/기 쌍끌이가
+# 아니면 무조건 -12점" 룰은, 한쪽이 압도적으로 사고 다른 한쪽이 아주 조금만 팔아도(그 매도액이
+# -100억만 넘으면) 그대로 -12점 처리해버려서, 실제로는 총액 기준으로 매우 강한 매수인 종목까지
+# 부당하게 깎이는 문제가 있었음. 로그 스케일 기반으로 교체해 이 두 문제를 모두 해결.
+#
+# 사용자와 합의한 기준: 로그 스케일의 "만점 기준"(이 금액이면 최고점)은 50,000억원 — 최근
+# SK하이닉스/삼성전자가 찍은 3~4만억대 최고 기록에 약간의 여유를 둔 값. 시장 거래 규모가
+# 구조적으로 더 커지면(예: 몇 년 뒤 대형주 거래대금이 지금보다 훨씬 커지면) 이 상수 하나만
+# 올려주면 전체 스케일이 같이 재조정됨.
+_GOLDEN_SCORE_LOG_REF = 50000
+
+def _golden_log_ratio(amount_eok):
+    """amount_eok(억원, 0 이상)을 0~1 사이 로그 스케일 비율로 변환.
+    _GOLDEN_SCORE_LOG_REF(50,000)억원이면 1.0(만점 비율)."""
+    if amount_eok <= 0:
+        return 0.0
+    ratio = math.log10(1 + amount_eok) / math.log10(1 + _GOLDEN_SCORE_LOG_REF)
+    return max(0.0, min(1.0, ratio))
+
+def get_market_force_score(total_net):
+    """'시장세력수급' 항목 점수(0~15). 총 순매수 금액(억원)의 로그 스케일.
+    예전엔 300억만 넘으면 무조건 만점이라 변별력이 없었는데, 로그 스케일로 바꿔서
+    수만억대 초대형 매수와 수백억대 매수를 구분함."""
+    if total_net <= 0:
+        return 0
+    return round(15 * _golden_log_ratio(total_net))
+
+def get_pair_buy_score(frgn_net, orgn_net):
+    """'쌍끌이/비쌍끌이' 항목 점수와 사유 텍스트를 (score, reason) 튜플로 반환.
+    - 외국인+기관 둘 다 순매수(진짜 쌍끌이): 총액 로그 스케일로 5단계(+1~+9, 만점은
+      다른 항목들의 기존 만점과 동일하게 +9로 유지).
+    - 한쪽이라도 순매도(쌍끌이 아님): 총 순매수액(부호 있음)의 로그 스케일로 10단계.
+      총액이 여전히 플러스면(한쪽만 소폭 매도, 전체는 강한 매수) +1~+9까지 갈 수 있고,
+      총액 자체가 마이너스면(둘 다 팔거나 매도 우위) 예전 덤핑 페널티와 같은 수준인
+      최대 -12점까지 감점됨(사용자가 기존 -12 페널티 값을 그대로 유지하기로 확정)."""
+    total_net = frgn_net + orgn_net
+    ratio = _golden_log_ratio(abs(total_net))
+
+    if frgn_net > 0 and orgn_net > 0:
+        if ratio >= 0.8:
+            return 9, "🔥 초대형 외/기 쌍끌이"
+        elif ratio >= 0.6:
+            return 7, "🔥 대형 외/기 쌍끌이"
+        elif ratio >= 0.4:
+            return 5, "🔥 외/기 쌍끌이"
+        elif ratio >= 0.2:
+            return 3, "🔥 외/기 소규모 쌍끌이"
+        elif ratio > 0:
+            return 1, ""
+        else:
+            return 0, ""
+    elif total_net > 0:
+        if ratio >= 0.8:
+            return 9, "🔥 편측매도에도 총액 초강세"
+        elif ratio >= 0.6:
+            return 7, "🔥 편측매도에도 총액 강세"
+        elif ratio >= 0.4:
+            return 5, "편측매도 있으나 총액 우위"
+        elif ratio >= 0.2:
+            return 3, ""
+        elif ratio > 0:
+            return 1, ""
+        else:
+            return 0, ""
+    elif total_net < 0:
+        if ratio >= 0.8:
+            return -12, "⚠️ 외인/기관 동반 대량 순매도"
+        elif ratio >= 0.6:
+            return -9, "⚠️ 외인/기관 대량 순매도"
+        elif ratio >= 0.4:
+            return -6, "⚠️ 외인/기관 순매도 우위"
+        elif ratio >= 0.2:
+            return -3, ""
+        elif ratio > 0:
+            return -1, ""
+        else:
+            return 0, ""
+    else:
+        return 0, ""
 
 # 🔧 [수정 2026-07-30] "고래 골든픽" 화면이 화면 안의 아무 버튼(AI 요약 보기, 차트 이동 등)만 눌러도
 # 매번 daily_whale_top200/whale_log/upper_limit_stocks를 통째로 다시 조회하고 있어서 클릭할 때마다
@@ -1680,56 +2009,108 @@ def render_admin_panel():
                     st.error("종목명과 테마를 모두 입력해 주십시오.")
                     
         # 2. 엑셀(CSV) 일괄 대량 업로드
+        # 🔧 [수정 2026-08-01] 사용자 요청으로 CSV 포맷을 "A열: 테마 / B열: 종목들(콤마구분)"에서
+        # "A열: 번호(참고용, 미사용) / B열: 테마 / C열: 종목(1개)"로 변경. 한 종목이 여러 테마에
+        # 속하면 그만큼 줄을 반복해서 적는 방식(예: 삼성전자가 AI 반도체 줄에도, 다른 테마 줄에도
+        # 나올 수 있음). 사용자가 실제 겪은 문제: "AI 반도체"라는 '테마' 값이 통째로 하나의
+        # 테마명으로 저장되어 트리맵/랭킹표에 "AI 반도체"라는 이상한 합성 테마 하나로 나타남 —
+        # 원래 의도는 "AI"와 "반도체" 두 개의 서로 다른 테마에 속한다는 뜻이었음.
+        # → '테마' 칸에 공백으로 여러 단어가 있으면 공백 기준으로 전부 별도 테마로 분리하도록 수정
+        # (사용자가 명시적으로 확인한 규칙: "공백 기준으로 항상 전부 분리" — 예: "반도체 소부장"도
+        # "반도체"+"소부장" 두 개의 테마로 분리됨. 예외 없이 일괄 적용).
+        # ⚠️ 이 분리 규칙 덕분에 다운스트림(테마킹 화면의 theme_agg 집계, 트리맵 등)은 이미
+        # theme_names를 콤마로 split해서 쓰고 있어 별도 수정이 필요 없음 — 여기서 "AI, 반도체"처럼
+        # 콤마로 이어붙여 저장하기만 하면 자동으로 올바르게 두 테마로 인식됨.
         with st.expander("🚀 엑셀(CSV) 일괄 대량 업로드 (Bulk Upload)", expanded=False):
-            st.info("💡 엑셀 파일 작성법: 엑셀에서 A열에 [테마명], B열에 [종목명들(콤마로 구분)]을 적어주세요.\n\n예시)\nA열: 반도체\nB열: 삼성전자, SK하이닉스, 한미반도체\n\n작성 후 **[파일 -> 다른 이름으로 저장 -> CSV(쉼표로 분리)]** 형식으로 저장해서 올려주세요.")
-            uploaded_file = st.file_uploader("CSV 파일 선택", type=['csv'])
+            st.info(
+                "💡 CSV 작성법(2026-08-01 변경): A열에 [번호](참고용, 안 적어도 됨), B열에 [테마], "
+                "C열에 [종목명] 하나씩, **종목 1개당 1줄**로 적어주세요. 같은 종목이 여러 테마에 속하면 "
+                "그 종목을 여러 줄에 나눠 반복해서 적으면 됩니다.\n\n"
+                "예시)\n번호,테마,종목\n1,AI 반도체,삼성전자\n2,AI 반도체,SK하이닉스\n11,반도체 소부장,원익IPS\n21,로봇,레인보우로보틱스\n\n"
+                "⚠️ **'테마' 칸에 공백으로 여러 단어가 있으면(예: 'AI 반도체') 공백 기준으로 각각 별도의 "
+                "테마로 자동 분리되어 저장됩니다** — 즉 'AI 반도체'는 'AI' 테마와 '반도체' 테마 둘 다에 "
+                "속하는 것으로 처리됩니다('반도체 소부장'도 마찬가지로 '반도체'+'소부장' 2개로 분리되니 "
+                "테마명을 지을 때 참고해 주세요).\n\n"
+                "작성 후 **[파일 -> 다른 이름으로 저장]**에서 CSV 형식으로 저장해서 올려주세요 "
+                "('CSV UTF-8(쉼표로 분리)'가 안 보이면 그냥 일반 'CSV(쉼표로 분리)'로 저장해도 됩니다 — "
+                "업로드 시 자동으로 인코딩을 인식합니다)."
+            )
+            uploaded_file = st.file_uploader("CSV 파일 선택", type=['csv'], key="theme_bulk_csv_uploader")
             if uploaded_file is not None:
-                try:
-                    df_upload = pd.read_csv(uploaded_file, encoding='utf-8', header=None)
-                    if len(df_upload.columns) >= 2:
-                        if st.button("파일 데이터 DB에 일괄 저장 🚀"):
-                            stock_to_themes = {}
-                            now_str = datetime.now().isoformat()
-                            
-                            for _, row in df_upload.iterrows():
-                                theme = str(row.iloc[0]).strip()
-                                stocks_str = str(row.iloc[1]).strip()
-                                
-                                # 사용자가 첫 줄에 제목(헤더)을 적었을 경우 스킵
-                                if theme in ['테마', '테마명', '테마이름', 'theme'] or stocks_str in ['종목', '종목명', '종목이름', '종목들', 'stock']:
-                                    continue
-                                
-                                if theme and theme != 'nan' and stocks_str and stocks_str != 'nan':
-                                    # 콤마로 구분된 종목명들을 리스트로 분리
-                                    stocks = [s.strip() for s in stocks_str.split(',') if s.strip()]
-                                    for stock in stocks:
-                                        if stock not in stock_to_themes:
-                                            stock_to_themes[stock] = []
-                                        # 중복 테마 방지
-                                        if theme not in stock_to_themes[stock]:
-                                            stock_to_themes[stock].append(theme)
-                            
-                            bulk_data = []
-                            for stock, themes_list in stock_to_themes.items():
-                                bulk_data.append({
-                                    "stock_name": stock,
-                                    "theme_names": ", ".join(themes_list),
-                                    "updated_at": now_str
-                                })
-                            
-                            if bulk_data:
-                                # Supabase bulk upsert (기존 데이터가 있다면 덮어씁니다)
-                                supabase.table("stock_themes").upsert(bulk_data).execute()
-                                st.success(f"✅ 총 {len(bulk_data)}개 종목의 테마 세팅이 완벽하게 업로드되었습니다!")
-                                st.rerun()
-                            else:
-                                st.warning("유효한 데이터가 없습니다. 형식을 확인해 주세요.")
-                    else:
-                        st.error("CSV 파일에 최소 2개의 열(A열: 테마, B열: 종목들)이 필요합니다.")
-                except UnicodeDecodeError:
-                    st.error("엑셀에서 CSV로 저장하실 때 'CSV UTF-8 (쉼표로 분리)' 형식으로 저장해 주십시오.")
-                except Exception as e:
-                    st.error(f"파일 처리 중 오류 발생: {e}")
+                # 🔧 [수정 2026-08-01, 2번째] 사용자 피드백: 엑셀 버전에 따라 "CSV UTF-8(쉼표로 분리)"
+                # 저장 옵션 자체가 안 보이는 경우가 있음(엑셀 버전/OS별로 메뉴 구성이 다름). 일반
+                # "CSV(쉼표로 분리)"로 저장하면 한글 윈도우 엑셀은 보통 시스템 기본 인코딩(CP949, 이른바
+                # "EUC-KR 계열")으로 저장되어 encoding='utf-8' 고정으로는 UnicodeDecodeError가 남.
+                # → utf-8만 강제하는 대신 여러 인코딩을 순서대로 시도해서, 사용자가 어떤 CSV
+                # 저장 옵션을 쓰든(UTF-8이든 CP949든) 그대로 업로드할 수 있게 함.
+                df_upload = None
+                for _enc in ('utf-8-sig', 'utf-8', 'cp949', 'euc-kr'):
+                    try:
+                        uploaded_file.seek(0)
+                        df_upload = pd.read_csv(uploaded_file, encoding=_enc, header=None)
+                        break
+                    except (UnicodeDecodeError, UnicodeError):
+                        continue
+
+                if df_upload is None:
+                    st.error("❌ CSV 파일의 인코딩을 인식하지 못했습니다(UTF-8/CP949/EUC-KR 모두 실패). 엑셀에서 [파일 → 다른 이름으로 저장 → CSV(쉼표로 분리)]로 다시 저장해서 올려주세요.")
+                else:
+                    try:
+                        if len(df_upload.columns) >= 3:
+                            if st.button("파일 데이터 DB에 일괄 저장 🚀", key="theme_bulk_upload_btn"):
+                                stock_to_themes = {}
+                                now_str = datetime.now().isoformat()
+                                skipped_rows = 0
+
+                                for _, row in df_upload.iterrows():
+                                    # col0(번호)은 참고용이라 무시, col1=테마, col2=종목
+                                    theme_field = str(row.iloc[1]).strip()
+                                    stock_name_field = str(row.iloc[2]).strip()
+
+                                    # 사용자가 첫 줄에 제목(헤더)을 적었을 경우 스킵
+                                    if theme_field in ['테마', '테마명', '테마이름', 'theme'] or stock_name_field in ['종목', '종목명', '종목이름', 'stock']:
+                                        continue
+
+                                    if not theme_field or theme_field == 'nan' or not stock_name_field or stock_name_field == 'nan':
+                                        skipped_rows += 1
+                                        continue
+
+                                    # 공백 기준으로 전부 분리 → 독립된 테마 여러 개로 취급(사용자 확정 규칙).
+                                    # str.split()은 공백이 몇 개든 구분자로 처리하고 빈 문자열은 자동으로 걸러줌.
+                                    theme_tokens = theme_field.split()
+                                    if not theme_tokens:
+                                        skipped_rows += 1
+                                        continue
+
+                                    if stock_name_field not in stock_to_themes:
+                                        stock_to_themes[stock_name_field] = []
+                                    for tok in theme_tokens:
+                                        # 중복 테마 방지(같은 종목이 여러 줄에 걸쳐 나와도 태그는 한 번만)
+                                        if tok not in stock_to_themes[stock_name_field]:
+                                            stock_to_themes[stock_name_field].append(tok)
+
+                                bulk_data = []
+                                for stock, themes_list in stock_to_themes.items():
+                                    bulk_data.append({
+                                        "stock_name": stock,
+                                        "theme_names": ", ".join(themes_list),
+                                        "updated_at": now_str
+                                    })
+
+                                if bulk_data:
+                                    # Supabase bulk upsert (기존 데이터가 있다면 덮어씁니다)
+                                    supabase.table("stock_themes").upsert(bulk_data).execute()
+                                    success_msg = f"✅ 총 {len(bulk_data)}개 종목의 테마 세팅이 완벽하게 업로드되었습니다!"
+                                    if skipped_rows:
+                                        success_msg += f" (형식이 맞지 않아 건너뛴 줄 {skipped_rows}개)"
+                                    st.success(success_msg)
+                                    st.rerun()
+                                else:
+                                    st.warning("유효한 데이터가 없습니다. 형식을 확인해 주세요.")
+                        else:
+                            st.error("CSV 파일에 최소 3개의 열(A열: 번호, B열: 테마, C열: 종목)이 필요합니다.")
+                    except Exception as e:
+                        st.error(f"파일 처리 중 오류 발생: {e}")
 
         # 3. 현재 등록된 테마 목록 조회 (삭제 포함)
         st.markdown("##### 📚 현재 등록된 테마 목록")
@@ -1746,6 +2127,19 @@ def render_admin_panel():
                     if st.button("해당 종목 테마 영구 삭제 🚨"):
                         supabase.table("stock_themes").delete().eq("stock_name", del_stock).execute()
                         st.success(f"🗑️ {del_stock}의 테마 정보가 삭제되었습니다.")
+                        st.rerun()
+
+                # 🌟 [신규 2026-08-01] 사용자가 "기존 테마 정보 다 지우고 다시 넣겠다"고 밝혀서,
+                # 300개 가까운 종목을 하나씩 지우는 수고를 덜어주는 "전체 삭제" 버튼 추가.
+                # 실수 클릭 방지를 위해 체크박스로 한 번 확인받은 뒤에만 버튼이 눌리게 함.
+                with st.expander("⚠️ 전체 테마 데이터 초기화 (모든 종목 삭제)"):
+                    st.warning(f"현재 등록된 테마 데이터 **{len(theme_df)}개 종목**을 전부 영구 삭제합니다. 새 CSV를 업로드하기 직전에만 사용하세요.")
+                    confirm_wipe = st.checkbox("네, 전체 테마 데이터를 삭제하는 것이 맞습니다.", key="theme_wipe_confirm")
+                    if st.button("🚨 전체 테마 데이터 영구 삭제", disabled=not confirm_wipe, key="theme_wipe_btn"):
+                        # Supabase delete()는 조건절이 필요해서, stock_name(NOT NULL)이 빈 문자열이
+                        # 아닌 모든 행을 지우는 조건으로 사실상 "전체 삭제"를 구현.
+                        supabase.table("stock_themes").delete().neq("stock_name", "").execute()
+                        st.success("🗑️ 전체 테마 데이터가 삭제되었습니다. 이제 새 CSV를 업로드해 주세요.")
                         st.rerun()
             else:
                 st.info("현재 저장된 테마 정보가 없습니다.")
@@ -2045,6 +2439,164 @@ def get_us_theme_top_movers(left_count=8):
     except Exception as e:
         return None, [], []
 
+# 🌟 [신규 2026-08-01] '미국 테마 등락률' 위젯 HTML 빌더 — 기존에는 '실시간' 화면에만 인라인으로
+# 만들어져 있던 코드였는데, 사용자 요청으로 '테마킹' 화면 우측 상단에도 똑같이 배치하게 되어
+# 코드 중복을 피하려고 공용 함수로 뽑아냄. get_us_theme_top_movers()의 반환값을 그대로 받아서
+# 렌더링용 HTML 문자열만 만들어 돌려준다(st.markdown 호출은 각 호출부에서 각자 수행).
+def render_us_theme_widget_html(us_latest_date, us_left_items, us_right_items):
+    if not us_latest_date:
+        return (
+            "<div style='background: linear-gradient(135deg, #12151c 0%, #05070a 100%); border: 1px dashed #333a45; border-radius: 8px; padding: 12px; text-align:center; opacity:0.7; height: 100%;'>"
+            "<div style='font-size:12px; color:#888888;'>미국 테마 데이터 대기 중...</div>"
+            "</div>"
+        )
+
+    def _us_row_html(item):
+        val = item['pct_change']
+        if val >= 0:
+            color, arrow = "#ff4b4b", "▲"
+        else:
+            color, arrow = "#4B89B5", "▼"
+        return f"<div style='display:flex; justify-content:space-between; gap:6px; font-size:11px; color:{color}; padding:2px 0;'><span>{arrow} {item['theme_name']}</span><span>{val:+.2f}%</span></div>"
+
+    us_left_html = "".join(_us_row_html(g) for g in us_left_items)
+    us_right_html = "".join(_us_row_html(l) for l in us_right_items)
+    return (
+        "<div style='background: linear-gradient(135deg, #12151c 0%, #05070a 100%); border: 1px solid #333a45; border-radius: 8px; padding: 12px 12px 20px 12px; height: 100%;'>"
+        "<div style='display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;'>"
+        "<div style='font-size:13px; font-weight:bold; color:#e0e0e0;'>미국 테마 등락률</div>"
+        f"<div style='font-size:15px; color:#888888;'>{us_latest_date} 마감 기준</div>"
+        "</div>"
+        "<div style='display:flex; gap:10px;'>"
+        f"<div style='flex:1; min-width:0;'>{us_left_html}</div>"
+        f"<div style='flex:1; min-width:0; border-left:1px solid #333a45; padding-left:10px;'>{us_right_html}</div>"
+        "</div>"
+        "</div>"
+    )
+
+# 🌟 [신규 2026-08-01] "공매도·대차잔고 워치"(예비3) / "신용잔고·프로그램매매 추이"(예비4) 화면용
+# 데이터 조회 함수 5종. get_us_theme_top_movers()와 동일한 스타일(try/except 안전망, @st.cache_data로
+# 30분 캐싱, latest_date 기준으로 "가장 최근 거래일" 데이터만 추림). 데이터 원본은 scripts/fetch_market_risk_signals.py가
+# 매일 장마감 이후 자동 수집하는 5개 Supabase 테이블.
+@st.cache_data(ttl=1800)
+def get_short_sale_ranking(limit=30, target_date=None):
+    """공매도 상위종목 랭킹(target_date 지정 시 해당 거래일, 없으면 최신 거래일). 반환: (거래일, [행 dict, ...])
+    🌟 [2026-08-02] "공대치" 화면에 달력 연동 추가하면서 target_date 파라미터 신규 도입 —
+    지정 시 해당 날짜로 직접 eq 조회(과거 500건 윈도우에 안 걸리는 날짜도 조회 가능)."""
+    try:
+        if target_date:
+            res = supabase.table("short_sale_ranking").select("*").eq("trade_date", target_date).order("rank").limit(limit).execute()
+            return target_date, (res.data or [])
+        res = supabase.table("short_sale_ranking").select("*").order("trade_date", desc=True).limit(500).execute()
+        if not res.data:
+            return None, []
+        df = pd.DataFrame(res.data)
+        latest_date = df['trade_date'].max()
+        today_df = df[df['trade_date'] == latest_date].sort_values('rank').head(limit)
+        return latest_date, today_df.to_dict('records')
+    except Exception as e:
+        return None, []
+
+
+@st.cache_data(ttl=1800)
+def get_stock_loan_balance_ranking(limit=30, target_date=None):
+    """종목별 대차잔고 상위종목(target_date 지정 시 해당 거래일, 없으면 최신 거래일,
+    daily_whale_top200 200종목 대상 자체 랭킹). 반환: (거래일, [행 dict, ...])
+    🌟 [2026-08-02] "공대치" 화면 달력 연동용 target_date 파라미터 신규 도입."""
+    try:
+        if target_date:
+            res = supabase.table("stock_loan_balance_ranking").select("*").eq("trade_date", target_date).order("rank").limit(limit).execute()
+            return target_date, (res.data or [])
+        res = supabase.table("stock_loan_balance_ranking").select("*").order("trade_date", desc=True).limit(500).execute()
+        if not res.data:
+            return None, []
+        df = pd.DataFrame(res.data)
+        latest_date = df['trade_date'].max()
+        today_df = df[df['trade_date'] == latest_date].sort_values('rank').head(limit)
+        return latest_date, today_df.to_dict('records')
+    except Exception as e:
+        return None, []
+
+
+@st.cache_data(ttl=1800)
+def get_credit_balance_ranking(limit=30, target_date=None):
+    """신용잔고 상위종목 랭킹(target_date 지정 시 해당 거래일, 없으면 최신 거래일, 융자잔고 금액 상위).
+    반환: (거래일, [행 dict, ...])
+    🌟 [2026-08-02] "신프로" 화면 달력 연동용 target_date 파라미터 신규 도입."""
+    try:
+        if target_date:
+            res = supabase.table("credit_balance_ranking").select("*").eq("trade_date", target_date).order("rank").limit(limit).execute()
+            return target_date, (res.data or [])
+        res = supabase.table("credit_balance_ranking").select("*").order("trade_date", desc=True).limit(500).execute()
+        if not res.data:
+            return None, []
+        df = pd.DataFrame(res.data)
+        latest_date = df['trade_date'].max()
+        today_df = df[df['trade_date'] == latest_date].sort_values('rank').head(limit)
+        return latest_date, today_df.to_dict('records')
+    except Exception as e:
+        return None, []
+
+
+@st.cache_data(ttl=1800)
+def get_market_loan_trans_trend(days=20):
+    """시장 전체(KOSPI/KOSDAQ) 대차잔고 추이 — 최근 N거래일. 반환: DataFrame(빈 경우 empty)"""
+    try:
+        res = supabase.table("market_loan_trans_daily").select("*").order("trade_date", desc=True).limit(days * 2).execute()
+        if not res.data:
+            return pd.DataFrame()
+        df = pd.DataFrame(res.data)
+        return df.sort_values('trade_date')
+    except Exception as e:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800)
+def get_program_trade_investor_today(target_date=None):
+    """프로그램매매 투자자별 순매수 동향(target_date 지정 시 해당 거래일, 없으면 최신 거래일, KOSPI+KOSDAQ 합산).
+    반환: (거래일, [행 dict, ...])
+    ⚠️ 2026-08-02: KIS API가 시장 구분(MRKT_DIV_CLS_CODE) 파라미터를 필수로 요구해서 KOSPI/KOSDAQ를
+    각각 별도 행(market 컬럼)으로 수집하도록 수집기가 바뀜 — 화면에서는 투자자별로 두 시장을 합산해 표시.
+    🌟 [2026-08-02] "신프로" 화면 달력 연동용 target_date 파라미터 신규 도입."""
+    try:
+        if target_date:
+            res = supabase.table("program_trade_investor_today").select("*").eq("trade_date", target_date).execute()
+            if not res.data:
+                return target_date, []
+            df = pd.DataFrame(res.data)
+            numeric_cols = ['sell_qty', 'sell_amount', 'buy_qty', 'buy_amount', 'net_qty', 'net_amount',
+                            'arb_net_qty', 'arb_net_amount', 'non_arb_net_qty', 'non_arb_net_amount']
+            grouped = df.groupby(['investor_code', 'investor_name'], as_index=False)[numeric_cols].sum()
+            grouped = grouped.sort_values('net_amount', ascending=False)
+            return target_date, grouped.to_dict('records')
+        res = supabase.table("program_trade_investor_today").select("*").order("trade_date", desc=True).limit(100).execute()
+        if not res.data:
+            return None, []
+        df = pd.DataFrame(res.data)
+        latest_date = df['trade_date'].max()
+        today_df = df[df['trade_date'] == latest_date]
+        numeric_cols = ['sell_qty', 'sell_amount', 'buy_qty', 'buy_amount', 'net_qty', 'net_amount',
+                         'arb_net_qty', 'arb_net_amount', 'non_arb_net_qty', 'non_arb_net_amount']
+        grouped = today_df.groupby(['investor_code', 'investor_name'], as_index=False)[numeric_cols].sum()
+        grouped = grouped.sort_values('net_amount', ascending=False)
+        return latest_date, grouped.to_dict('records')
+    except Exception as e:
+        return None, []
+
+
+@st.cache_data(ttl=1800)
+def get_program_trade_market_trend(days=20):
+    """시장 전체(KOSPI/KOSDAQ) 프로그램매매 순매수 추이 — 최근 N거래일. 반환: DataFrame(빈 경우 empty)"""
+    try:
+        res = supabase.table("program_trade_market_daily").select("*").order("trade_date", desc=True).limit(days * 2).execute()
+        if not res.data:
+            return pd.DataFrame()
+        df = pd.DataFrame(res.data)
+        return df.sort_values('trade_date')
+    except Exception as e:
+        return pd.DataFrame()
+
+
 def get_accumulated_hot_signals(df):
     if df.empty:
         return []
@@ -2285,17 +2837,11 @@ def draw_whale_bar_chart(target_code, target_name, df):
             else: s_rt = -9
             score += s_rt
 
-            if total_net >= 300: s_tot = 15
-            elif total_net >= 100: s_tot = 12
-            elif total_net >= 50: s_tot = 9
-            elif total_net >= 20: s_tot = 6
-            elif total_net > 0: s_tot = 2
-            else: s_tot = 0
+            # 🌟 [2026-08-01 로그 스케일 전환] 하드 임계값 티어 → get_market_force_score/get_pair_buy_score 공통 함수로 교체
+            s_tot = get_market_force_score(total_net)
             score += s_tot
 
-            if frgn_net > 0 and orgn_net > 0: s_pair = 9
-            elif frgn_net < -100 or orgn_net < -100: s_pair = -12
-            else: s_pair = 0
+            s_pair, _pair_reason_hover = get_pair_buy_score(frgn_net, orgn_net)
             score += s_pair
 
             # 🌟 [신규 튜닝] 수급 지속성(연속 출현) 판단 — 위에서 구한 14일 윈도(period_trading_days) 재사용
@@ -2990,19 +3536,19 @@ if choice == "🏠 홈화면":
 
         /* 엔터 버튼 (기존 색상 및 높이 유지) */
         div.element-container:has(.btn-style-darkblue) { display: none; }
-        div.element-container:has(.btn-style-darkblue) + div.element-container button { 
-            background-color: #2D4B7A !important;
-            border: 1px solid #1F3A60 !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
+        div.element-container:has(.btn-style-darkblue) + div.element-container button {
+            background-color: #3E4F69 !important;
+            border: 1px solid #2E3C51 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
         }
-        div.element-container:has(.btn-style-darkblue) + div.element-container button p { 
-            font-size: 13px !important; 
+        div.element-container:has(.btn-style-darkblue) + div.element-container button p {
+            font-size: 13px !important;
             color: #FFFFFF !important;
             font-weight: bold !important;
         }
         div.element-container:has(.btn-style-darkblue) + div.element-container button:hover {
-            background-color: #1F3A60 !important;
+            background-color: #2E3C51 !important;
         }
         div.element-container:has(.btn-style-darkblue) + div.element-container button:hover p {
             color: #FFD700 !important;
@@ -3011,68 +3557,68 @@ if choice == "🏠 홈화면":
         /* 3버튼 공통 높이 축소 스타일 (패딩/최소높이 조절) */
         /* 목록보기 버튼 (작은 높이) */
         div.element-container:has(.btn-style-darkblue-sm) { display: none; }
-        div.element-container:has(.btn-style-darkblue-sm) + div.element-container button { 
-            background-color: #2D4B7A !important;
-            border: 1px solid #1F3A60 !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
+        div.element-container:has(.btn-style-darkblue-sm) + div.element-container button {
+            background-color: #3E4F69 !important;
+            border: 1px solid #2E3C51 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-darkblue-sm) + div.element-container button p { 
-            font-size: 13px !important; 
+        div.element-container:has(.btn-style-darkblue-sm) + div.element-container button p {
+            font-size: 13px !important;
             color: #FFFFFF !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
         div.element-container:has(.btn-style-darkblue-sm) + div.element-container button:hover {
-            background-color: #1F3A60 !important;
+            background-color: #2E3C51 !important;
         }
         div.element-container:has(.btn-style-darkblue-sm) + div.element-container button:hover p {
-            color: #FFD700 !important; 
+            color: #FFD700 !important;
         }
 
-        /* 빨간색 TOP10 버튼 스타일 */
+        /* 빨간색 TOP10 버튼 스타일 (2026-08-01 채도 낮춤 — 아래 "기폭주" 재정의와 동일 색으로 통일) */
         div.element-container:has(.btn-style-red) { display: none; }
-        div.element-container:has(.btn-style-red) + div.element-container button { 
-            background-color: #E24C4C !important;
-            border: 1px solid #CC3333 !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
+        div.element-container:has(.btn-style-red) + div.element-container button {
+            background-color: #9E2E2E !important;
+            border: 1px solid #663333 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-red) + div.element-container button p { 
-            font-size: 13px !important; 
+        div.element-container:has(.btn-style-red) + div.element-container button p {
+            font-size: 13px !important;
             color: #FFFFFF !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
         div.element-container:has(.btn-style-red) + div.element-container button:hover {
-            background-color: #CC3333 !important;
+            background-color: #582C2C !important;
         }
 
         /* 파란색 TOP10 버튼 스타일 */
         div.element-container:has(.btn-style-blue) { display: none; }
-        div.element-container:has(.btn-style-blue) + div.element-container button { 
-            background-color: #4A86B7 !important;
-            border: 1px solid #3873A3 !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
+        div.element-container:has(.btn-style-blue) + div.element-container button {
+            background-color: #4E687E !important;
+            border: 1px solid #384F61 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-blue) + div.element-container button p { 
-            font-size: 13px !important; 
+        div.element-container:has(.btn-style-blue) + div.element-container button p {
+            font-size: 13px !important;
             color: #FFFFFF !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
         div.element-container:has(.btn-style-blue) + div.element-container button:hover {
-            background-color: #3873A3 !important;
+            background-color: #304454 !important;
         }
 
         /* ------------------------------------------ */
@@ -3129,25 +3675,25 @@ if choice == "🏠 홈화면":
             line-height: 1 !important;
         }
 
-        /* 보라색 수익율 버튼 스타일 */
+        /* 보라색 수익율 버튼 스타일 (2026-08-01 채도 낮춤) */
         div.element-container:has(.btn-style-purple) { display: none; }
-        div.element-container:has(.btn-style-purple) + div.element-container button { 
-            background-color: #8A2BE2 !important; /* BlueViolet */
-            border: 1px solid #7B68EE !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
+        div.element-container:has(.btn-style-purple) + div.element-container button {
+            background-color: #683B91 !important; /* BlueViolet, 채도 낮춘 톤 */
+            border: 1px solid #342B6E !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-purple) + div.element-container button p { 
-            font-size: 13px !important; 
+        div.element-container:has(.btn-style-purple) + div.element-container button p {
+            font-size: 13px !important;
             color: #FFFFFF !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
         div.element-container:has(.btn-style-purple) + div.element-container button:hover {
-            background-color: #7B68EE !important;
+            background-color: #2D255F !important;
         }
 
         div.element-container:has(.btn-style-purple-active) { display: none; }
@@ -3167,25 +3713,25 @@ if choice == "🏠 홈화면":
             line-height: 1 !important;
         }
 
-        /* 오렌지색 상선고 버튼 스타일 */
+        /* 오렌지색 상선고 버튼 스타일 (2026-08-01 채도 낮춤) */
         div.element-container:has(.btn-style-orange) { display: none; }
-        div.element-container:has(.btn-style-orange) + div.element-container button { 
-            background-color: #FF8C00 !important; 
-            border: 1px solid #E67E22 !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
+        div.element-container:has(.btn-style-orange) + div.element-container button {
+            background-color: #9E6C2E !important;
+            border: 1px solid #6E4A2B !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-orange) + div.element-container button p { 
-            font-size: 13px !important; 
+        div.element-container:has(.btn-style-orange) + div.element-container button p {
+            font-size: 13px !important;
             color: #FFFFFF !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
         div.element-container:has(.btn-style-orange) + div.element-container button:hover {
-            background-color: #E67E22 !important;
+            background-color: #5F4125 !important;
         }
 
         div.element-container:has(.btn-style-orange-active) { display: none; }
@@ -3216,26 +3762,102 @@ if choice == "🏠 홈화면":
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-gray) + div.element-container button p { 
-            font-size: 13px !important; 
-            color: #AAAAAA !important;
+        div.element-container:has(.btn-style-gray) + div.element-container button p {
+            font-size: 13px !important;
+            color: #FFFFFF !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
-        
-        /* 기폭주 버튼 (붉은색) 스타일 */
-        div.element-container:has(.btn-style-red) { display: none; }
-        div.element-container:has(.btn-style-red) + div.element-container button { 
-            background-color: #ff4b4b !important; 
-            border: 1px solid #cc3c3c !important;
-            padding-left: 4px !important; 
-            padding-right: 4px !important; 
+
+        /* 🌟 [신규 2026-08-01] "공대치"(공매도·대차잔고 워치, 구 예비3) 버튼 전용 틸(teal) — 다른 버튼과 동일하게 채도 낮춤 */
+        div.element-container:has(.btn-style-teal) { display: none; }
+        div.element-container:has(.btn-style-teal) + div.element-container button {
+            background-color: #3C8181 !important;
+            border: 1px solid #306969 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
             padding-top: 2px !important;
             padding-bottom: 2px !important;
             min-height: 32px !important;
         }
-        div.element-container:has(.btn-style-red) + div.element-container button p { 
-            font-size: 13px !important; 
+        div.element-container:has(.btn-style-teal) + div.element-container button p {
+            font-size: 13px !important;
+            color: #ffffff !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+        div.element-container:has(.btn-style-teal) + div.element-container button:hover {
+            background-color: #2A5B5B !important;
+        }
+
+        div.element-container:has(.btn-style-teal-active) { display: none; }
+        div.element-container:has(.btn-style-teal-active) + div.element-container button {
+            background-color: transparent !important;
+            border: 2px solid #3C8181 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-teal-active) + div.element-container button p {
+            font-size: 13px !important;
+            color: #3C8181 !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+
+        /* 🌟 [신규 2026-08-01] "신프로"(신용잔고·프로그램매매 추이, 구 예비4) 버튼 전용 인디고 — 수익율/골든픽의 보라색과 구분되는 톤 */
+        div.element-container:has(.btn-style-indigo) { display: none; }
+        div.element-container:has(.btn-style-indigo) + div.element-container button {
+            background-color: #4C4686 !important;
+            border: 1px solid #393465 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-indigo) + div.element-container button p {
+            font-size: 13px !important;
+            color: #ffffff !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+        div.element-container:has(.btn-style-indigo) + div.element-container button:hover {
+            background-color: #312D57 !important;
+        }
+
+        div.element-container:has(.btn-style-indigo-active) { display: none; }
+        div.element-container:has(.btn-style-indigo-active) + div.element-container button {
+            background-color: transparent !important;
+            border: 2px solid #4C4686 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-indigo-active) + div.element-container button p {
+            font-size: 13px !important;
+            color: #4C4686 !important;
+            font-weight: bold !important;
+            line-height: 1 !important;
+        }
+
+        /* 기폭주 버튼 (붉은색) 스타일 (2026-08-01 채도 낮춤 — 위 "btn-style-red" 첫 정의와 동일 색으로 통일) */
+        div.element-container:has(.btn-style-red) { display: none; }
+        div.element-container:has(.btn-style-red) + div.element-container button {
+            background-color: #9E2E2E !important;
+            border: 1px solid #663333 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            min-height: 32px !important;
+        }
+        div.element-container:has(.btn-style-red) + div.element-container button p {
+            font-size: 13px !important;
             color: #ffffff !important;
             font-weight: bold !important;
             line-height: 1 !important;
@@ -3260,10 +3882,11 @@ if choice == "🏠 홈화면":
         }
 
         /* 🔧 [수정 2026-07-30] "외/기" 버튼 전용 진한 빨간색 (TOP10/기폭주의 #ff4b4b와 구분되는 톤) */
+        /* 🔧 [수정 2026-08-01] 사이드바 버튼 전체 채도 낮춤 */
         div.element-container:has(.btn-style-darkred) { display: none; }
         div.element-container:has(.btn-style-darkred) + div.element-container button {
-            background-color: #B22222 !important;
-            border: 1px solid #8B0000 !important;
+            background-color: #8C4040 !important;
+            border: 1px solid #6C1F1F !important;
             padding-left: 4px !important;
             padding-right: 4px !important;
             padding-top: 2px !important;
@@ -3277,7 +3900,7 @@ if choice == "🏠 홈화면":
             line-height: 1 !important;
         }
         div.element-container:has(.btn-style-darkred) + div.element-container button:hover {
-            background-color: #8B0000 !important;
+            background-color: #671E1E !important;
         }
 
         div.element-container:has(.btn-style-darkred-active) { display: none; }
@@ -3298,10 +3921,11 @@ if choice == "🏠 홈화면":
         }
 
         /* 🌟 [신규 2026-07-30] "내관심" 버튼 전용 녹색 */
+        /* 🔧 [수정 2026-08-01] 채도 낮춤 */
         div.element-container:has(.btn-style-green) { display: none; }
         div.element-container:has(.btn-style-green) + div.element-container button {
-            background-color: #2E8B57 !important;
-            border: 1px solid #1F5C3D !important;
+            background-color: #437659 !important;
+            border: 1px solid #2D4E3D !important;
             padding-left: 4px !important;
             padding-right: 4px !important;
             padding-top: 2px !important;
@@ -3315,7 +3939,7 @@ if choice == "🏠 홈화면":
             line-height: 1 !important;
         }
         div.element-container:has(.btn-style-green) + div.element-container button:hover {
-            background-color: #1F5C3D !important;
+            background-color: #2D4E3D !important;
         }
 
         div.element-container:has(.btn-style-green-active) { display: none; }
@@ -3365,11 +3989,12 @@ if choice == "🏠 홈화면":
             content: none !important;
         }
 
-        /* 🌟 [신규 2026-07-30] "테마킹" 버튼 전용 찐노랑 (배경이 밝아서 글자는 어둡게) */
+        /* 🌟 [신규 2026-07-30] "테마킹" 버튼 전용 찐노랑 */
+        /* 🔧 [수정 2026-08-01] 채도 낮춤(어두운 겨자색 톤으로) + 다른 버튼과 동일하게 흰 글씨로 통일 */
         div.element-container:has(.btn-style-yellow) { display: none; }
         div.element-container:has(.btn-style-yellow) + div.element-container button {
-            background-color: #FFD400 !important;
-            border: 1px solid #C9A600 !important;
+            background-color: #9E8B2E !important;
+            border: 1px solid #776822 !important;
             padding-left: 4px !important;
             padding-right: 4px !important;
             padding-top: 2px !important;
@@ -3378,12 +4003,12 @@ if choice == "🏠 홈화면":
         }
         div.element-container:has(.btn-style-yellow) + div.element-container button p {
             font-size: 13px !important;
-            color: #1a1a1a !important;
+            color: #ffffff !important;
             font-weight: bold !important;
             line-height: 1 !important;
         }
         div.element-container:has(.btn-style-yellow) + div.element-container button:hover {
-            background-color: #E6BE00 !important;
+            background-color: #675A1E !important;
         }
 
         div.element-container:has(.btn-style-yellow-active) { display: none; }
@@ -3721,11 +4346,25 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "기간 누적 폭주"
                     st.rerun()
         with btn_col11:
-            st.markdown('<div class="btn-style-gray"></div>', unsafe_allow_html=True)
-            if st.button("예비3", key="btn_res3", use_container_width=True): pass
+            # 🌟 [신규 2026-08-01] "공매도·대차잔고 워치" — 골든스코어(매수세 쏠림)의 반대편,
+            # 공매도/신용대차가 쏠리는 위험 신호를 보여주는 화면. 상선고/기폭주와 동일하게 관리자 전용 규칙.
+            is_short_watch_active = (scrn_select == "공매도·대차잔고 워치")
+            cls_short_watch = "btn-style-teal-active" if is_short_watch_active else "btn-style-teal"
+            st.markdown(f'<div class="{cls_short_watch}"></div>', unsafe_allow_html=True)
+            if st.button("공대치", key="btn_res3", use_container_width=True):
+                if st.session_state.get('scrn_select_radio') != "공매도·대차잔고 워치":
+                    st.session_state['scrn_select_radio'] = "공매도·대차잔고 워치"
+                    st.rerun()
         with btn_col12:
-            st.markdown('<div class="btn-style-gray"></div>', unsafe_allow_html=True)
-            if st.button("예비4", key="btn_reserve_4", use_container_width=True): pass
+            # 🌟 [신규 2026-08-01] "신용잔고·프로그램매매 추이" — 신용잔고 상위 + 프로그램매매 동향을
+            # 함께 보여줘 "진짜 선행지표 찾기" 연구에도 데이터로 활용 가능.
+            is_credit_prog_active = (scrn_select == "신용잔고·프로그램매매 추이")
+            cls_credit_prog = "btn-style-indigo-active" if is_credit_prog_active else "btn-style-indigo"
+            st.markdown(f'<div class="{cls_credit_prog}"></div>', unsafe_allow_html=True)
+            if st.button("신프로", key="btn_reserve_4", use_container_width=True):
+                if st.session_state.get('scrn_select_radio') != "신용잔고·프로그램매매 추이":
+                    st.session_state['scrn_select_radio'] = "신용잔고·프로그램매매 추이"
+                    st.rerun()
 
 
     exact_match = st.sidebar.toggle("🎯 검색어 완전 일치 (Exact Match)", value=True)
@@ -4923,23 +5562,13 @@ if choice == "🏠 홈화면":
                             score -= 9
                             reasons.append("⚠️ 실시간 고래 포착 미흡")
 
-                        if total_net >= 300:
-                            score += 15
-                        elif total_net >= 100:
-                            score += 12
-                        elif total_net >= 50:
-                            score += 9
-                        elif total_net >= 20:
-                            score += 6
-                        elif total_net > 0:
-                            score += 2
+                        # 🌟 [2026-08-01 로그 스케일 전환] 하드 임계값 티어 → get_market_force_score/get_pair_buy_score 공통 함수로 교체
+                        score += get_market_force_score(total_net)
 
-                        if frgn_net > 0 and orgn_net > 0:
-                            score += 9
-                            reasons.append("🔥 외/기 동시 쌍끌이")
-                        elif frgn_net < -100 or orgn_net < -100:
-                            score -= 12
-                            reasons.append("⚠️ 외인/기관 한쪽 대량 덤핑(-100억 이상)")
+                        pair_score, pair_reason = get_pair_buy_score(frgn_net, orgn_net)
+                        score += pair_score
+                        if pair_reason:
+                            reasons.append(pair_reason)
 
                         # 🔧 [버그 수정 2026-07-29]: DB 쿼리가 일시적으로 비어있으면(네트워크 지연 등) app_count=0,
                         # total_trading_days=1로 폴백되는데, "0 >= 1-1(=0)"이 참이 되어 실제로는 단 하루도
@@ -5269,23 +5898,13 @@ if choice == "🏠 홈화면":
                         score_w -= 9
                         reasons_w.append("⚠️ 실시간 고래 포착 미흡")
 
-                    if total_net_w >= 300:
-                        score_w += 15
-                    elif total_net_w >= 100:
-                        score_w += 12
-                    elif total_net_w >= 50:
-                        score_w += 9
-                    elif total_net_w >= 20:
-                        score_w += 6
-                    elif total_net_w > 0:
-                        score_w += 2
+                    # 🌟 [2026-08-01 로그 스케일 전환] 하드 임계값 티어 → get_market_force_score/get_pair_buy_score 공통 함수로 교체
+                    score_w += get_market_force_score(total_net_w)
 
-                    if frgn_net_w > 0 and orgn_net_w > 0:
-                        score_w += 9
-                        reasons_w.append("🔥 외/기 동시 쌍끌이")
-                    elif frgn_net_w < -100 or orgn_net_w < -100:
-                        score_w -= 12
-                        reasons_w.append("⚠️ 외인/기관 한쪽 대량 덤핑(-100억 이상)")
+                    pair_score_w, pair_reason_w = get_pair_buy_score(frgn_net_w, orgn_net_w)
+                    score_w += pair_score_w
+                    if pair_reason_w:
+                        reasons_w.append(pair_reason_w)
 
                     if app_count_w >= total_trading_days_w:
                         score_w += 9
@@ -5409,9 +6028,16 @@ if choice == "🏠 홈화면":
                                 st.error(f"삭제 실패: {e}")
 
         elif scrn_select == "테마 랭킹":
-            st.markdown("<h4 style='color:#FFD400; border-left: 4px solid #FFD400; padding-left: 10px;'>👑 테마킹 - 오늘의 테마 모멘텀 랭킹</h4>", unsafe_allow_html=True)
-            st.caption("오늘 외국인/기관 순매수 TOP 100(코스피)+TOP 100(코스닥)에 오른 종목들을 테마별로 묶어, 어떤 테마에 수급이 몰리고 있는지 보여줍니다.")
-            st.caption("⚠️ 테마 매핑 데이터가 현재 약 100개 종목에 한해 등록되어 있어, 테마 매핑이 없는 종목은 집계에서 빠질 수 있습니다.")
+            # 🇺🇸 [신규 2026-08-01] 사용자 요청: '실시간' 화면의 '미국 테마 등락률' 위젯을
+            # '테마킹' 화면 우측 상단에도 동일하게 배치. render_us_theme_widget_html() 공용 함수 재사용.
+            themeking_header_cols = st.columns([2.3, 1])
+            with themeking_header_cols[0]:
+                st.markdown("<h4 style='color:#FFD400; border-left: 4px solid #FFD400; padding-left: 10px;'>👑 테마킹 - 오늘의 테마 모멘텀 랭킹</h4>", unsafe_allow_html=True)
+                st.caption("오늘 외국인/기관 순매수 TOP 100(코스피)+TOP 100(코스닥)에 오른 종목들을 테마별로 묶어, 어떤 테마에 수급이 몰리고 있는지 보여줍니다.")
+                st.caption("⚠️ 테마 매핑 데이터가 현재 약 100개 종목에 한해 등록되어 있어, 테마 매핑이 없는 종목은 집계에서 빠질 수 있습니다.")
+            with themeking_header_cols[1]:
+                tk_us_latest_date, tk_us_left_items, tk_us_right_items = get_us_theme_top_movers(left_count=8)
+                st.markdown(render_us_theme_widget_html(tk_us_latest_date, tk_us_left_items, tk_us_right_items), unsafe_allow_html=True)
 
             today_theme = get_latest_market_open_date()
             today_theme_str = today_theme.strftime("%Y-%m-%d")
@@ -5466,12 +6092,14 @@ if choice == "🏠 홈화면":
                     # 박스 색상: 실제 순매수 방향/강도(빨강=매수 강세, 파랑=매도 강세). 사용자가 보여준 참고 이미지
                     # (다른 사이트의 테마 모멘텀 트리맵)와 유사한 형태를 이 프로젝트의 매수/매도 색 관례(빨강/파랑)로 구현.
                     st.markdown("<h5 style='color:#FFD400; margin-top:10px;'>🗺️ 테마 모멘텀 트리맵</h5>", unsafe_allow_html=True)
-                    st.caption("박스 크기 = 테마 합산 외/기 순매수 규모(단, 어느 테마도 전체 면적의 절반은 넘지 않도록 보정), 색상 = 매수(🔴)·매도(🔵) 강도. 박스를 클릭하면 바로 AI 요약이 뜹니다(혹시 클릭이 안 먹으면 아래 '테마별 AI 요약 보기' 버튼을 이용해주세요).")
+                    st.caption("박스 크기 = 테마 합산 외/기 순매수 규모(단, 어느 테마도 전체 면적의 25%는 넘지 않도록 보정), 색상 = 매수(🔴)·매도(🔵) 강도. 박스를 클릭하면 바로 AI 요약이 뜹니다(혹시 클릭이 안 먹으면 아래 '테마별 AI 요약 보기' 버튼을 이용해주세요).")
 
                     # 🌟 [신규 2026-07-31] 사용자 피드백: "AI 반도체"처럼 압도적으로 큰 테마 하나가
                     # 트리맵 전체 면적을 거의 다 차지해버려서(예: 72,829억 vs 나머지 800억대)
                     # 나머지 테마들이 화면 구석에 찌그러져 안 보이는 문제 발생 → "값이 아무리 커도
                     # 각 레벨에서 전체 면적의 50%를 넘지 않도록" 해달라는 요청에 따라 면적 캡핑 함수 추가.
+                    # 🔧 [수정 2026-08-01] 50%로 캡핑해도 여전히 영역 활용이 비효율적이라는 피드백에 따라
+                    # 상한을 25%로 더 낮춤(호출부의 max_share=0.25). 함수 자체는 그대로 범용 유지.
                     # 실제 순매수 금액(색상/텍스트 표시용 "합산 외/기 순매수(억)")은 전혀 건드리지 않고,
                     # 트리맵 "면적" 계산에만 쓰이는 별도 값("박스크기")만 이 함수로 보정함.
                     def _cap_treemap_share(values, max_share=0.5):
@@ -5502,7 +6130,7 @@ if choice == "🏠 홈화면":
 
                     df_treemap = df_theme_rank.copy()
                     raw_treemap_sizes = df_treemap["합산 외/기 순매수(억)"].abs().clip(lower=0.1).tolist()
-                    df_treemap["박스크기"] = _cap_treemap_share(raw_treemap_sizes, max_share=0.5)
+                    df_treemap["박스크기"] = _cap_treemap_share(raw_treemap_sizes, max_share=0.25)
 
                     fig_treemap = px.treemap(
                         df_treemap,
@@ -5514,10 +6142,19 @@ if choice == "🏠 홈화면":
                         custom_data=["종목수", "대표 종목", "합산 외/기 순매수(억)"],
                         hover_data=None,
                     )
+
+                    # ⚠️ [되돌림 2026-08-01, 3번째] 순위별로 textfont.size를 배열(리스트)로 지정하는
+                    # 시도(1~7위 28px / 8위 이하 20px)를 했었는데, 실제 배포본에서 트리맵 전체가
+                    # 빈 단색 박스로 깨지는 렌더링 실패가 발생함(사용자 스크린샷으로 확인). 이 샌드박스는
+                    # plotly가 설치돼 있지 않고 네트워크 설치도 불가능해 사전에 직접 렌더링 검증을 하지
+                    # 못한 채 반영했던 것이 원인으로 보임 → 즉시 마지막으로 확인됐던 안전한 상태
+                    # (균일 28px, 사용자가 "아주 좋았어!"로 확인한 상태)로 되돌림. 순위별 차등 폰트는
+                    # 추후 검증 가능한 방법을 찾을 때까지 보류.
                     fig_treemap.update_traces(
                         texttemplate="<b>%{label}</b><br>%{customdata[2]:,.0f}억",
                         hovertemplate="<b>%{label}</b><br>합산 외/기 순매수: %{customdata[2]:,.0f}억<br>종목수: %{customdata[0]}개<br>대표 종목: %{customdata[1]}<extra></extra>",
-                        textfont_size=14,
+                        textposition="middle center",
+                        textfont_size=28,
                     )
                     fig_treemap.update_layout(
                         margin=dict(t=10, l=10, r=10, b=10),
@@ -5568,16 +6205,50 @@ if choice == "🏠 홈화면":
                                 st.rerun()
 
                     st.markdown("<h5 style='color:#FFFFFF; margin-top:20px;'>📋 테마 랭킹 표</h5>", unsafe_allow_html=True)
-                    st.dataframe(
-                        df_theme_rank,
-                        use_container_width=True,
-                        hide_index=True,
-                        height=400,
-                        column_config={
-                            "순위": st.column_config.NumberColumn("순위", format="%,d위"),
-                            "합산 외/기 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
-                        }
+                    # 🔧 [수정 2026-08-01] 사용자 요청 5가지 반영:
+                    # (1) st.dataframe 좌상단 📊 오버레이 아이콘이 첫 컬럼("순위") 헤더 글자를 가림,
+                    # (2) "순위" 컬럼 폭이 불필요하게 넓음("10위" 글자만 들어갈 정도로),
+                    # (3) 맨 오른쪽("대표 종목") 컬럼을 제외한 나머지 컬럼도 헤더/내용 텍스트 길이에 맞춰 좁힘,
+                    # (4) "대표 종목" 안의 "(nn,nnn억)" 부분만 빨간색으로,
+                    # (5) 대표 종목 표시 개수를 3개 → 5개로 확대.
+                    # (4)는 st.dataframe/column_config로는 불가능함(Streamlit 데이터프레임은 셀 전체
+                    # 단위 스타일링만 지원하고, 셀 안의 일부 텍스트만 색칠하는 건 지원 안 함) → 이 표는
+                    # st.dataframe 대신 직접 만든 HTML 표로 교체(📊 아이콘 문제도 자동으로 해결됨).
+                    # 컬럼 폭은 픽셀을 직접 추정하는 대신, "width:1%; white-space:nowrap"을 앞쪽
+                    # 4개 컬럼에 줘서 브라우저 표 자동 레이아웃이 내용 길이에 맞게 최소화하고, 마지막
+                    # "대표 종목" 컬럼만 폭 제약 없이 남은 공간을 전부 채우도록 하는 표준 CSS 기법 사용.
+                    theme_rank_rows_html = []
+                    for _, r_tk in df_theme_rank.iterrows():
+                        theme_name_tk = r_tk["테마명"]
+                        rep_list_tk = sorted(theme_agg[theme_name_tk]["stocks"], key=lambda x: x[1], reverse=True)[:5]
+                        rep_html_tk = ", ".join(
+                            f"{n}(<span style='color:#ff4b4b; font-weight:bold;'>{v:,.0f}억</span>)"
+                            for n, v, c in rep_list_tk
+                        )
+                        theme_rank_rows_html.append(
+                            "<tr style='border-bottom:1px solid #2a2d35;'>"
+                            f"<td style='width:1%; white-space:nowrap; text-align:center; padding:6px 8px;'>{int(r_tk['순위'])}위</td>"
+                            f"<td style='width:1%; white-space:nowrap; text-align:left; padding:6px 10px;'>{theme_name_tk}</td>"
+                            f"<td style='width:1%; white-space:nowrap; text-align:center; padding:6px 8px;'>{int(r_tk['종목수'])}</td>"
+                            f"<td style='width:1%; white-space:nowrap; text-align:right; padding:6px 10px;'>{r_tk['합산 외/기 순매수(억)']:,.0f}억</td>"
+                            f"<td style='text-align:left; padding:6px 10px;'>{rep_html_tk}</td>"
+                            "</tr>"
+                        )
+                    theme_rank_table_html = (
+                        "<div style='max-height:400px; overflow-y:auto; border:1px solid #333a45; border-radius:6px;'>"
+                        "<table style='width:100%; border-collapse:collapse; font-size:13px; color:#e0e0e0;'>"
+                        "<thead><tr style='background:#1a1d24; border-bottom:2px solid #333a45; position:sticky; top:0;'>"
+                        "<th style='width:1%; white-space:nowrap; text-align:center; padding:8px;'>순위</th>"
+                        "<th style='width:1%; white-space:nowrap; text-align:left; padding:8px 10px;'>테마명</th>"
+                        "<th style='width:1%; white-space:nowrap; text-align:center; padding:8px;'>종목수</th>"
+                        "<th style='width:1%; white-space:nowrap; text-align:right; padding:8px 10px;'>합산 외/기 순매수(억)</th>"
+                        "<th style='text-align:left; padding:8px 10px;'>대표 종목</th>"
+                        "</tr></thead>"
+                        f"<tbody>{''.join(theme_rank_rows_html)}</tbody>"
+                        "</table>"
+                        "</div>"
                     )
+                    st.markdown(theme_rank_table_html, unsafe_allow_html=True)
 
                     # 🌟 [신규 2026-07-31] 테마별 AI 요약 진입점 — "내 관심종목" 삭제 버튼과 동일한
                     # 4열 그리드 버튼 패턴 재사용. 클릭하면 해당 테마의 대표 종목(순매수 상위 5개) 뉴스를
@@ -6651,6 +7322,636 @@ if choice == "🏠 홈화면":
                                 </div>
                                 """, unsafe_allow_html=True)
 
+        elif scrn_select == "공매도·대차잔고 워치":
+            # 🌟 [신규 2026-08-01] 골든스코어가 "매수세가 몰리는 곳"을 보여준다면, 이 화면은 반대로
+            # "공매도/대차가 몰리는 위험 신호"를 보여줌. 데이터 출처: scripts/fetch_market_risk_signals.py
+            # (매일 장마감 15:45 이후 자동 수집). ⚠️ 이 화면은 실제 KIS API 응답으로 검증되지 못한 상태 —
+            # 데이터가 비어 보이거나 이상하면 수집 스크립트를 먼저 확인해야 함.
+            # 📅 [수정 2026-08-02] 날짜 계산/세션state 초기화를 컬럼 블록보다 앞으로 옮김 — 좌측 컬럼
+            # 안에서도 "조회 날짜" 안내 캡션을 표시해서(우측 달력과 높이를 더 맞추기 위해) sw_selected_date/
+            # sw_date_touched를 컬럼 진입 전에 미리 읽을 수 있어야 하기 때문.
+            now_kst = datetime.utcnow() + timedelta(hours=9)
+            if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
+                target_dt = now_kst - timedelta(days=1)
+            else:
+                target_dt = now_kst
+            target_dt = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
+            sw_today_kor = get_latest_market_open_date(target_dt)
+            sw_min_date = sw_today_kor - timedelta(days=90)
+
+            import calendar
+            from st_click_detector import click_detector
+
+            if 'sw_cal_year' not in st.session_state:
+                st.session_state.sw_cal_year = sw_today_kor.year
+                st.session_state.sw_cal_month = sw_today_kor.month
+                st.session_state.sw_selected_date = sw_today_kor
+                st.session_state.sw_cal_reset = 0
+                # 🔧 [수정 2026-08-02] 아래 "달력 미조작(터치 전)" 판단용 플래그. 각 데이터 소스(대차잔고/
+                # 공매도/신용잔고/프로그램매매)의 실제 최신 수집일이 서로 다를 수 있어(수동 실행 시점이 제각각),
+                # 달력이 계산해주는 "이론상 최신 거래일"과 실제 DB의 최신 날짜가 어긋나면 특정 위젯만 "데이터
+                # 없음"으로 보이는 문제가 있었음 — 사용자가 실제로 날짜를 클릭하기 전까지는 target_date를
+                # None으로 넘겨 각 함수가 기존처럼(달력 도입 전과 동일하게) 자기 테이블의 진짜 최신 날짜를
+                # 알아서 찾도록 함.
+                st.session_state.sw_date_touched = False
+
+            col_sw_left, col_sw_right = st.columns([1.8, 1])
+            with col_sw_left:
+                st.markdown("<h4 style='color:#3C8181; border-left: 4px solid #3C8181; padding-left: 10px;'>📉 공매도·대차잔고 워치</h4>", unsafe_allow_html=True)
+                st.caption("매수세가 아니라 공매도·대차잔고가 몰리는 종목을 보여주는 '위험 신호' 화면입니다. 골든스코어(매수 쏠림)와 반대 관점으로 함께 참고하세요.")
+                # 🔧 [수정 2026-08-02] "외기 TOP100"/"신프로" 화면과 동일하게, 행 클릭 동작 선택 라디오를
+                # 달력과 같은 줄(왼쪽 컬럼)에 배치 — 좌측 컬럼(제목+설명만)이 우측 달력보다 훨씬 짧아서
+                # 달력 아래에 큰 빈 공간이 남아 보이던 문제를 줄이기 위함. 아래 대차잔고/공매도 상위종목
+                # 표 2개가 이 하나의 라디오를 공유해서 사용함(원래 표마다 따로 있던 라디오를 통합).
+                sw_click_action = st.radio(
+                    "👇 아래 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:",
+                    ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"],
+                    horizontal=True,
+                    key="sw_click_action"
+                )
+                # 🔧 [수정 2026-08-02] 날짜 상태 안내 캡션도 좌측 컬럼 안으로 이동 — 예전에는 컬럼 블록이
+                # 끝난 뒤 전체 폭에 따로 표시해서 좌측 컬럼 높이에 보탬이 안 됐음. 여기로 옮기면 좌측 컬럼
+                # 높이가 실제로 늘어나 우측 달력과의 빈 공간이 더 줄어듦.
+                if st.session_state.get('sw_date_touched', False):
+                    st.caption(f"📅 조회 날짜: {st.session_state.sw_selected_date.strftime('%Y-%m-%d')}" + (" (최신 거래일)" if st.session_state.sw_selected_date == sw_today_kor else " (과거 조회)"))
+                else:
+                    st.caption("📅 각 항목의 최신 수집일 기준으로 표시 중입니다 (달력에서 과거 날짜를 선택할 수 있습니다)")
+
+            with col_sw_right:
+                # 📅 [신규 2026-08-02] "고래 골든픽"/"외기 TOP100" 화면과 동일한 커스텀 HTML 달력 연동.
+                # 상위종목 표/당일 스냅샷 위젯을 선택한 과거 날짜 기준으로 조회. (아래 KOSPI/KOSDAQ
+                # 대차잔고 line chart는 이미 여러 날짜를 보여주는 추세 차트라 달력 미연동 — 그대로 유지.)
+                sw_cal_year = st.session_state.sw_cal_year
+                sw_cal_month = st.session_state.sw_cal_month
+                sw_selected_date = st.session_state.sw_selected_date
+
+                # 🔧 [수정 2026-08-02] 사용자가 "달력 아래쪽 빈 공간을 좀 더 좁혀달라"고 재요청 —
+                # 좌측 컬럼 높이(라디오+캡션)를 더 늘리는 대신, 달력 자체를 조금 더 컴팩트하게
+                # 렌더링해서 우측 컬럼 높이를 줄이는 방향으로 접근(바깥 padding/줄간격/셀 padding/
+                # 폰트 크기를 소폭 축소). 클릭 가능 영역/가독성에는 영향 없는 수준으로만 축소함.
+                sw_html_cal = f"""
+                <div style="max-width: 230px; margin-left: auto; background: #1a1c24; padding: 6px; border-radius: 10px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; color: white;">
+                        <a href='#' id='sw_cal_prev' style='color: #888; text-decoration: none; padding: 2px 8px; background: #2a2d3a; border-radius: 4px; font-weight: bold; font-size: 12px;'>&lt;</a>
+                        <strong style="font-size: 14px;">{sw_cal_year}년 {sw_cal_month}월</strong>
+                        <a href='#' id='sw_cal_next' style='color: #888; text-decoration: none; padding: 2px 8px; background: #2a2d3a; border-radius: 4px; font-weight: bold; font-size: 12px;'>&gt;</a>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 2px; font-size: 10px; font-weight: bold; margin-bottom: 3px; line-height: 1.2;">
+                        <div style="color: #ff4b4b;">일</div>
+                        <div style="color: #aaa;">월</div>
+                        <div style="color: #aaa;">화</div>
+                        <div style="color: #aaa;">수</div>
+                        <div style="color: #aaa;">목</div>
+                        <div style="color: #aaa;">금</div>
+                        <div style="color: #4B89B5;">토</div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 2px; font-size: 10px; line-height: 1.2;">
+                """
+
+                sw_c = calendar.Calendar(firstweekday=6)
+                for week in sw_c.monthdatescalendar(sw_cal_year, sw_cal_month):
+                    for day in week:
+                        if day.month == sw_cal_month:
+                            bg_color = "transparent"
+                            color = "white"
+                            border = "1px solid transparent"
+
+                            if day == sw_selected_date:
+                                bg_color = "#3C8181"
+                                color = "white"
+                            elif day.weekday() == 6:
+                                color = "#ff4b4b"
+                            elif day.weekday() == 5:
+                                color = "#4B89B5"
+
+                            if day == sw_today_kor and day != sw_selected_date:
+                                border = "1px solid #3C8181"
+
+                            if day > sw_today_kor or day < sw_min_date:
+                                sw_html_cal += f"<div style='padding: 3px; color: #444; border: {border}; border-radius: 4px;'>{day.day}</div>"
+                            else:
+                                sw_html_cal += f"<a href='#' id='sw_cal_date_{day.strftime('%Y-%m-%d')}' style='padding: 3px; background: {bg_color}; color: {color}; border: {border}; text-decoration: none; border-radius: 4px; display: block; font-weight: bold;'>{day.day}</a>"
+                        else:
+                            sw_html_cal += "<div></div>"
+
+                sw_html_cal += "</div></div>"
+
+                sw_clicked = click_detector(sw_html_cal, key=f"sw_cal_ui_{st.session_state.sw_cal_reset}")
+
+            if sw_clicked:
+                if sw_clicked == 'sw_cal_prev':
+                    if st.session_state.sw_cal_month == 1:
+                        st.session_state.sw_cal_month = 12
+                        st.session_state.sw_cal_year -= 1
+                    else:
+                        st.session_state.sw_cal_month -= 1
+                    st.session_state.sw_cal_reset += 1
+                    st.rerun()
+                elif sw_clicked == 'sw_cal_next':
+                    if st.session_state.sw_cal_month == 12:
+                        st.session_state.sw_cal_month = 1
+                        st.session_state.sw_cal_year += 1
+                    else:
+                        st.session_state.sw_cal_month += 1
+                    st.session_state.sw_cal_reset += 1
+                    st.rerun()
+                elif sw_clicked.startswith('sw_cal_date_'):
+                    date_str = sw_clicked.split('sw_cal_date_')[1]
+                    st.session_state.sw_selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    st.session_state.sw_date_touched = True
+                    st.session_state.sw_cal_reset += 1
+                    st.rerun()
+
+            sw_selected_date = st.session_state.sw_selected_date
+            sw_sel_date_str = sw_selected_date.strftime("%Y-%m-%d")
+            # 🔧 [수정 2026-08-02] 사용자가 달력을 아직 안 건드렸으면(sw_date_touched=False) 아래 데이터
+            # 조회 함수들에 target_date=None을 넘겨(달력 도입 전과 동일하게) 각자 실제 최신 날짜를 스스로 찾게 함.
+            # (날짜 상태 안내 캡션은 위쪽 헤더 좌측 컬럼으로 옮겨서 여기서는 더 이상 출력하지 않음.)
+            sw_target_date_param = sw_sel_date_str if st.session_state.get('sw_date_touched', False) else None
+            st.write("---")
+
+            loan_trend_df = get_market_loan_trans_trend(days=20)
+            if loan_trend_df.empty:
+                st.info("💡 시장 전체 대차잔고 추이 데이터가 아직 없습니다. 수집 스크립트가 최소 1회 실행된 이후 표시됩니다.")
+            else:
+                trend_cols = st.columns(2)
+                for i, mkt in enumerate(["KOSPI", "KOSDAQ"]):
+                    mkt_df = loan_trend_df[loan_trend_df['market'] == mkt]
+                    if mkt_df.empty:
+                        continue
+                    if sw_target_date_param:
+                        date_match = mkt_df[mkt_df['trade_date'] == sw_target_date_param]
+                        latest_row = date_match.iloc[-1] if not date_match.empty else mkt_df.iloc[-1]
+                        is_fallback = date_match.empty
+                    else:
+                        latest_row = mkt_df.iloc[-1]
+                        is_fallback = False
+                    with trend_cols[i]:
+                        st.markdown(f"**{mkt} 대차잔고**")
+                        if is_fallback:
+                            st.caption(f"⚠️ 선택한 {sw_target_date_param}는 이 지표의 최근 조회 범위(20거래일) 밖이라 가장 최근 데이터({latest_row['trade_date']})로 대체 표시합니다.")
+                        # 🌟 [2026-08-02] 잔고금액(rmnd_amt)의 실제 단위는 KIS 문서에 명시돼 있지 않으나,
+                        # 같은 응답의 잔고주수(rmnd_stcn)와 나눠보면 1주당 평균 단가가 KOSPI는 약 8만원,
+                        # KOSDAQ은 약 1.7만원대로 나와(둘 다 실제 시세와 맞아떨어짐) — "백만원" 단위로 추정.
+                        est_trillion = (latest_row['balance_amount'] or 0) / 1_000_000
+                        st.metric(
+                            label=f"{latest_row['trade_date']} 기준 잔고금액 (추정: 백만원 단위)",
+                            value=f"약 {est_trillion:,.1f}조원",
+                            delta=f"{latest_row['balance_change']:,.0f} 백만원"
+                        )
+                        st.caption(f"원본값 {latest_row['balance_amount']:,.0f} (백만원 추정 — 잔고주수 대비 역산, 공식 확인 전까지 참고용)")
+                        # 🌟 [2026-08-02] st.line_chart는 x축 라벨 각도를 조절할 수 없어(세로 회전 고정),
+                        # 다른 두 차트와 마찬가지로 plotly(plotly_dark 템플릿)로 교체해 라벨을 수평으로 표시.
+                        chart_df = mkt_df.set_index('trade_date')[['balance_amount']]
+                        # 🌟 [2026-08-02] 연도까지 표시하면 x축 자리를 많이 차지해서, "MM-DD"만 잘라서 표시
+                        x_labels_loan = [d[5:] if isinstance(d, str) and len(d) == 10 else str(d) for d in chart_df.index]
+                        # 🌟 [2026-08-02] Y축도 "억원" 단위로 통일(백만원 → 억원 = /100), k/M 자동축약 표기를
+                        # 막기 위해 tickformat/hovertemplate을 명시적으로 콤마 정수 포맷으로 고정.
+                        y_loan_eok = (chart_df['balance_amount'] / 100).tolist()
+                        fig_loan = go.Figure(data=[go.Scatter(
+                            x=x_labels_loan,
+                            y=y_loan_eok,
+                            mode='lines+markers',
+                            name=f'{mkt} 잔고금액(억원)',
+                            line=dict(color='#3C8181'),
+                            hovertemplate='%{x}<br>%{y:,.0f}억원<extra></extra>',
+                        )])
+                        fig_loan.update_layout(
+                            template='plotly_dark',
+                            plot_bgcolor='#11111b', paper_bgcolor='#11111b',
+                            font_color='#e0e0e0',
+                            height=180,
+                            margin=dict(l=20, r=20, t=10, b=20),
+                            xaxis=dict(tickangle=0, type='category'),
+                            yaxis=dict(title='억원', tickformat=',.0f'),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig_loan, use_container_width=True)
+
+            st.write("---")
+            st.markdown("<h5 style='color:#FFFFFF; margin-top:10px;'>📋 대차잔고 상위종목 (외/기 순매수 상위 200종목 대상)</h5>", unsafe_allow_html=True)
+            st.caption("KIS API가 대차잔고는 '상위종목 랭킹'을 한 번에 주지 않아서, 이미 이 프로젝트가 관리 중인 daily_whale_top200(외국인/기관 순매수 상위 200종목)을 대상으로 종목별 잔고를 직접 조회해 자체 순위를 매긴 표입니다. 전체 시장이 아니라 이 200종목 안에서의 순위입니다.")
+            lb_date, lb_rows = get_stock_loan_balance_ranking(limit=30, target_date=sw_target_date_param)
+            if not lb_rows:
+                if sw_target_date_param:
+                    st.info(f"💡 {sw_target_date_param} 기준 종목별 대차잔고 데이터가 없습니다. 달력에서 다른 날짜를 선택해보세요.")
+                else:
+                    st.info("💡 종목별 대차잔고 데이터가 아직 없습니다. 수집 스크립트가 최소 1회 실행된 이후 표시됩니다.")
+            else:
+                st.caption(f"{lb_date} 마감 기준 · 대차잔고 금액 상위 {len(lb_rows)}종목 (200종목 내 순위)")
+                # 🌟 [신규 2026-08-02] 다른 화면(외기 TOP100/체결 로그 등)과 동일한 "행 클릭 → 시계열 추적/AI 요약" 패턴 적용.
+                # (행 클릭 동작 라디오는 위쪽 헤더 좌측 컬럼의 sw_click_action으로 공매도 표와 공유함)
+                lb_click_action = sw_click_action
+                lb_display_df = pd.DataFrame([{
+                    "순위": int(r['rank']),
+                    "종목명": r['stock_name'],
+                    "stock_code": r.get('stock_code', ''),
+                    "현재가": r['close_price'],
+                    "등락률": r['change_rate'],
+                    "잔고주수": r['balance_shares'],
+                    "잔고금액": f"{(r.get('balance_amount') or 0) / 100:,.0f}억원",
+                } for r in lb_rows])
+
+                def _lb_style(row):
+                    styles = [''] * len(row)
+                    color = '#ff4b4b' if (row['등락률'] or 0) >= 0 else '#4B89B5'
+                    styles[row.index.get_loc('등락률')] = f'color: {color};'
+                    return styles
+
+                lb_styled = lb_display_df.style.apply(_lb_style, axis=1)
+                lb_reset_key = st.session_state.get('lb_reset_counter', 0)
+                lb_event = st.dataframe(
+                    lb_styled,
+                    column_order=["순위", "종목명", "현재가", "등락률", "잔고주수", "잔고금액"],
+                    column_config={
+                        # 🔧 [수정 2026-08-02, 2차] "small"/"medium" 프리셋은 세밀 조절이 안 돼서(스크롤바에
+                        # 마지막 컬럼이 가려지고 일부 컬럼 글자가 잘리는 문제) 픽셀 정수 폭으로 전환.
+                        # 기존 small≈80px/medium≈200px 기준으로 순위·종목명은 40% 축소, 나머지는 25% 확대.
+                        "순위": st.column_config.NumberColumn(format="%d", width=48),
+                        "종목명": st.column_config.TextColumn(width=120),
+                        "현재가": st.column_config.NumberColumn(format="%,.0f", width=100),
+                        "등락률": st.column_config.NumberColumn(format="%+.2f%%", width=100),
+                        "잔고주수": st.column_config.NumberColumn(format="%,.0f", width=100),
+                        "잔고금액": st.column_config.TextColumn(width=100),
+                    },
+                    hide_index=True,
+                    height=420,
+                    use_container_width=False,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key=f"lb_dataframe_{lb_reset_key}"
+                )
+                if lb_event and "selection" in lb_event:
+                    lb_rows_sel = lb_event["selection"]["rows"]
+                    if lb_rows_sel and lb_rows_sel[0] < len(lb_display_df):
+                        lb_sel_stock = lb_display_df.iloc[lb_rows_sel[0]]['종목명']
+                        lb_sel_code = lb_display_df.iloc[lb_rows_sel[0]]['stock_code']
+                        if lb_click_action == "💬 AI 요약 보기 (팝업)":
+                            trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                            st.session_state['dialog_trigger_id'] = trigger
+                            st.session_state['show_summary_dialog'] = {"stock": lb_sel_stock, "code": lb_sel_code, "trigger_id": trigger}
+                        else:
+                            st.session_state['pending_search'] = lb_sel_stock
+                            st.session_state['last_search_keyword'] = lb_sel_stock
+                            st.session_state['scrn_select_radio'] = "체결 로그"
+                        st.session_state['lb_reset_counter'] = lb_reset_key + 1
+                        st.rerun()
+
+            st.write("---")
+            st.markdown("<h5 style='color:#FFFFFF; margin-top:10px;'>📋 공매도 상위종목</h5>", unsafe_allow_html=True)
+            ss_date, ss_rows = get_short_sale_ranking(limit=30, target_date=sw_target_date_param)
+            if not ss_rows:
+                if sw_target_date_param:
+                    st.info(f"💡 {sw_target_date_param} 기준 공매도 상위종목 데이터가 없습니다. 달력에서 다른 날짜를 선택해보세요.")
+                else:
+                    st.info("💡 공매도 상위종목 데이터가 아직 없습니다. 수집 스크립트가 최소 1회 실행된 이후 표시됩니다.")
+            else:
+                st.caption(f"{ss_date} 마감 기준 · 공매도 거래대금 상위 {len(ss_rows)}종목")
+                # 🌟 [신규 2026-08-02] 대차잔고 표와 동일한 "행 클릭 → 시계열 추적/AI 요약" 패턴 적용.
+                # 맨 오른쪽 '거래대금비중' 컬럼은 문자열(object dtype)로 저장해 왼쪽 정렬되도록 함.
+                # (행 클릭 동작 라디오는 위쪽 헤더 좌측 컬럼의 sw_click_action으로 대차잔고 표와 공유함)
+                ss_click_action = sw_click_action
+                ss_display_df = pd.DataFrame([{
+                    "순위": int(r['rank']),
+                    "종목명": r['stock_name'],
+                    "stock_code": r.get('stock_code', ''),
+                    "현재가": r['close_price'],
+                    "등락률": r['change_rate'],
+                    "공매도체결량": r['short_sale_volume'],
+                    "거래량비중": r['short_sale_volume_ratio'],
+                    "공매도거래대금": r['short_sale_amount'],
+                    "거래대금비중": f"({r['short_sale_amount_ratio']:.2f}%)",
+                } for r in ss_rows])
+
+                def _ss_style(row):
+                    styles = [''] * len(row)
+                    color = '#ff4b4b' if (row['등락률'] or 0) >= 0 else '#4B89B5'
+                    styles[row.index.get_loc('등락률')] = f'color: {color};'
+                    styles[row.index.get_loc('거래대금비중')] = 'color: #FFA500;'
+                    return styles
+
+                ss_styled = ss_display_df.style.apply(_ss_style, axis=1)
+                ss_reset_key = st.session_state.get('ss_reset_counter', 0)
+                ss_event = st.dataframe(
+                    ss_styled,
+                    column_order=["순위", "종목명", "현재가", "등락률", "공매도체결량", "거래량비중", "공매도거래대금", "거래대금비중"],
+                    column_config={
+                        # 🔧 [수정 2026-08-02, 3차] 헤더 라벨 글자 수가 5~7자로 긴 컬럼(공매도체결량/거래량비중/
+                        # 공매도거래대금/거래대금비중)은 100px로는 헤더 텍스트 자체가 잘려서(...) 표시됨 —
+                        # 헤더 길이에 맞춰 130~150px로 넉넉하게 재조정.
+                        "순위": st.column_config.NumberColumn(format="%d", width=48),
+                        "종목명": st.column_config.TextColumn(width=120),
+                        "현재가": st.column_config.NumberColumn(format="%,.0f", width=100),
+                        "등락률": st.column_config.NumberColumn(format="%+.2f%%", width=100),
+                        "공매도체결량": st.column_config.NumberColumn(format="%,.0f주", width=140),
+                        "거래량비중": st.column_config.NumberColumn(format="%.2f%%", width=130),
+                        "공매도거래대금": st.column_config.NumberColumn(format="%,.0f", width=150),
+                        "거래대금비중": st.column_config.TextColumn(width=140),
+                    },
+                    hide_index=True,
+                    height=420,
+                    use_container_width=False,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key=f"ss_dataframe_{ss_reset_key}"
+                )
+                if ss_event and "selection" in ss_event:
+                    ss_rows_sel = ss_event["selection"]["rows"]
+                    if ss_rows_sel and ss_rows_sel[0] < len(ss_display_df):
+                        ss_sel_stock = ss_display_df.iloc[ss_rows_sel[0]]['종목명']
+                        ss_sel_code = ss_display_df.iloc[ss_rows_sel[0]]['stock_code']
+                        if ss_click_action == "💬 AI 요약 보기 (팝업)":
+                            trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                            st.session_state['dialog_trigger_id'] = trigger
+                            st.session_state['show_summary_dialog'] = {"stock": ss_sel_stock, "code": ss_sel_code, "trigger_id": trigger}
+                        else:
+                            st.session_state['pending_search'] = ss_sel_stock
+                            st.session_state['last_search_keyword'] = ss_sel_stock
+                            st.session_state['scrn_select_radio'] = "체결 로그"
+                        st.session_state['ss_reset_counter'] = ss_reset_key + 1
+                        st.rerun()
+
+        elif scrn_select == "신용잔고·프로그램매매 추이":
+            # 🌟 [신규 2026-08-01] 신용잔고 상위 + 프로그램매매 동향을 함께 보여주는 화면.
+            # "진짜 선행지표 찾기" 연구에도 데이터로 활용 가능. ⚠️ 이 화면도 실제 KIS API 응답으로
+            # 검증되지 못한 상태 — 데이터가 비어 보이거나 이상하면 수집 스크립트를 먼저 확인해야 함.
+            # 📅 [수정 2026-08-02] "공대치" 화면과 동일한 이유로, 날짜 계산/세션state 초기화를 컬럼
+            # 블록보다 앞으로 옮김 — 좌측 컬럼 안에서도 "조회 날짜" 안내 캡션을 표시하기 위해.
+            now_kst = datetime.utcnow() + timedelta(hours=9)
+            if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
+                target_dt = now_kst - timedelta(days=1)
+            else:
+                target_dt = now_kst
+            target_dt = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
+            cp_today_kor = get_latest_market_open_date(target_dt)
+            cp_min_date = cp_today_kor - timedelta(days=90)
+
+            import calendar
+            from st_click_detector import click_detector
+
+            if 'cp_cal_year' not in st.session_state:
+                st.session_state.cp_cal_year = cp_today_kor.year
+                st.session_state.cp_cal_month = cp_today_kor.month
+                st.session_state.cp_selected_date = cp_today_kor
+                st.session_state.cp_cal_reset = 0
+                # 🔧 [수정 2026-08-02] "공대치" 화면과 동일한 이유로 터치 플래그 도입 — 신용잔고/
+                # 프로그램매매 각각의 실제 최신 수집일이 달력의 "이론상 최신 거래일"과 어긋날 수 있어,
+                # 사용자가 실제로 날짜를 클릭하기 전까지는 target_date=None으로 넘겨 기존 동작 유지.
+                st.session_state.cp_date_touched = False
+
+            col_cp_left, col_cp_right = st.columns([1.8, 1])
+            with col_cp_left:
+                st.markdown("<h4 style='color:#4C4686; border-left: 4px solid #4C4686; padding-left: 10px;'>💳 신용잔고·프로그램매매 추이</h4>", unsafe_allow_html=True)
+                st.caption("신용(융자/대주)잔고가 몰린 종목과, 오늘 프로그램매매가 어느 투자자 주체로 몰렸는지를 함께 보여주는 화면입니다.")
+                # 🔧 [수정 2026-08-02] "외기 TOP100" 화면과 동일하게, 행 클릭 동작 선택 라디오를 달력과
+                # 같은 줄(왼쪽 컬럼)에 배치 — 좌측 컬럼(제목+설명만)이 우측 달력보다 훨씬 짧아서 달력
+                # 아래에 큰 빈 공간이 남아 보이던 문제를 줄이기 위함(왼쪽 컬럼 내용을 늘려 높이를 맞춤).
+                cb_click_action = st.radio(
+                    "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:",
+                    ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"],
+                    horizontal=True,
+                    key="cb_click_action"
+                )
+                # 🔧 [수정 2026-08-02] 날짜 상태 안내 캡션도 좌측 컬럼 안으로 이동 — "공대치"와 동일한
+                # 이유(좌측 컬럼 높이를 늘려 우측 달력과의 빈 공간을 줄이기 위함).
+                if st.session_state.get('cp_date_touched', False):
+                    st.caption(f"📅 조회 날짜: {st.session_state.cp_selected_date.strftime('%Y-%m-%d')}" + (" (최신 거래일)" if st.session_state.cp_selected_date == cp_today_kor else " (과거 조회)"))
+                else:
+                    st.caption("📅 각 항목의 최신 수집일 기준으로 표시 중입니다 (달력에서 과거 날짜를 선택할 수 있습니다)")
+
+            with col_cp_right:
+                # 📅 [신규 2026-08-02] "공대치" 화면과 동일한 커스텀 HTML 달력 연동.
+                # 신용잔고 상위종목/프로그램매매 투자자별 당일 동향은 선택 날짜 기준으로 조회.
+                # (아래 프로그램매매 시장 일별 순매수 추이 line chart는 이미 여러 날짜를 보여주는
+                # 추세 차트라 달력 미연동 — 그대로 유지.)
+                cp_cal_year = st.session_state.cp_cal_year
+                cp_cal_month = st.session_state.cp_cal_month
+                cp_selected_date = st.session_state.cp_selected_date
+
+                # 🔧 [수정 2026-08-02] "공대치"와 동일한 이유로 달력을 소폭 컴팩트하게 렌더링(바깥
+                # padding/줄간격/셀 padding/폰트 크기 축소) — 클릭 가능 영역/가독성은 그대로 유지.
+                cp_html_cal = f"""
+                <div style="max-width: 230px; margin-left: auto; background: #1a1c24; padding: 6px; border-radius: 10px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; color: white;">
+                        <a href='#' id='cp_cal_prev' style='color: #888; text-decoration: none; padding: 2px 8px; background: #2a2d3a; border-radius: 4px; font-weight: bold; font-size: 12px;'>&lt;</a>
+                        <strong style="font-size: 14px;">{cp_cal_year}년 {cp_cal_month}월</strong>
+                        <a href='#' id='cp_cal_next' style='color: #888; text-decoration: none; padding: 2px 8px; background: #2a2d3a; border-radius: 4px; font-weight: bold; font-size: 12px;'>&gt;</a>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 2px; font-size: 10px; font-weight: bold; margin-bottom: 3px; line-height: 1.2;">
+                        <div style="color: #ff4b4b;">일</div>
+                        <div style="color: #aaa;">월</div>
+                        <div style="color: #aaa;">화</div>
+                        <div style="color: #aaa;">수</div>
+                        <div style="color: #aaa;">목</div>
+                        <div style="color: #aaa;">금</div>
+                        <div style="color: #4B89B5;">토</div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; gap: 2px; font-size: 10px; line-height: 1.2;">
+                """
+
+                cp_c = calendar.Calendar(firstweekday=6)
+                for week in cp_c.monthdatescalendar(cp_cal_year, cp_cal_month):
+                    for day in week:
+                        if day.month == cp_cal_month:
+                            bg_color = "transparent"
+                            color = "white"
+                            border = "1px solid transparent"
+
+                            if day == cp_selected_date:
+                                bg_color = "#4C4686"
+                                color = "white"
+                            elif day.weekday() == 6:
+                                color = "#ff4b4b"
+                            elif day.weekday() == 5:
+                                color = "#4B89B5"
+
+                            if day == cp_today_kor and day != cp_selected_date:
+                                border = "1px solid #4C4686"
+
+                            if day > cp_today_kor or day < cp_min_date:
+                                cp_html_cal += f"<div style='padding: 3px; color: #444; border: {border}; border-radius: 4px;'>{day.day}</div>"
+                            else:
+                                cp_html_cal += f"<a href='#' id='cp_cal_date_{day.strftime('%Y-%m-%d')}' style='padding: 3px; background: {bg_color}; color: {color}; border: {border}; text-decoration: none; border-radius: 4px; display: block; font-weight: bold;'>{day.day}</a>"
+                        else:
+                            cp_html_cal += "<div></div>"
+
+                cp_html_cal += "</div></div>"
+
+                cp_clicked = click_detector(cp_html_cal, key=f"cp_cal_ui_{st.session_state.cp_cal_reset}")
+
+            if cp_clicked:
+                if cp_clicked == 'cp_cal_prev':
+                    if st.session_state.cp_cal_month == 1:
+                        st.session_state.cp_cal_month = 12
+                        st.session_state.cp_cal_year -= 1
+                    else:
+                        st.session_state.cp_cal_month -= 1
+                    st.session_state.cp_cal_reset += 1
+                    st.rerun()
+                elif cp_clicked == 'cp_cal_next':
+                    if st.session_state.cp_cal_month == 12:
+                        st.session_state.cp_cal_month = 1
+                        st.session_state.cp_cal_year += 1
+                    else:
+                        st.session_state.cp_cal_month += 1
+                    st.session_state.cp_cal_reset += 1
+                    st.rerun()
+                elif cp_clicked.startswith('cp_cal_date_'):
+                    date_str = cp_clicked.split('cp_cal_date_')[1]
+                    st.session_state.cp_selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    st.session_state.cp_date_touched = True
+                    st.session_state.cp_cal_reset += 1
+                    st.rerun()
+
+            cp_selected_date = st.session_state.cp_selected_date
+            cp_sel_date_str = cp_selected_date.strftime("%Y-%m-%d")
+            # (날짜 상태 안내 캡션은 위쪽 헤더 좌측 컬럼으로 옮겨서 여기서는 더 이상 출력하지 않음.)
+            cp_target_date_param = cp_sel_date_str if st.session_state.get('cp_date_touched', False) else None
+            st.write("---")
+
+            st.markdown("<h5 style='color:#FFFFFF; margin-top:10px;'>📋 신용잔고 상위종목 (융자잔고 금액 기준)</h5>", unsafe_allow_html=True)
+            cb_date, cb_rows = get_credit_balance_ranking(limit=30, target_date=cp_target_date_param)
+            if not cb_rows:
+                if cp_target_date_param:
+                    st.info(f"💡 {cp_target_date_param} 기준 신용잔고 상위종목 데이터가 없습니다. 달력에서 다른 날짜를 선택해보세요.")
+                else:
+                    st.info("💡 신용잔고 상위종목 데이터가 아직 없습니다. 수집 스크립트가 최소 1회 실행된 이후 표시됩니다.")
+            else:
+                st.caption(f"{cb_date} 마감 기준 · 융자잔고 금액 상위 {len(cb_rows)}종목")
+                # 🌟 [신규 2026-08-02] 대차잔고/공매도 표와 동일한 "행 클릭 → 시계열 추적/AI 요약" 패턴 적용.
+                # 융자잔고비율/대주잔고비율은 문자열(object dtype)로 저장해 왼쪽 정렬 + 주황색 표시.
+                # (cb_click_action 라디오는 위쪽 헤더 좌측 컬럼으로 이동했음 — 여기서는 그 값을 그대로 사용)
+                cb_display_df = pd.DataFrame([{
+                    "순위": int(r['rank']),
+                    "종목명": r['stock_name'],
+                    "stock_code": r.get('stock_code', ''),
+                    "현재가": r['close_price'],
+                    "등락률": r['change_rate'],
+                    "융자잔고금액": r['loan_balance_amount'],
+                    "융자잔고비율": f"({r['loan_balance_ratio']:.2f}%)",
+                    "대주잔고금액": r['short_loan_balance_amount'],
+                    "대주잔고비율": f"({r['short_loan_balance_ratio']:.2f}%)",
+                } for r in cb_rows])
+
+                def _cb_style(row):
+                    styles = [''] * len(row)
+                    color = '#ff4b4b' if (row['등락률'] or 0) >= 0 else '#4B89B5'
+                    styles[row.index.get_loc('등락률')] = f'color: {color};'
+                    styles[row.index.get_loc('융자잔고비율')] = 'color: #FFA500;'
+                    styles[row.index.get_loc('대주잔고비율')] = 'color: #FFA500;'
+                    return styles
+
+                cb_styled = cb_display_df.style.apply(_cb_style, axis=1)
+                cb_reset_key = st.session_state.get('cb_reset_counter', 0)
+                cb_event = st.dataframe(
+                    cb_styled,
+                    column_order=["순위", "종목명", "현재가", "등락률", "융자잔고금액", "융자잔고비율", "대주잔고금액", "대주잔고비율"],
+                    column_config={
+                        # 🔧 [수정 2026-08-02, 3차] 헤더 라벨이 6자로 긴 컬럼(융자잔고금액/융자잔고비율/
+                        # 대주잔고금액/대주잔고비율)은 100px로는 헤더 텍스트가 잘려서(...) 표시됨 —
+                        # 140px로 넉넉하게 재조정.
+                        "순위": st.column_config.NumberColumn(format="%d", width=48),
+                        "종목명": st.column_config.TextColumn(width=120),
+                        "현재가": st.column_config.NumberColumn(format="%,.0f", width=100),
+                        "등락률": st.column_config.NumberColumn(format="%+.2f%%", width=100),
+                        "융자잔고금액": st.column_config.NumberColumn(format="%,.0f", width=140),
+                        "융자잔고비율": st.column_config.TextColumn(width=140),
+                        "대주잔고금액": st.column_config.NumberColumn(format="%,.0f", width=140),
+                        "대주잔고비율": st.column_config.TextColumn(width=140),
+                    },
+                    hide_index=True,
+                    height=420,
+                    use_container_width=False,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key=f"cb_dataframe_{cb_reset_key}"
+                )
+                if cb_event and "selection" in cb_event:
+                    cb_rows_sel = cb_event["selection"]["rows"]
+                    if cb_rows_sel and cb_rows_sel[0] < len(cb_display_df):
+                        cb_sel_stock = cb_display_df.iloc[cb_rows_sel[0]]['종목명']
+                        cb_sel_code = cb_display_df.iloc[cb_rows_sel[0]]['stock_code']
+                        if cb_click_action == "💬 AI 요약 보기 (팝업)":
+                            trigger = st.session_state.get('dialog_trigger_id', 0) + 1
+                            st.session_state['dialog_trigger_id'] = trigger
+                            st.session_state['show_summary_dialog'] = {"stock": cb_sel_stock, "code": cb_sel_code, "trigger_id": trigger}
+                        else:
+                            st.session_state['pending_search'] = cb_sel_stock
+                            st.session_state['last_search_keyword'] = cb_sel_stock
+                            st.session_state['scrn_select_radio'] = "체결 로그"
+                        st.session_state['cb_reset_counter'] = cb_reset_key + 1
+                        st.rerun()
+
+            st.write("---")
+            st.markdown("<h5 style='color:#FFFFFF; margin-top:10px;'>🤖 프로그램매매 투자자별 당일 동향</h5>", unsafe_allow_html=True)
+            pt_date, pt_rows = get_program_trade_investor_today(target_date=cp_target_date_param)
+            if not pt_rows:
+                if cp_target_date_param:
+                    st.info(f"💡 {cp_target_date_param} 기준 프로그램매매 투자자별 동향 데이터가 없습니다. 달력에서 다른 날짜를 선택해보세요.")
+                else:
+                    st.info("💡 프로그램매매 투자자별 동향 데이터가 아직 없습니다. 수집 스크립트가 최소 1회 실행된 이후 표시됩니다.")
+            else:
+                st.caption(f"{pt_date} 기준 · 순매수대금(억원) 큰 순")
+                # 🌟 [2026-08-02] 사용자가 KIS 공식 안내를 확인해줌: '순매수대금'류 필드는 백만원 단위 정수로
+                # 내려옴(예: API값 150 → 1억5,000만원, 12450 → 124억5,000만원) → 억원 = 백만원값 / 100.
+                pt_chart_df = pd.DataFrame(pt_rows).set_index('investor_name')[['net_amount']].rename(columns={'net_amount': '순매수대금'})
+                pt_chart_df['순매수대금'] = pt_chart_df['순매수대금'] / 100
+                # 🌟 [2026-08-02] st.bar_chart는 x축 라벨 각도를 조절할 수 없어(세로로만 표시),
+                # x축 라벨을 수평으로 보기 위해 이미 프로젝트에서 검증된 plotly(plotly_dark 템플릿)로 교체.
+                fig_pt = go.Figure(data=[go.Bar(
+                    x=pt_chart_df.index.tolist(),
+                    y=pt_chart_df['순매수대금'].tolist(),
+                    marker_color='#4C8BF5',
+                    hovertemplate='%{x}<br>%{y:,.0f}억원<extra></extra>',
+                )])
+                fig_pt.update_layout(
+                    template='plotly_dark',
+                    plot_bgcolor='#11111b', paper_bgcolor='#11111b',
+                    font_color='#e0e0e0',
+                    height=260,
+                    margin=dict(l=20, r=20, t=10, b=20),
+                    xaxis=dict(tickangle=0),
+                    # 🌟 [2026-08-02] tickformat 명시로 plotly 기본 k/M 자동축약(예: 40k) 방지 — 콤마 정수로 고정
+                    yaxis=dict(title='억원', tickformat=',.0f'),
+                )
+                st.plotly_chart(fig_pt, use_container_width=True)
+
+            st.write("---")
+            st.markdown("<h5 style='color:#FFFFFF; margin-top:10px;'>📈 프로그램매매 시장 일별 순매수 추이</h5>", unsafe_allow_html=True)
+            prog_trend_df = get_program_trade_market_trend(days=20)
+            if prog_trend_df.empty:
+                st.info("💡 프로그램매매 시장 일별 추이 데이터가 아직 없습니다. 수집 스크립트가 최소 1회 실행된 이후 표시됩니다.")
+            else:
+                # ⚠️ 아직 하루치 데이터만 쌓인 시계열이라 선이 아닌 점 하나로 보일 수 있음 —
+                # 매일 자동 수집이 쌓일수록 추세선다운 모습을 갖추게 됨.
+                # 🌟 [2026-08-02] 사용자가 KIS 공식 안내를 확인해줌: 이 값도 '매수대금-매도대금'으로 만든
+                # 순매수대금류 필드라 백만원 단위 정수 — 억원 = 백만원값 / 100.
+                pivot_df = prog_trend_df.pivot_table(index='trade_date', columns='market', values='net_amount', aggfunc='last') / 100
+                fig_prog = go.Figure()
+                # 🌟 [2026-08-02] 연도까지 표시하면 x축 자리를 많이 차지해서, "MM-DD"만 잘라서 표시
+                x_labels_prog = [d[5:] if isinstance(d, str) and len(d) == 10 else str(d) for d in pivot_df.index]
+                for col in pivot_df.columns:
+                    fig_prog.add_trace(go.Scatter(
+                        x=x_labels_prog,
+                        y=pivot_df[col].tolist(),
+                        mode='lines+markers',
+                        name=col,
+                        hovertemplate='%{x}<br>%{y:,.0f}억원<extra>' + str(col) + '</extra>',
+                    ))
+                fig_prog.update_layout(
+                    template='plotly_dark',
+                    plot_bgcolor='#11111b', paper_bgcolor='#11111b',
+                    font_color='#e0e0e0',
+                    height=220,
+                    margin=dict(l=20, r=20, t=10, b=20),
+                    xaxis=dict(tickangle=0, type='category'),
+                    # 🌟 [2026-08-02] tickformat 명시로 plotly 기본 k/M 자동축약 방지 — 콤마 정수로 고정
+                    yaxis=dict(title='억원', tickformat=',.0f'),
+                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
+                )
+                st.plotly_chart(fig_prog, use_container_width=True)
+                st.caption("단위: 억원 (KIS 안내 기준 백만원 단위 응답을 억원으로 환산)")
+
         elif (scrn_select == "체결 로그"):
             # --- [하단 패널: 실시간 로그] ---
             filtered_df = main_df.copy()
@@ -6730,40 +8031,93 @@ if choice == "🏠 홈화면":
                 # 🔧 [수정 2026-08-01] 사용자 요청: 카드 3개 폭을 각각 30%씩 줄이고, 남는 공간(전체의
                 # 약 23%)에 미국 테마 등락률 위젯을 배치. 기존 3등분(각 1칸)에서 각 칸을 0.7로 줄이면
                 # (1 - 0.7 = 0.3, 3칸 합산 0.9만큼 여유가 생김) 그 0.9를 새 위젯 칸에 배정.
-                hot_cols = st.columns([0.7, 0.7, 0.7, 0.9])
+                #
+                # 🔧 [수정 2026-08-01, 2번째] 증시 시황 버튼 4개를 처음엔 카드+위젯 블록과 별개의
+                # 새 st.columns(4) 행으로 추가했더니, 버튼 열이 전체 폭(카드 3개+위젯)에 맞춰 4등분되어
+                # 버튼 오른쪽 끝이 위젯 오른쪽 끝까지 밀려나고, 위젯 박스가 카드보다 세로로 더 길어서
+                # 버튼 줄과 위젯 하단이 안 맞는 문제를 사용자가 캡처로 지적함. → "카드 3개 + 버튼 4개"를
+                # 하나의 왼쪽 칸(전체의 2.1/3.0 = 70%)으로 묶고, 위젯은 오른쪽 칸(0.9/3.0 = 30%)에 두는
+                # 중첩 컬럼 구조로 변경 — 이러면 버튼 줄 폭이 구조적으로 항상 "카드 3개 폭"과 정확히
+                # 일치함(3번째 카드 오른쪽 끝 = 버튼 4개 블록 오른쪽 끝).
+                #
+                # 🔧 [수정 2026-08-01, 3번째] 처음엔 CSS flex(justify-content:space-between)로 버튼
+                # 행을 자동으로 칸 맨 아래까지 밀어보려 했으나(:has()로 컬럼 div를 조상 선택), 배포 후
+                # 스크린샷 확인 결과 이 프로젝트의 Streamlit 버전에서는 안 먹혀서 버튼이 카드 바로
+                # 아래에 거의 붙어버림(카드-위젯 높이 차이만큼 위젯 아래쪽에 여백만 남음). → 불확실한
+                # CSS 트릭 대신, 카드와 버튼 사이에 고정 높이 여백(spacer)을 직접 넣는 훨씬 단순하고
+                # 확실한 방법으로 교체. 여백 높이는 위젯 박스 실측 높이(헤더+8행+패딩 ≈ 200px대)에서
+                # 카드 높이(110px)와 버튼 행 높이(~40px)를 뺀 값으로 대략 60px 근사(라이브 렌더링을
+                # 볼 수 없는 세션이라 근사치 — 실제 화면 보고 필요하면 아래 spacer_px 값만 조정하면 됨).
+                outer_rt_cols = st.columns([2.1, 0.9])
 
-                for idx in range(3):
-                    with hot_cols[idx]:
-                        if idx < len(hot_signals):
-                            signal = hot_signals[idx]
-                            score = signal['score']
-                            if score >= 95:
-                                bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #332700 0%, #1a1400 100%)", "#FFD700", "#FFD700", "rgba(255, 215, 0, 0.4)"
-                            elif score >= 90:
-                                bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #2b1111 0%, #1a0a0a 100%)", "#ff4b4b", "#ff4b4b", "rgba(255, 75, 75, 0.3)"
-                            elif score >= 70:
-                                bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #2b1d11 0%, #1a110a 100%)", "#ff9900", "#ff9900", "rgba(255, 153, 0, 0.3)"
-                            else: # 30 이상 (30 미만은 이미 위에서 필터링됨)
-                                bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #261f18 0%, #1a1510 100%)", "#c28e5c", "#c28e5c", "rgba(194, 142, 92, 0.2)"
+                with outer_rt_cols[0]:
+                    hot_cols = st.columns(3)
 
-                            st.markdown(f"""
-                            <div style="background: {bg_grad}; border: 1px solid {border_col}; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 0 15px {shadow_col};">
-                                <div style="font-size: 18px; font-weight: bold; color: #ffffff;">{signal['name']}</div>
-                                <div style="font-size: 15px; color: {text_col}; font-weight: bold; margin-top: 8px;">{signal['icon']} 파워 스코어: {score:.1f}점</div>
-                                <div style="font-size: 13px; color: #a0a0a0; margin-top: 5px;">순매수 강도: {int(signal['net_buy'] // 1000000):,}백만원 ({int(signal['buy_count'])}회 고래 매집)</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            # 30점 이상 종목이 부족할 때 보여주는 채도 낮은 녹색 빈 슬롯 (자존심 유지용)
-                            st.markdown(f"""
-                            <div style="background: linear-gradient(135deg, #0a150e 0%, #050a06 100%); border: 1px dashed #2a4a35; border-radius: 8px; padding: 15px; text-align: center; box-shadow: none; opacity: 0.8;">
-                                <div style="font-size: 18px; font-weight: bold; color: #5a8a6a;">탐지 대기 중...</div>
-                                <div style="font-size: 15px; color: #2a4a35; font-weight: bold; margin-top: 8px;">🌱 파워 스코어: - </div>
-                                <div style="font-size: 13px; color: #4a5a4a; margin-top: 5px;">현재 폭주 종목 없음</div>
-                            </div>
-                            """, unsafe_allow_html=True)
+                    for idx in range(3):
+                        with hot_cols[idx]:
+                            if idx < len(hot_signals):
+                                signal = hot_signals[idx]
+                                score = signal['score']
+                                if score >= 95:
+                                    bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #332700 0%, #1a1400 100%)", "#FFD700", "#FFD700", "rgba(255, 215, 0, 0.4)"
+                                elif score >= 90:
+                                    bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #2b1111 0%, #1a0a0a 100%)", "#ff4b4b", "#ff4b4b", "rgba(255, 75, 75, 0.3)"
+                                elif score >= 70:
+                                    bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #2b1d11 0%, #1a110a 100%)", "#ff9900", "#ff9900", "rgba(255, 153, 0, 0.3)"
+                                else: # 30 이상 (30 미만은 이미 위에서 필터링됨)
+                                    bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #261f18 0%, #1a1510 100%)", "#c28e5c", "#c28e5c", "rgba(194, 142, 92, 0.2)"
 
-                # 🇺🇸 [신규 2026-08-01] 남는 4번째 칸에 미국 테마 등락률 위젯 배치.
+                                st.markdown(f"""
+                                <div style="background: {bg_grad}; border: 1px solid {border_col}; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 0 15px {shadow_col};">
+                                    <div style="font-size: 18px; font-weight: bold; color: #ffffff;">{signal['name']}</div>
+                                    <div style="font-size: 15px; color: {text_col}; font-weight: bold; margin-top: 8px;">{signal['icon']} 파워 스코어: {score:.1f}점</div>
+                                    <div style="font-size: 13px; color: #a0a0a0; margin-top: 5px;">순매수 강도: {int(signal['net_buy'] // 1000000):,}백만원 ({int(signal['buy_count'])}회 고래 매집)</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            else:
+                                # 30점 이상 종목이 부족할 때 보여주는 채도 낮은 녹색 빈 슬롯 (자존심 유지용)
+                                st.markdown(f"""
+                                <div style="background: linear-gradient(135deg, #0a150e 0%, #050a06 100%); border: 1px dashed #2a4a35; border-radius: 8px; padding: 15px; text-align: center; box-shadow: none; opacity: 0.8;">
+                                    <div style="font-size: 18px; font-weight: bold; color: #5a8a6a;">탐지 대기 중...</div>
+                                    <div style="font-size: 15px; color: #2a4a35; font-weight: bold; margin-top: 8px;">🌱 파워 스코어: - </div>
+                                    <div style="font-size: 13px; color: #4a5a4a; margin-top: 5px;">현재 폭주 종목 없음</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                    # 🌟 [신규 2026-08-01] 국내/미국/일본/중국 "증시 시황" AI 요약 버튼 4개.
+                    # 클릭하면 show_market_briefing_dialog 팝업이 뜨고, 그 안에서 지수 시세 기반 AI 요약을
+                    # 보여줌(10분 캐시, Gemini 단일 모델 — 상세 설계는 함수 정의부 주석 참고).
+                    # 버튼 색상은 사용자 요청대로 국가별로 다르게(빨/주/노/초), 기존 사이드바 버튼과 동일한
+                    # CSS 클래스(btn-style-red/orange/yellow/green)를 그대로 재사용해 새 CSS 없이 통일감 유지.
+                    # 🔧 [수정 2026-08-01, 2번째] 이 버튼 행을 카드와 같은 outer_rt_cols[0] 칸 안에 둬서
+                    # 버튼 블록 폭이 항상 "카드 3개 폭"과 정확히 일치하게 함.
+                    # 🔧 [수정 2026-08-01, 3번째] 고정 높이 spacer로 버튼 행을 아래로 밀어 오른쪽
+                    # 위젯 박스 하단과 눈대중으로 맞춤 — 상세 배경은 위 "3번째" 주석 참고.
+                    # 🔧 [수정 2026-08-01, 4번째] 60px로는 부족하다는 사용자 스크린샷 피드백 반영 —
+                    # 30px 추가해서 90px로 조정.
+                    # 🔧 [수정 2026-08-01, 5번째] 90px는 살짝 과했다는 피드백 — 5px 줄여서 85px로 조정.
+                    spacer_px = 85
+                    st.markdown(f'<div style="height:{spacer_px}px;"></div>', unsafe_allow_html=True)
+                    market_btn_cols = st.columns(4)
+                    market_btn_defs = [
+                        ("국내", "btn-style-red", "btn_market_kr"),
+                        ("미국", "btn-style-orange", "btn_market_us"),
+                        ("일본", "btn-style-yellow", "btn_market_jp"),
+                        ("중국", "btn-style-green", "btn_market_cn"),
+                    ]
+                    for m_col, (m_label, m_cls, m_key) in zip(market_btn_cols, market_btn_defs):
+                        with m_col:
+                            st.markdown(f'<div class="{m_cls}"></div>', unsafe_allow_html=True)
+                            if st.button(f"{m_label} 증시 시황", key=m_key, use_container_width=True):
+                                trigger_market = st.session_state.get('dialog_trigger_id', 0) + 1
+                                st.session_state['dialog_trigger_id'] = trigger_market
+                                st.session_state['show_market_briefing_dialog'] = {
+                                    "market": m_label,
+                                    "trigger_id": trigger_market
+                                }
+                                st.rerun()
+
+                # 🇺🇸 [신규 2026-08-01] 오른쪽 칸(outer_rt_cols[1])에 미국 테마 등락률 위젯 배치.
                 # us_theme_performance 테이블(FindingWhale.py가 매일 자동 수집, 국내 장 휴장일과 무관)에서
                 # 최신 거래일 기준 테마 등락률을 뽑아서 컴팩트하게 보여줌.
                 # 🔧 [수정 2026-07-31, 4번째] 사용자 피드백 반영: "상승 Top7/하락 Top7"으로 나누던 방식은
@@ -6772,39 +8126,18 @@ if choice == "🏠 홈화면":
                 # 나눔: 전체 테마를 값 큰 순서(내림차순)로 세운 뒤 앞쪽 8개는 좌측, 나머지는 우측 —
                 # 어떤 테마도 빠지지 않음. 색상은 좌/우 소속과 무관하게 각 항목의 실제 부호로 판단
                 # (_us_row_html, 유지). 항목이 하나 더 늘어난 만큼 박스 높이도 아래로 살짝 키움.
-                with hot_cols[3]:
+                with outer_rt_cols[1]:
+                    # 🔧 [수정 2026-08-01] 위젯 HTML 생성 로직을 render_us_theme_widget_html()로 공용화
+                    # (아래 '테마킹' 화면에서도 동일 위젯을 재사용하기 위함). 동작은 이전과 동일함.
                     us_latest_date, us_left_items, us_right_items = get_us_theme_top_movers(left_count=8)
-                    if us_latest_date:
-                        def _us_row_html(item):
-                            val = item['pct_change']
-                            if val >= 0:
-                                color, arrow = "#ff4b4b", "▲"
-                            else:
-                                color, arrow = "#4B89B5", "▼"
-                            return f"<div style='display:flex; justify-content:space-between; gap:6px; font-size:11px; color:{color}; padding:2px 0;'><span>{arrow} {item['theme_name']}</span><span>{val:+.2f}%</span></div>"
+                    st.markdown(render_us_theme_widget_html(us_latest_date, us_left_items, us_right_items), unsafe_allow_html=True)
 
-                        us_left_html = "".join(_us_row_html(g) for g in us_left_items)
-                        us_right_html = "".join(_us_row_html(l) for l in us_right_items)
-                        us_widget_html = (
-                            "<div style='background: linear-gradient(135deg, #12151c 0%, #05070a 100%); border: 1px solid #333a45; border-radius: 8px; padding: 12px 12px 20px 12px; height: 100%;'>"
-                            "<div style='display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;'>"
-                            "<div style='font-size:13px; font-weight:bold; color:#e0e0e0;'>미국 테마 등락률</div>"
-                            f"<div style='font-size:15px; color:#888888;'>{us_latest_date} 마감 기준</div>"
-                            "</div>"
-                            "<div style='display:flex; gap:10px;'>"
-                            f"<div style='flex:1; min-width:0;'>{us_left_html}</div>"
-                            f"<div style='flex:1; min-width:0; border-left:1px solid #333a45; padding-left:10px;'>{us_right_html}</div>"
-                            "</div>"
-                            "</div>"
-                        )
-                        st.markdown(us_widget_html, unsafe_allow_html=True)
-                    else:
-                        st.markdown(
-                            "<div style='background: linear-gradient(135deg, #12151c 0%, #05070a 100%); border: 1px dashed #333a45; border-radius: 8px; padding: 12px; text-align:center; opacity:0.7; height: 100%;'>"
-                            "<div style='font-size:12px; color:#888888;'>미국 테마 데이터 대기 중...</div>"
-                            "</div>",
-                            unsafe_allow_html=True
-                        )
+                # 트리거 체크는 함수 정의 위치(render_ai_summary_box/get_us_theme_top_movers보다 훨씬
+                # 앞)가 아니라 반드시 여기(두 함수 정의 이후 지점)에 둬야 함 — 상세 이유는 함수
+                # 정의부의 "🔧 [주의 2026-08-01]" 주석 참고.
+                if 'show_market_briefing_dialog' in st.session_state:
+                    data_m = st.session_state['show_market_briefing_dialog']
+                    show_market_briefing_dialog(data_m['market'], data_m.get('trigger_id', 0))
 
                 st.write("---")
 
