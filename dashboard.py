@@ -702,13 +702,13 @@ def get_gemini_market_briefing(market_type, index_data_text, latest_date_str="")
     return summary
 
 
-@st.dialog("🌏 증시 시황 요약")
+@st.dialog("🌏 증시 시황 요약", dismissible=False)
 def show_market_briefing_dialog(market_type, trigger_id=0):
-    # X 닫기 버튼 제거 (show_summary_dialog와 동일한 이유 — Streamlit #8507)
-    st.markdown(
-        '<style>div[aria-label="dialog"]>button[aria-label="Close"] { display: none !important; }</style>',
-        unsafe_allow_html=True
-    )
+    # 🔧 [수정 2026-08-03] 예전엔 CSS로 X 버튼을 숨겼는데(`button[aria-label="Close"]` 셀렉터),
+    # Streamlit이 이후 버전에서 st.dialog에 공식 `dismissible` 파라미터를 추가하면서 다이얼로그
+    # 내부 DOM 구조가 바뀌어 그 CSS 셀렉터가 더 이상 안 먹혀서 X 버튼이 다시 보이는 문제가 있었음
+    # (사용자가 스크린샷으로 재확인). CSS 땜빵 대신 공식 파라미터 `dismissible=False`로 교체 —
+    # 이러면 X 버튼 자체가 없어지고, 바깥 클릭/ESC로도 안 닫혀서 "닫기 (확인)" 버튼으로만 닫힘.
 
     st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 4px;'>🌏 {market_type} 증시 시황</h3>", unsafe_allow_html=True)
 
@@ -811,7 +811,10 @@ def render_ai_summary_box(text):
     # 타도록 조건을 걸어서 위 2)/3)번 색칠(종목/테마용 [호재]/[악재]/[전망])과 절대 안 겹치게 함.
     if "지수 동향" in html_text:
         market_red_style = "color: #ff4b4b; font-weight: bold;"
-        market_alt_colors = ["#8B4513", "#1565C0"]  # 진갈색, 찐청색 순서로 번갈아 적용
+        # 🔧 [수정 2026-08-03] 사용자가 "[기술주 중심 상승]" 태그가 어두운 초록 배경에 묻혀서 잘
+        # 안 보인다고 지적 — 첫 번째 색(진갈색 #8B4513)을 RGB 채널별로 약 30% 밝게 조정
+        # (139,69,19 → 181,90,25 = #B55A19). 두 번째 색(찐청색 #1565C0)은 지적 없었으니 그대로 유지.
+        market_alt_colors = ["#B55A19", "#1565C0"]  # 밝은 갈색(수정됨), 찐청색 순서로 번갈아 적용
 
         split_match = re.search(r'2\.\s*특이사항\s*및\s*시사점', html_text)
         if split_match:
@@ -860,7 +863,7 @@ def get_themes_for_stocks(stock_names):
 # 원래 기본(small) 폭 그대로 두되 CSS로 다이얼로그 컨테이너 자체의 폭만 20% 정도 더 넓힘
 # ([수정 2026-07-31, 4번째] 아래 CSS 참고) + metrics_html의 이름/코드, PER정보 두 줄 각각에
 # white-space: nowrap을 줘서 웬만하면 줄바꿈 자체가 안 일어나게 함.
-@st.dialog("🏢 기업 요약 및 AI 분석")
+@st.dialog("🏢 기업 요약 및 AI 분석", dismissible=False)
 def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     import FinanceDataReader as fdr
 
@@ -869,6 +872,12 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     # session_state['show_summary_dialog'] 정리 코드가 아예 실행이 안 되고, 그래서 다음 자동새로고침 때
     # 창이 또 뜨는 버그가 있었음. "닫기 (확인)"/"관심종목 추가" 버튼만 쓰도록 X를 아예 숨김.
     #
+    # 🔧 [수정 2026-08-03] 위 X 숨기기를 CSS 셀렉터(`button[aria-label="Close"]`)로 해뒀었는데,
+    # Streamlit이 이후 버전에서 st.dialog에 공식 `dismissible` 파라미터를 추가하면서 다이얼로그
+    # 내부 DOM 구조가 바뀌어 이 셀렉터가 더 이상 안 먹히고 X 버튼이 다시 보이는 문제가 있었음
+    # (사용자가 스크린샷으로 재확인). CSS 땜빵 대신 위 데코레이터에 공식 파라미터 `dismissible=False`를
+    # 줘서 교체 — X 버튼 자체가 사라지고 바깥 클릭/ESC로도 안 닫힘. 폭 조정용 CSS는 계속 유지.
+    #
     # 🔧 [수정 2026-07-31, 4번째] width="large" 파라미터가 너무 큰 폭 점프(작음↔큼 이분법)라
     # 사용자가 "이상해 보인다"고 피드백함 → 대신 기본(small) 다이얼로그에 CSS로 직접
     # width/max-width를 지정해서 기존 대비 약 20%만 넓힘(기본 small 폭이 대략 500px대라고
@@ -876,7 +885,6 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
     # 있어서 근사치임. 더 좁게/넓게 보이면 이 px 값만 조정하면 됨).
     st.markdown(
         '<style>'
-        'div[aria-label="dialog"]>button[aria-label="Close"] { display: none !important; }'
         'div[aria-label="dialog"] { width: 620px !important; max-width: 620px !important; }'
         '</style>',
         unsafe_allow_html=True
@@ -1103,13 +1111,10 @@ if 'show_summary_dialog' in st.session_state:
 # 개별 종목의 "🏢 기업 요약 및 AI 분석"(show_summary_dialog)과 동일한 UX(다이얼로그+탭)를
 # 테마 단위로 재구성. 테마 대표 종목 상위 몇 개의 뉴스를 모아 Gemini/ChatGPT에 넘겨 분석받음.
 # ------------------------------------------------------------------
-@st.dialog("🏷️ 테마 요약 및 AI 분석")
+@st.dialog("🏷️ 테마 요약 및 AI 분석", dismissible=False)
 def show_theme_summary_dialog(theme_name, rep_stocks, trigger_id=0):
-    # X 닫기 버튼 제거 (show_summary_dialog와 동일한 이유 — Streamlit #8507)
-    st.markdown(
-        '<style>div[aria-label="dialog"]>button[aria-label="Close"] { display: none !important; }</style>',
-        unsafe_allow_html=True
-    )
+    # 🔧 [수정 2026-08-03] X 닫기 버튼 제거 방식을 CSS 셀렉터에서 공식 `dismissible=False`
+    # 파라미터로 교체 (show_summary_dialog와 동일한 이유 — 기존 CSS가 Streamlit 버전업으로 깨짐).
 
     stock_names_str = ", ".join([s['name'] for s in rep_stocks[:5]])
     st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 4px;'>🏷️ {theme_name}</h3>", unsafe_allow_html=True)
