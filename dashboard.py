@@ -1408,6 +1408,41 @@ def get_pair_buy_score(frgn_net, orgn_net):
     else:
         return 0, ""
 
+# 🌟 [신규 2026-08-03] 뉴스감성 등급 변환 공통 헬퍼 — 사용자 요청으로 기존 -5~+5 숫자 표시를
+# 신용등급 스타일(AAA~F) 11단계 문자 등급으로 바꿈. "고래 골든픽"/"내 관심종목" 두 화면이
+# 뉴스감성 컬럼 스타일링 로직을 중복 구현해둔 상태라, get_market_force_score/get_pair_buy_score와
+# 같은 이유로 공통 함수 하나로 뽑아서 양쪽 다 이걸 재사용하게 함.
+_SENTIMENT_GRADE_MAP = {
+    5: "AAA", 4: "AA", 3: "A",
+    2: "BBB", 1: "BB", 0: "B",
+    -1: "CCC", -2: "CC", -3: "C",
+    -4: "D", -5: "F",
+}
+
+def get_sentiment_grade(val):
+    """뉴스감성 점수(-5~+5 정수, 없으면 NaN/None)를 등급 문자열로 변환. 데이터 없으면 None 반환(빈칸 유지)."""
+    if pd.isna(val):
+        return None
+    try:
+        v = int(round(float(val)))
+    except (TypeError, ValueError):
+        return None
+    return _SENTIMENT_GRADE_MAP.get(v, None)
+
+def get_sentiment_grade_color(grade):
+    """등급 문자열에 대응하는 표시 색상. AAA/AA/A=빨강, BBB/BB/B=주황, CCC/CC/C=파랑, D=녹색, F=보라."""
+    if grade in ("AAA", "AA", "A"):
+        return "#ff4b4b"
+    elif grade in ("BBB", "BB", "B"):
+        return "#FFA500"
+    elif grade in ("CCC", "CC", "C"):
+        return "#4B89B5"
+    elif grade == "D":
+        return "#00E676"
+    elif grade == "F":
+        return "#BA68C8"
+    return "#777777"
+
 # 🔧 [수정 2026-07-30] "고래 골든픽" 화면이 화면 안의 아무 버튼(AI 요약 보기, 차트 이동 등)만 눌러도
 # 매번 daily_whale_top200/whale_log/upper_limit_stocks를 통째로 다시 조회하고 있어서 클릭할 때마다
 # 느려진다는 피드백 — 선택한 날짜(sel_date_str)가 그대로면 굳이 다시 조회할 필요가 없으므로,
@@ -4356,7 +4391,7 @@ if choice == "🏠 홈화면":
             is_short_watch_active = (scrn_select == "공매도·대차잔고 워치")
             cls_short_watch = "btn-style-teal-active" if is_short_watch_active else "btn-style-teal"
             st.markdown(f'<div class="{cls_short_watch}"></div>', unsafe_allow_html=True)
-            if st.button("공대치", key="btn_res3", use_container_width=True):
+            if st.button("공대차", key="btn_res3", use_container_width=True):
                 if st.session_state.get('scrn_select_radio') != "공매도·대차잔고 워치":
                     st.session_state['scrn_select_radio'] = "공매도·대차잔고 워치"
                     st.rerun()
@@ -5678,22 +5713,27 @@ if choice == "🏠 홈화면":
                             'reason': '핵심 추천 포인트'
                         })
 
-                        # 🌟 [신규 2026-07-30] 뉴스감성 점수 색상(호재=빨강/악재=파랑/중립=회색, 이 앱의 매수·매도 색 관례와 통일)
+                        # 🔧 [수정 2026-08-03] 사용자 요청: -5~+5 숫자 대신 신용등급 스타일(AAA~F) 문자 등급으로 표시.
+                        # 데이터 없는 경우는 그대로 None(빈칸) 유지. 공통 헬퍼(get_sentiment_grade)는 위쪽
+                        # get_market_force_score 근처에 정의됨.
+                        display_gp['📰 뉴스감성'] = display_gp['📰 뉴스감성'].apply(get_sentiment_grade)
+
+                        # 🌟 [신규 2026-07-30] 뉴스감성 등급 색상(빨강=AAA/AA/A, 주황=BBB/BB/B, 파랑=CCC/CC/C,
+                        # 녹색=D, 보라=F, 없음=회색) — 🔧 [수정 2026-08-03] 등급 전환에 맞춰 get_sentiment_grade_color로 교체.
                         # 🔧 [수정 2026-07-30] font-size 시도는 반영이 안 되는 것으로 확인되어 제거.
                         #    대신 "🟡기관 순매수(억)" 컬럼처럼 Styler를 아예 안 씌운(스타일 없는 기본) 컬럼과 폰트가
                         #    똑같아 보이도록 color만 남기고 font-weight/font-size는 모두 제거함(컬러 로직은 그대로 유지).
-                        def _get_sentiment_color(val):
-                            if pd.isna(val):
-                                return 'color: #777777;'
-                            if val > 0:
-                                return 'color: #ff4b4b;'
-                            elif val < 0:
-                                return 'color: #4B89B5;'
-                            return 'color: #aaaaaa;'
+                        def _get_sentiment_color(grade):
+                            return f'color: {get_sentiment_grade_color(grade)};'
+
+                        # 🔧 [수정 2026-08-03] 사용자 요청: "황금점수" 텍스트를 빨간색으로 표시.
+                        def _get_golden_score_color(_val):
+                            return 'color: #ff4b4b;'
 
                         # 🔧 [수정 2026-07-30] Streamlit Cloud 배포 시 최신 pandas(applymap 완전 제거)에서
                         # AttributeError 발생 확인 → pandas 2.1+에서 applymap의 대체 메서드인 Styler.map으로 교체
-                        styled_gp = display_gp.style.map(_get_sentiment_color, subset=['📰 뉴스감성'])
+                        styled_gp = display_gp.style.map(_get_sentiment_color, subset=['📰 뉴스감성']) \
+                                              .map(_get_golden_score_color, subset=['황금점수'])
 
                         event_gp = st.dataframe(
                             styled_gp,
@@ -5711,7 +5751,8 @@ if choice == "🏠 홈화면":
                                 "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
                                 "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
                                 "🐋고래매수 일평균(백만)": st.column_config.NumberColumn(format="%,.0f백만"),
-                                "📰 뉴스감성": st.column_config.NumberColumn(format="%+d", help="배치 스크립트(fetch_news_sentiment.py)가 매일 채워주는 실험적 뉴스 감성 점수 (-5~+5). 아직 데이터 없으면 빈칸."),
+                                # 🔧 [수정 2026-08-03] 숫자(%+d) → 등급 문자열 표시로 바뀌어 TextColumn으로 교체.
+                                "📰 뉴스감성": st.column_config.TextColumn(help="배치 스크립트(fetch_news_sentiment.py)가 매일 채워주는 실험적 뉴스 감성 점수를 신용등급 스타일(AAA~F, 좋음→나쁨)로 표시. 아직 데이터 없으면 빈칸."),
                             }
                         )
 
@@ -5952,21 +5993,24 @@ if choice == "🏠 홈화면":
                 df_watch = pd.DataFrame(rows_watch).sort_values(by="골든점수", ascending=False).reset_index(drop=True)
                 st.caption("⚠️ '오늘 TOP200'이 ❌인 종목은 외국인/기관 순매수 TOP 100(코스피)+TOP 100(코스닥)에 들지 못해 외/기 수급이 0으로 처리된 상태입니다 (골든점수가 실제보다 낮게 나올 수 있음).")
 
-                # 🌟 [신규 2026-07-30] "고래 골든픽" 화면과 동일하게 뉴스감성 점수에 색상 적용
-                # (호재=빨강/악재=파랑/중립=회색). 골든픽 화면의 _get_sentiment_color와 동일 로직이지만
-                # 서로 다른 elif 분기(화면)라 세션 내에서 공유되지 않아 이 화면에도 동일 함수를 둠.
-                def _get_sentiment_color_watch(val):
-                    if pd.isna(val):
-                        return 'color: #777777;'
-                    if val > 0:
-                        return 'color: #ff4b4b;'
-                    elif val < 0:
-                        return 'color: #4B89B5;'
-                    return 'color: #aaaaaa;'
+                # 🔧 [수정 2026-08-03] "고래 골든픽" 화면과 동일하게, -5~+5 숫자 대신 신용등급 스타일(AAA~F)
+                # 문자 등급으로 표시(공통 헬퍼 get_sentiment_grade 재사용).
+                df_watch['📰 뉴스감성'] = df_watch['📰 뉴스감성'].apply(get_sentiment_grade)
+
+                # 🌟 [신규 2026-07-30] "고래 골든픽" 화면과 동일하게 뉴스감성 등급에 색상 적용
+                # (빨강=AAA/AA/A, 주황=BBB/BB/B, 파랑=CCC/CC/C, 녹색=D, 보라=F, 없음=회색).
+                # 🔧 [수정 2026-08-03] 등급 전환에 맞춰 공통 헬퍼 get_sentiment_grade_color로 교체.
+                def _get_sentiment_color_watch(grade):
+                    return f'color: {get_sentiment_grade_color(grade)};'
+
+                # 🔧 [수정 2026-08-03] 사용자 요청: "골든점수" 텍스트를 빨간색으로 표시("고래 골든픽" 화면과 통일).
+                def _get_golden_score_color_watch(_val):
+                    return 'color: #ff4b4b;'
 
                 # 🔧 [수정 2026-07-30] Streamlit Cloud 배포 시 최신 pandas(applymap 완전 제거)에서
                 # AttributeError 발생 확인 → pandas 2.1+에서 applymap의 대체 메서드인 Styler.map으로 교체
-                styled_watch = df_watch.style.map(_get_sentiment_color_watch, subset=['📰 뉴스감성'])
+                styled_watch = df_watch.style.map(_get_sentiment_color_watch, subset=['📰 뉴스감성']) \
+                                        .map(_get_golden_score_color_watch, subset=['골든점수'])
 
                 # 🌟 [신규 2026-07-31] "고래 골든픽" 화면과 동일하게 표에서 종목(행)을 클릭하면
                 # 차트로 바로 이동하거나 AI 요약 팝업을 띄울 수 있도록 클릭 동작 라디오 + on_select 연결
@@ -5992,7 +6036,8 @@ if choice == "🏠 홈화면":
                         "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
                         "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
                         "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
-                        "📰 뉴스감성": st.column_config.NumberColumn(format="%+d"),
+                        # 🔧 [수정 2026-08-03] 숫자(%+d) → 등급 문자열 표시로 바뀌어 TextColumn으로 교체.
+                        "📰 뉴스감성": st.column_config.TextColumn(help="뉴스 감성 점수를 신용등급 스타일(AAA~F, 좋음→나쁨)로 표시. 데이터 없으면 빈칸."),
                     }
                 )
 
@@ -6038,7 +6083,7 @@ if choice == "🏠 홈화면":
             themeking_header_cols = st.columns([2.3, 1])
             with themeking_header_cols[0]:
                 st.markdown("<h4 style='color:#FFD400; border-left: 4px solid #FFD400; padding-left: 10px;'>👑 테마킹 - 오늘의 테마 모멘텀 랭킹</h4>", unsafe_allow_html=True)
-                st.caption("오늘 외국인/기관 순매수 TOP 100(코스피)+TOP 100(코스닥)에 오른 종목들을 테마별로 묶어, 어떤 테마에 수급이 몰리고 있는지 보여줍니다.")
+                st.caption("오늘 외국인/기관 순매수 TOP 100(코스피)+TOP 100(코스닥)에 오른 종목 + 실시간 고래거래로 1억원 이상 체결이 있었던 종목을 테마별로 묶어, 어떤 테마에 수급이 몰리고 있는지 보여줍니다.")
                 st.caption("⚠️ 테마 매핑 데이터가 현재 약 100개 종목에 한해 등록되어 있어, 테마 매핑이 없는 종목은 집계에서 빠질 수 있습니다.")
             with themeking_header_cols[1]:
                 tk_us_latest_date, tk_us_left_items, tk_us_right_items = get_us_theme_top_movers(left_count=8)
@@ -6054,14 +6099,51 @@ if choice == "🏠 홈화면":
                 except Exception:
                     df_theme_top = pd.DataFrame()
 
-            if df_theme_top.empty:
+                # 🌟 [신규 2026-08-03] 사용자 피드백: 삼성전자/SK하이닉스처럼 그날 "순매수" TOP100+100
+                # 밖(순매도였거나 순매수폭이 작았던 날)이면 테마 매핑이 있어도 테마 집계에서 통째로
+                # 빠지는 문제 발견 → daily_whale_top200에 없는 종목이라도, 오늘 실시간 고래거래(whale_log)에서
+                # 1억원 이상 단일 체결이 한 번이라도 있었다면 보완적으로 테마 집계에 포함시킴.
+                # (whale_log는 대형 개별 체결만 모은 로그라 진짜 "하루 전체 순매수"는 아니지만, TOP100+100
+                # 밖의 종목에 대해 우리가 가진 유일한 근사치라 이걸로 보완함.)
+                try:
+                    whale_theme_res = supabase.table("whale_log").select("name, code, side, amount_krw").eq("date", today_theme_str).execute()
+                    df_whale_theme = pd.DataFrame(whale_theme_res.data) if whale_theme_res.data else pd.DataFrame()
+                except Exception:
+                    df_whale_theme = pd.DataFrame()
+
+            if df_theme_top.empty and df_whale_theme.empty:
                 st.warning("⚠️ 오늘자 수급 데이터가 아직 준비되지 않았습니다.")
             else:
-                df_theme_top['frgn_net'] = df_theme_top['frgn_buy'] - df_theme_top['frgn_sell']
-                df_theme_top['orgn_net'] = df_theme_top['orgn_buy'] - df_theme_top['orgn_sell']
-                df_theme_top['total_net'] = df_theme_top['frgn_net'] + df_theme_top['orgn_net']
+                if not df_theme_top.empty:
+                    df_theme_top['frgn_net'] = df_theme_top['frgn_buy'] - df_theme_top['frgn_sell']
+                    df_theme_top['orgn_net'] = df_theme_top['orgn_buy'] - df_theme_top['orgn_sell']
+                    df_theme_top['total_net'] = df_theme_top['frgn_net'] + df_theme_top['orgn_net']
 
-                theme_map_today = get_themes_for_stocks(df_theme_top['stock_name'].tolist())
+                existing_names_theme = set(df_theme_top['stock_name'].tolist()) if not df_theme_top.empty else set()
+
+                # 🌟 [신규 2026-08-03] whale_log 보완 후보 추출: 1억원 이상 단일 체결이 있었고,
+                # 이미 daily_whale_top200에 있는 종목은 중복 방지로 제외.
+                extra_names_theme = []
+                extra_net_map = {}
+                extra_code_map = {}
+                if not df_whale_theme.empty:
+                    df_whale_theme['signed_amt'] = df_whale_theme.apply(
+                        lambda r: r['amount_krw'] if r['side'] == '매수' else -r['amount_krw'], axis=1
+                    )
+                    whale_grp_theme = df_whale_theme.groupby('name').agg(
+                        max_amt=('amount_krw', 'max'),
+                        net_amt=('signed_amt', 'sum'),
+                        code=('code', 'first'),
+                    ).reset_index()
+                    whale_grp_theme = whale_grp_theme[whale_grp_theme['max_amt'] >= 100_000_000]
+                    whale_grp_theme = whale_grp_theme[~whale_grp_theme['name'].isin(existing_names_theme)]
+                    extra_names_theme = whale_grp_theme['name'].tolist()
+                    extra_net_map = dict(zip(whale_grp_theme['name'], whale_grp_theme['net_amt'] / 100_000_000))
+                    extra_code_map = dict(zip(whale_grp_theme['name'], whale_grp_theme['code']))
+
+                theme_map_today = get_themes_for_stocks(
+                    (df_theme_top['stock_name'].tolist() if not df_theme_top.empty else []) + extra_names_theme
+                )
 
                 theme_agg = {}
                 for _, r_t in df_theme_top.iterrows():
@@ -6076,13 +6158,28 @@ if choice == "🏠 홈화면":
                         # 🌟 [2026-07-31] 테마별 AI 요약 시 대표 종목 뉴스를 긁어오려면 종목코드가 필요해서 튜플에 코드 추가
                         theme_agg[t_name]["stocks"].append((r_t['stock_name'], r_t['total_net'], stock_code_t))
 
+                # 🌟 [신규 2026-08-03] whale_log 보완 종목을 동일한 방식으로 theme_agg에 병합
+                for name_e in extra_names_theme:
+                    theme_str_e = theme_map_today.get(name_e, "")
+                    if not theme_str_e:
+                        continue
+                    net_e = extra_net_map.get(name_e, 0.0)
+                    code_e = extra_code_map.get(name_e, '')
+                    for t_name in [t.strip() for t in theme_str_e.split(',') if t.strip()]:
+                        if t_name not in theme_agg:
+                            theme_agg[t_name] = {"total_net": 0.0, "stocks": []}
+                        theme_agg[t_name]["total_net"] += net_e
+                        theme_agg[t_name]["stocks"].append((name_e, net_e, code_e))
+
                 if not theme_agg:
                     st.info("오늘 TOP 200 종목 중 테마 매핑이 확인된 종목이 없습니다.")
                 else:
                     theme_rows = []
                     for t_name, info_t in theme_agg.items():
                         top_stocks_t = sorted(info_t["stocks"], key=lambda x: x[1], reverse=True)[:3]
-                        top_stocks_str_t = ", ".join([f"{n}({v:,.0f}억)" for n, v, c in top_stocks_t])
+                        # 🔧 [수정 2026-08-03] 사용자 요청: 트리맵 호버 메시지에서 종목 이름만 빨간색으로 강조
+                        # (호버 텍스트도 차트 text와 동일한 pseudo-html 렌더러를 쓰므로 <span style> 사용 가능).
+                        top_stocks_str_t = ", ".join([f"<span style='color:#FF4B4B; font-weight:bold;'>{n}</span>({v:,.0f}억)" for n, v, c in top_stocks_t])
                         theme_rows.append({
                             "테마명": t_name,
                             "종목수": len(info_t["stocks"]),
@@ -6160,6 +6257,10 @@ if choice == "🏠 홈화면":
                         hovertemplate="<b>%{label}</b><br>합산 외/기 순매수: %{customdata[2]:,.0f}억<br>종목수: %{customdata[0]}개<br>대표 종목: %{customdata[1]}<extra></extra>",
                         textposition="middle center",
                         textfont_size=28,
+                        # 🔧 [수정 2026-08-03] 사용자 요청: 호버 메시지 글자 크기를 기존(플롯리 기본 13px) 대비
+                        # 약 50% 확대(20px). 스칼라 값만 사용 — 위 "되돌림" 이력처럼 배열/리스트 지정은
+                        # 렌더링 실패 사례가 있어 피함.
+                        hoverlabel=dict(font_size=20),
                     )
                     fig_treemap.update_layout(
                         margin=dict(t=10, l=10, r=10, b=10),
@@ -6581,7 +6682,12 @@ if choice == "🏠 홈화면":
                                 st.session_state['sangseongo_reset'] = st.session_state.get('sangseongo_reset', 0) + 1
                                 st.rerun()
                             else:
-                                stock, date_str = clicked.split("___")
+                                # 🔧 [수정 2026-08-03] 반복 클릭 감지용 render_id가 셀 id에 추가되면서
+                                # id가 "종목___날짜___render_id" 3파트가 됐는데, 여기서는 여전히 2개로
+                                # 언패킹하려다 ValueError가 나서 셀 클릭이 먹통이 됐던 버그 수정 —
+                                # goto___/summary___ 분기와 동일하게 앞 2개 파트만 사용.
+                                parts = clicked.split("___")
+                                stock, date_str = parts[0], parts[1]
                                 st.session_state['show_mock_dialog'] = {
                                     "stock": stock,
                                     "date": date_str
