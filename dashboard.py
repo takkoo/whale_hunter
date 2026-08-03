@@ -6692,6 +6692,16 @@ if choice == "🏠 홈화면":
                                     "stock": stock,
                                     "date": date_str
                                 }
+                                # 🔧 [수정 2026-08-03] 사용자 재확인 버그: 가상 데이터 입력 → "가상 데이터
+                                # 일괄 삭제"로 삭제 → 같은 셀을 다시 클릭하면 반응이 아예 없는 문제 발견.
+                                # 원인: goto___/summary___ 분기는 처리 후 sangseongo_reset(render_id)을
+                                # 올려서 다음 렌더의 셀 id가 바뀌는데, 이 mock 분기만 그걸 빼먹어서 같은 셀의
+                                # DOM id가 계속 고정됨 — st_click_detector는 "값이 실제로 바뀔 때만" 새 이벤트를
+                                # 파이썬에 알려주므로, 같은 셀을 연달아 클릭하면(=id가 그대로라 값이 안 바뀜)
+                                # rerun 자체가 안 일어나 "완전 무반응"으로 보였음(다른 셀을 클릭해야만 그 사이에
+                                # 껴서 풀리는 것도 이 때문). goto___/summary___와 동일하게 render_id를 올려서
+                                # 다음 클릭부터는 같은 셀이라도 항상 새 id가 되도록 통일.
+                                st.session_state['sangseongo_reset'] = st.session_state.get('sangseongo_reset', 0) + 1
                                 st.rerun()
 
                 
