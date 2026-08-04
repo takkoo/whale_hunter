@@ -6089,8 +6089,20 @@ if choice == "🏠 홈화면":
                 tk_us_latest_date, tk_us_left_items, tk_us_right_items = get_us_theme_top_movers(left_count=8)
                 st.markdown(render_us_theme_widget_html(tk_us_latest_date, tk_us_left_items, tk_us_right_items), unsafe_allow_html=True)
 
-            today_theme = get_latest_market_open_date()
+            # 🔧 [수정 2026-08-04] 사용자 리포트: 오전 10시~오후 4시 사이에 "테마킹"에 오면
+            # daily_whale_top200(장마감 후 16시에만 수집)에 "오늘자" 행이 아직 없어서
+            # "오늘자 수급 데이터가 아직 준비되지 않았습니다"가 뜨는 버그 발견.
+            # "고래 골든픽"/"외기 TOP100"/"공대차"/"신프로" 화면과 동일하게, 16시 이전이면
+            # 어제 날짜(이미 수집 완료된 데이터)로 폴백하도록 통일.
+            now_kst_theme = datetime.utcnow() + timedelta(hours=9)
+            if now_kst_theme.time() < datetime.strptime("16:00", "%H:%M").time():
+                target_dt_theme = now_kst_theme - timedelta(days=1)
+            else:
+                target_dt_theme = now_kst_theme
+            target_dt_theme = target_dt_theme.replace(hour=12, minute=0, second=0, microsecond=0)
+            today_theme = get_latest_market_open_date(target_dt_theme)
             today_theme_str = today_theme.strftime("%Y-%m-%d")
+            st.caption(f"📅 {today_theme_str} 마감 기준 데이터입니다 (당일 16시 이전에는 전 거래일 자료가 표시됩니다).")
 
             with st.spinner("🏷️ 오늘의 테마 모멘텀을 집계하는 중입니다..."):
                 try:
