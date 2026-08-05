@@ -576,7 +576,12 @@ _MARKET_CACHE_MINUTES = 10
 _MARKET_INDEX_SYMBOLS = {
     "국내": [("코스피", "KS11"), ("코스닥", "KQ11")],
     "미국": [("다우존스", "DJI"), ("나스닥", "IXIC"), ("S&P500", "US500")],
-    "일본": [("니케이225", "JP225")],
+    # 🔧 [수정 2026-08-04] 사용자 제보("일본 증시 시황" 클릭 시 "지수 데이터를 가져오지
+    # 못했습니다"만 계속 뜸) 진단 중, 사용자가 직접 로컬에서
+    # `fdr.DataReader('JP225')`를 실행해 확인해준 결과: FinanceDataReader 내부에
+    # "JP225"는 야후 심볼 매핑 테이블(N225 -> ^N225 등)에 등록돼 있지 않아 그대로
+    # 야후로 전달되면서 404 에러가 발생함(실제 니케이225의 올바른 코드는 "N225").
+    "일본": [("니케이225", "N225")],
     "중국": [("상해종합", "SSEC")],
 }
 
@@ -596,6 +601,17 @@ def _fetch_market_index_snapshot(market_type):
         try:
             df_idx = fdr.DataReader(code, start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
             if df_idx is None or df_idx.empty:
+                continue
+            # 🔧 [수정 2026-08-04] 사용자 제보("중국 증시 시황"이 시차로 설명 안 되는 하루 지연
+            # 표시) 진단 중, 사용자가 직접 `fdr.DataReader('SSEC').tail(5)`를 로컬 실행해서
+            # 확인해준 결과: 상해종합(SSEC)은 당일 행이 Open/High/Low는 먼저 채워지고 Close(및
+            # Adj Close)는 데이터 소스 쪽 처리 지연으로 한동안 NaN으로 남아있는 경우가 있음
+            # (Volume도 그 행만 다른 날들과 자릿수가 안 맞는 비정상 값으로 확인됨). 이런 "아직
+            # 확정 안 된" 행을 그대로 tail(-1)로 집어서 "최신 종가"로 쓰면 nan이 화면/AI 프롬프트에
+            # 그대로 노출될 수 있어, Close가 실제 값을 가진 가장 최근 행만 "최신 확정 종가"로
+            # 취급하도록 필터링(다른 지수들도 혹시 같은 상황이 생기면 동일하게 보호됨).
+            df_idx = df_idx[df_idx['Close'].notna()]
+            if df_idx.empty:
                 continue
             df_idx = df_idx.tail(5)  # 최근 5거래일만
             last_row = df_idx.iloc[-1]
@@ -702,6 +718,74 @@ def get_gemini_market_briefing(market_type, index_data_text, latest_date_str="")
     return summary
 
 
+def get_chatgpt_market_briefing(market_type, index_data_text, latest_date_str=""):
+    """get_gemini_market_briefing과 동일한 프롬프트 구조를 ChatGPT(gpt-4o-mini)로 호출하는 버전.
+    🔧 [신규 2026-08-04] 사용자 요청: 새벽 시간대 등 Gemini AI가 과부하로 자주 에러를 내는 것을
+    겪은 뒤, "Gemini가 에러면 ChatGPT로 대신 물어봐 달라"는 요청으로 추가한 폴백 경로.
+    캐시는 Gemini 버전과 동일한 market_key([MARKET]{market_type})를 공유 — 어느 쪽 AI로
+    생성됐든 10분 안에는 재사용되게 해서 화면에는 차이가 드러나지 않도록 함."""
+    api_key = st.secrets.get("openai", {}).get("api_key", None)
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY_MISSING")
+
+    client = openai.OpenAI(api_key=api_key)
+
+    date_label = ""
+    if latest_date_str:
+        try:
+            _d = datetime.strptime(latest_date_str, "%Y-%m-%d")
+            date_label = f"{_d.month}월 {_d.day}일"
+        except Exception:
+            date_label = latest_date_str
+
+    date_instruction = (
+        f"'1. 지수 동향' 소제목 뒤에 반드시 ' - {date_label} 기준'을 그대로 덧붙여서 "
+        f"'1. 지수 동향 - {date_label} 기준'처럼 출력해줘(자료 기준일을 사용자가 한눈에 알 수 있게)."
+        if date_label else
+        "자료에 명확한 기준일이 없으면 '1. 지수 동향' 제목은 그대로 두고, 본문에서 데이터가 비어있거나 오래됐을 가능성을 언급해줘."
+    )
+
+    prompt = f"""아래는 '{market_type}' 증시의 최근 주요 지수 시세 데이터야. 이 데이터를 바탕으로 '{market_type}' 증시의 최근 시황을 간단하게 요약해줘.
+주의: 답변 내용에 '(1~2줄)' 같은 분량 지시어는 절대 출력하지 마.
+만약 데이터가 비어있거나 부족하면, 휴장일이거나 데이터 수집에 문제가 있었을 가능성을 언급해줘.
+
+**1. 지수 동향**
+주요 지수들의 최근 종가와 등락률을 서술식 말고 보기 좋게 한 줄씩 나열식(Bullet points)으로 정리해줘.
+- [지수명] ~~~
+{date_instruction}
+
+**2. 특이사항 및 시사점**
+데이터에서 눈에 띄는 특징(강세/약세 업종, 변동성, 추세 등)을 서술식 말고 나열식으로 짧게 짚어줘.
+- [특징] ~~~
+
+[최근 지수 시세 데이터]
+{index_data_text}
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "당신은 증권가 최고의 매크로/증시 애널리스트입니다."},
+            {"role": "user", "content": prompt}
+        ],
+        timeout=30.0
+    )
+    summary = response.choices[0].message.content
+
+    try:
+        market_key = f"[MARKET]{market_type}"
+        # 같은 시장의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다(Gemini/ChatGPT 공용 키)
+        supabase.table("gemini_summaries").delete().eq("stock_name", market_key).execute()
+        supabase.table("gemini_summaries").insert({
+            "stock_name": market_key,
+            "news_text": index_data_text,
+            "summary": summary
+        }).execute()
+    except Exception:
+        pass  # 저장 실패 시에도 정상적으로 요약본 반환
+
+    return summary
+
+
 @st.dialog("🌏 증시 시황 요약", dismissible=False)
 def show_market_briefing_dialog(market_type, trigger_id=0):
     # 🔧 [수정 2026-08-03] 예전엔 CSS로 X 버튼을 숨겼는데(`button[aria-label="Close"]` 셀렉터),
@@ -713,19 +797,32 @@ def show_market_briefing_dialog(market_type, trigger_id=0):
     st.markdown(f"<h3 style='margin: 0; padding: 0; margin-bottom: 4px;'>🌏 {market_type} 증시 시황</h3>", unsafe_allow_html=True)
 
     market_key = f"[MARKET]{market_type}"
-    cached_summary = None
-    try:
-        ten_min_ago = (datetime.utcnow() - timedelta(minutes=_MARKET_CACHE_MINUTES)).isoformat()
-        cache_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", market_key).gte("created_at", ten_min_ago).order("created_at", desc=True).limit(1).execute()
-        if cache_res.data:
-            cached_summary = cache_res.data[0]['summary']
-    except Exception:
-        pass
+
+    # 🔧 [수정 2026-08-04] 사용자 발견: "닫기" 버튼을 누르면 그 클릭 자체가 이 다이얼로그 함수를
+    # 처음부터 다시 실행시키는데(세션스테이트 키가 버튼을 누른 그 실행 중간에야 pop되므로),
+    # 이때 DB 캐시(10분) 조회가 타이밍상 방금 막 insert한 행을 못 찾으면 AI를 한 번 더 호출하는
+    # 것처럼 보이는 문제(닫는 순간 요약 메시지가 잠깐 번쩍임)가 있었음. DB 캐시와는 별개로,
+    # "이 다이얼로그가 열려 있는 동안 만든 요약"은 st.session_state의 트리거 딕셔너리에 직접
+    # 담아둬서, 같은 열림-세션 안에서 재실행(닫기 버튼 클릭 포함)이 몇 번 일어나도 이미 만든
+    # 요약을 그대로 재사용하고 AI를 절대 다시 호출하지 않도록 함(중복 과금 방지 + 깜빡임 방지).
+    dlg_state = st.session_state.get('show_market_briefing_dialog', {})
+    cached_summary = dlg_state.get('summary')
+
+    if not cached_summary:
+        try:
+            ten_min_ago = (datetime.utcnow() - timedelta(minutes=_MARKET_CACHE_MINUTES)).isoformat()
+            cache_res = supabase.table("gemini_summaries").select("summary").eq("stock_name", market_key).gte("created_at", ten_min_ago).order("created_at", desc=True).limit(1).execute()
+            if cache_res.data:
+                cached_summary = cache_res.data[0]['summary']
+        except Exception:
+            pass
 
     if cached_summary:
         # 🔧 [수정 2026-08-01, 2번째] 사용자 요청: "캐시 — API 재호출 없음" 안내 캡션이 화면을
         # 지저분하게 만든다고 판단해 제거. 캐시 여부는 이제 화면에 노출하지 않고 내부적으로만 사용.
         render_ai_summary_box(cached_summary)
+        dlg_state['summary'] = cached_summary
+        st.session_state['show_market_briefing_dialog'] = dlg_state
     else:
         # 🔧 [수정 2026-08-01] 사용자 요청: 캐시가 없을 때 "AI 요약 생성" 버튼을 한 번 더 누르게
         # 하지 말고, 팝업이 뜨자마자 원클릭으로 바로 생성해서 보여줌. 대신 st.spinner로 "진행 중"임을
@@ -738,22 +835,37 @@ def show_market_briefing_dialog(market_type, trigger_id=0):
         st.markdown("##### 📊 참고 지수 시세")
         st.info(index_md)
 
+        # 🔧 [수정 2026-08-04] 사용자 요청: 새벽 시간대 등에 Gemini AI가 과부하로 자주 에러를
+        # 내는 걸 겪은 뒤, "Gemini가 에러면 ChatGPT로 대신 물어보고 표시해달라"고 요청 — 이제
+        # Gemini 실패 시 곧바로 ChatGPT로 한 번 더 자동 재시도하고, 그것마저 실패했을 때만
+        # 통합 에러 메시지("AI 연결에 오류가 발생했습니다." + 실제 에러 내용)를 보여줌.
+        briefing_summary = None
+        gemini_err = None
         with st.spinner(f"Gemini AI가 {market_type} 증시 지수 데이터를 바탕으로 시황을 요약하는 중입니다..."):
             try:
                 briefing_summary = get_gemini_market_briefing(market_type, index_raw, latest_date)
-                render_ai_summary_box(briefing_summary)
             except Exception as e:
-                err_msg = str(e)
-                if "API_KEY_MISSING" in err_msg:
-                    st.warning("⚠️ `.streamlit/secrets.toml` 파일에 Gemini API Key가 설정되지 않았습니다.")
-                elif "429" in err_msg or "quota" in err_msg.lower():
-                    st.warning("⚠️ **Gemini AI 무료 제공량 초과 (Rate Limit)** — 잠시 후 다시 시도하거나 내일 다시 시도해주세요.")
-                elif "504" in err_msg or "deadline" in err_msg.lower():
-                    st.error("⚠️ **구글 AI 서버 응답 지연 (504 Timeout)** — 잠시 후 창을 닫고 버튼을 다시 눌러주세요.")
-                elif "503" in err_msg or "high demand" in err_msg.lower():
-                    st.warning("⚠️ **구글 AI 서버 과부하 (503)** — 1~2분 후 다시 시도해 주세요.")
-                else:
-                    st.error(f"Gemini AI 호출 중 오류가 발생했습니다: {e}")
+                gemini_err = e
+
+        if briefing_summary is not None:
+            render_ai_summary_box(briefing_summary)
+            dlg_state['summary'] = briefing_summary
+            st.session_state['show_market_briefing_dialog'] = dlg_state
+        else:
+            chatgpt_err = None
+            with st.spinner(f"Gemini AI 응답이 원활하지 않아 ChatGPT로 대신 시도하는 중입니다..."):
+                try:
+                    briefing_summary = get_chatgpt_market_briefing(market_type, index_raw, latest_date)
+                except Exception as e2:
+                    chatgpt_err = e2
+
+            if briefing_summary is not None:
+                st.caption("ℹ️ Gemini AI가 응답하지 않아 ChatGPT가 대신 요약했습니다.")
+                render_ai_summary_box(briefing_summary)
+                dlg_state['summary'] = briefing_summary
+                st.session_state['show_market_briefing_dialog'] = dlg_state
+            else:
+                st.error(f"AI 연결에 오류가 발생했습니다.\n{chatgpt_err}")
 
     if st.button("닫기 (확인)", use_container_width=True, key=f"market_dlg_close_{market_type}_{trigger_id}"):
         st.session_state.pop('show_market_briefing_dialog', None)
@@ -6206,7 +6318,7 @@ if choice == "🏠 홈화면":
                     # 박스 색상: 실제 순매수 방향/강도(빨강=매수 강세, 파랑=매도 강세). 사용자가 보여준 참고 이미지
                     # (다른 사이트의 테마 모멘텀 트리맵)와 유사한 형태를 이 프로젝트의 매수/매도 색 관례(빨강/파랑)로 구현.
                     st.markdown("<h5 style='color:#FFD400; margin-top:10px;'>🗺️ 테마 모멘텀 트리맵</h5>", unsafe_allow_html=True)
-                    st.caption("박스 크기 = 테마 합산 외/기 순매수 규모(단, 어느 테마도 전체 면적의 25%는 넘지 않도록 보정), 색상 = 매수(🔴)·매도(🔵) 강도. 박스를 클릭하면 바로 AI 요약이 뜹니다(혹시 클릭이 안 먹으면 아래 '테마별 AI 요약 보기' 버튼을 이용해주세요).")
+                    st.caption("박스 크기 = 테마 합산 외/기 순매수 규모(단, 어느 테마도 전체 면적의 25%는 넘지 않도록 보정), 색상 = 순위별 구분(1위~10위 각각 다른 색). 박스를 클릭하면 바로 AI 요약이 뜹니다(혹시 클릭이 안 먹으면 아래 '테마별 AI 요약 보기' 버튼을 이용해주세요).")
 
                     # 🌟 [신규 2026-07-31] 사용자 피드백: "AI 반도체"처럼 압도적으로 큰 테마 하나가
                     # 트리맵 전체 면적을 거의 다 차지해버려서(예: 72,829억 vs 나머지 800억대)
@@ -6246,13 +6358,32 @@ if choice == "🏠 홈화면":
                     raw_treemap_sizes = df_treemap["합산 외/기 순매수(억)"].abs().clip(lower=0.1).tolist()
                     df_treemap["박스크기"] = _cap_treemap_share(raw_treemap_sizes, max_share=0.25)
 
+                    # 🌈 [수정 2026-08-04] 사용자 요청: 매수/매도 강도 기반 단색 그라데이션(빨강~파랑) 대신,
+                    # 1위~10위 순서대로 알록달록한 고정 색상을 순서대로 입혀달라는 요청 — 색상 자체가
+                    # "순매수 강도"라는 의미를 더는 안 갖게 되므로, 아래 캡션 문구도 함께 손봄.
+                    # 9번째·10번째 색은 사용자가 명시한 대로 이 화면의 "수익율 자랑"/"상선고" 버튼과
+                    # 동일한 색(각각 btn-style-brag #FF69B4, btn-style-orange #9E6C2E)을 그대로 재사용.
+                    # 10개를 넘는 테마가 나오는 경우(현재 테마 매핑상 흔치 않음)를 대비해 회색을 폴백으로 둠.
+                    _THEME_RANK_COLORS = [
+                        "#FF4B4B",  # 1위 빨강
+                        "#FFA500",  # 2위 주황
+                        "#FFD700",  # 3위 노랑
+                        "#00E676",  # 4위 초록
+                        "#4B89B5",  # 5위 파랑
+                        "#3E4F69",  # 6위 남색 (btn-style-darkblue와 동일 톤)
+                        "#683B91",  # 7위 보라 (btn-style-purple과 동일 톤)
+                        "#FFB6C1",  # 8위 분홍
+                        "#FF69B4",  # 9위 = "💖 수익율 자랑" 버튼 색
+                        "#9E6C2E",  # 10위 = "상선고" 버튼 색
+                    ]
+                    _rank_color_seq = _THEME_RANK_COLORS + ["#777777"] * max(0, len(df_treemap) - len(_THEME_RANK_COLORS))
+
                     fig_treemap = px.treemap(
                         df_treemap,
                         path=[px.Constant("전체 테마"), "테마명"],
                         values="박스크기",
-                        color="합산 외/기 순매수(억)",
-                        color_continuous_scale=["#4B89B5", "#2b2f3a", "#ff4b4b"],
-                        color_continuous_midpoint=0,
+                        color="테마명",
+                        color_discrete_sequence=_rank_color_seq,
                         custom_data=["종목수", "대표 종목", "합산 외/기 순매수(억)"],
                         hover_data=None,
                     )
@@ -6281,6 +6412,7 @@ if choice == "🏠 홈화면":
                         plot_bgcolor="rgba(0,0,0,0)",
                         font_color="#e0e0e0",
                         coloraxis_showscale=False,
+                        showlegend=False,
                     )
                     # 🌟 [신규 2026-07-31] 사용자 질문: "AI요약 버튼을 따로 만든 게 트리맵 셀 클릭이
                     # 안 돼서 그런 건가? 되면 셀 클릭으로 바로 AI요약이 뜨면 좋겠다" → Streamlit이
