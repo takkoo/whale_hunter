@@ -4341,7 +4341,6 @@ if choice == "🏠 홈화면":
     is_list_active = (current_scrn == "체결 로그" and not st.session_state.get('upper_limit_filter', False))
     is_upper_active = (current_scrn == "체결 로그" and st.session_state.get('upper_limit_filter', False))
     is_top10_active = (current_scrn == "TOP 10 화면")
-    is_return_active = (current_scrn == "수익율 화면")
 
     btn_col1, btn_col2, btn_col3, btn_col4 = st.sidebar.columns([1, 1, 1, 1])
     with btn_col1:
@@ -4389,17 +4388,20 @@ if choice == "🏠 홈화면":
                     st.session_state['realtime_mount_id'] = time.time()
                     st.rerun()
     with btn_col3:
-        cls_return = "btn-style-purple-active" if is_return_active else "btn-style-purple"
-        st.markdown(f'<div class="{cls_return}"></div>', unsafe_allow_html=True)
-        if st.button("수익율", key="btn_return_purple", use_container_width=True):
+        # 🔄 [버튼 재배치 2026-08-05] 사용자 요청: "수익율"(→ 3번째 줄로 이동, 관리자 전용으로 전환)과
+        # "신프로"(← 이 자리로 이동, 정회원 이상 사용 가능으로 전환) 위치/권한을 맞바꿈.
+        is_credit_prog_active = (current_scrn == "신용잔고·프로그램매매 추이")
+        cls_credit_prog = "btn-style-indigo-active" if is_credit_prog_active else "btn-style-indigo"
+        st.markdown(f'<div class="{cls_credit_prog}"></div>', unsafe_allow_html=True)
+        if st.button("신프로", key="btn_reserve_4", use_container_width=True):
             if not st.session_state.get('authenticated', False):
                 guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
                 import time
                 time.sleep(1.5)
                 guest_msg.empty()
             else:
-                if st.session_state.get('scrn_select_radio') != "수익율 화면":
-                    st.session_state['scrn_select_radio'] = "수익율 화면"
+                if st.session_state.get('scrn_select_radio') != "신용잔고·프로그램매매 추이":
+                    st.session_state['scrn_select_radio'] = "신용잔고·프로그램매매 추이"
                     st.rerun()
     with btn_col4:
         cls_top10 = "btn-style-red-active" if is_top10_active else "btn-style-red"
@@ -4508,14 +4510,16 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "공매도·대차잔고 워치"
                     st.rerun()
         with btn_col12:
-            # 🌟 [신규 2026-08-01] "신용잔고·프로그램매매 추이" — 신용잔고 상위 + 프로그램매매 동향을
-            # 함께 보여줘 "진짜 선행지표 찾기" 연구에도 데이터로 활용 가능.
-            is_credit_prog_active = (scrn_select == "신용잔고·프로그램매매 추이")
-            cls_credit_prog = "btn-style-indigo-active" if is_credit_prog_active else "btn-style-indigo"
-            st.markdown(f'<div class="{cls_credit_prog}"></div>', unsafe_allow_html=True)
-            if st.button("신프로", key="btn_reserve_4", use_container_width=True):
-                if st.session_state.get('scrn_select_radio') != "신용잔고·프로그램매매 추이":
-                    st.session_state['scrn_select_radio'] = "신용잔고·프로그램매매 추이"
+            # 🔄 [버튼 재배치 2026-08-05] 사용자 요청: "수익율"(← 1번째 줄에서 이동, 관리자 전용으로 전환)과
+            # "신프로"(→ 1번째 줄로 이동, 정회원 이상 사용 가능으로 전환) 위치/권한을 맞바꿈.
+            # 이 줄 전체가 이미 4484번 줄의 is_admin 게이트로 보호되므로, 다른 3번째 줄 버튼들과 동일하게
+            # 개별 authenticated 체크는 따로 두지 않음.
+            is_return_active = (scrn_select == "수익율 화면")
+            cls_return = "btn-style-purple-active" if is_return_active else "btn-style-purple"
+            st.markdown(f'<div class="{cls_return}"></div>', unsafe_allow_html=True)
+            if st.button("수익율", key="btn_return_purple", use_container_width=True):
+                if st.session_state.get('scrn_select_radio') != "수익율 화면":
+                    st.session_state['scrn_select_radio'] = "수익율 화면"
                     st.rerun()
 
 
@@ -6318,7 +6322,7 @@ if choice == "🏠 홈화면":
                     # 박스 색상: 실제 순매수 방향/강도(빨강=매수 강세, 파랑=매도 강세). 사용자가 보여준 참고 이미지
                     # (다른 사이트의 테마 모멘텀 트리맵)와 유사한 형태를 이 프로젝트의 매수/매도 색 관례(빨강/파랑)로 구현.
                     st.markdown("<h5 style='color:#FFD400; margin-top:10px;'>🗺️ 테마 모멘텀 트리맵</h5>", unsafe_allow_html=True)
-                    st.caption("박스 크기 = 테마 합산 외/기 순매수 규모(단, 어느 테마도 전체 면적의 25%는 넘지 않도록 보정), 색상 = 순위별 구분(1위~10위 각각 다른 색). 박스를 클릭하면 바로 AI 요약이 뜹니다(혹시 클릭이 안 먹으면 아래 '테마별 AI 요약 보기' 버튼을 이용해주세요).")
+                    st.caption("박스 크기 = 테마 합산 외/기 순매수 규모(단, 작은 테마도 알아보기 쉽도록 크기 격차를 압축하되 테마 간 순위는 항상 유지, 어느 테마도 전체 면적의 25%는 넘지 않도록 보정), 색상 = 순위별 구분(1위~10위 각각 다른 색). 박스를 클릭하면 바로 AI 요약이 뜹니다(혹시 클릭이 안 먹으면 아래 '테마별 AI 요약 보기' 버튼을 이용해주세요).")
 
                     # 🌟 [신규 2026-07-31] 사용자 피드백: "AI 반도체"처럼 압도적으로 큰 테마 하나가
                     # 트리맵 전체 면적을 거의 다 차지해버려서(예: 72,829억 vs 나머지 800억대)
@@ -6354,9 +6358,27 @@ if choice == "🏠 홈화면":
                                 break
                         return vals
 
+                    # 🔧 [수정 2026-08-05] 사용자 피드백: 가장 작은 테마 박스(예: "반도체소부장" 20억)가
+                    # 너무 작아서 화면에서 거의 안 보임 → 처음엔 "최소 하한(min_share) 이상으로 끌어올리는"
+                    # 함수를 추가했었는데, 하한에 걸린 여러 값을 전부 "동일한 하한값"으로 뭉개버리는 방식이라
+                    # 정작 실제 화면에서 "반도체소부장(20억)"이 그보다 훨씬 큰 "우주항공(76억)"보다 커 보이는
+                    # 순서 역전 버그가 실제로 재현됨(사용자가 스크린샷으로 직접 확인) → 즉시 롤백.
+                    # 대신 거듭제곱(v**alpha, 0<alpha<1) 압축으로 교체 — 거듭제곱 함수는 항상 단조증가라서
+                    # 원본 값들의 "크고 작은 순서"는 수학적으로 절대 뒤집히거나 같아질 수 없고(서로 다른 두
+                    # 양수는 압축해도 여전히 서로 다름), 그러면서도 큰 값과 작은 값 사이의 "비율 격차"만 줄여줌
+                    # (예: 6762억과 20억의 비율은 338배지만, 0.45제곱하면 약 46배로 줄어듦 — 여전히 6762억이
+                    # 훨씬 크다는 건 알아볼 수 있으면서 20억도 화면에서 보일 만큼은 커짐).
+                    def _compress_treemap_values(values, alpha=0.45):
+                        """
+                        원본 값을 value**alpha로 압축. alpha=1이면 원본 그대로, alpha가 작을수록
+                        작은 값이 큰 값 대비 상대적으로 더 커짐(단, 원래 순서는 항상 그대로 유지됨).
+                        """
+                        return [v ** alpha for v in values]
+
                     df_treemap = df_theme_rank.copy()
                     raw_treemap_sizes = df_treemap["합산 외/기 순매수(억)"].abs().clip(lower=0.1).tolist()
-                    df_treemap["박스크기"] = _cap_treemap_share(raw_treemap_sizes, max_share=0.25)
+                    _treemap_sizes_compressed = _compress_treemap_values(raw_treemap_sizes, alpha=0.45)
+                    df_treemap["박스크기"] = _cap_treemap_share(_treemap_sizes_compressed, max_share=0.25)
 
                     # 🌈 [수정 2026-08-04] 사용자 요청: 매수/매도 강도 기반 단색 그라데이션(빨강~파랑) 대신,
                     # 1위~10위 순서대로 알록달록한 고정 색상을 순서대로 입혀달라는 요청 — 색상 자체가
