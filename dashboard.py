@@ -32,13 +32,21 @@ import openai
 # ------------------------------------------------------------------
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
+SUPABASE_SECRET_KEY = st.secrets["supabase"]["dashboard_secret_key"]
 
 # 🚀 [메모리 누수 방어] Streamlit의 캐싱을 통해 커넥션 풀(Connection Pool)이 매 1분마다 무한히 생성되는 것을 막습니다!
 @st.cache_resource(show_spinner=False)
 def init_supabase_client():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# 🔐 [RLS 전환] 쓰기(INSERT/UPDATE/DELETE) 전용 클라이언트 — secret 키로 RLS 우회.
+# publishable 키(supabase)는 이제 읽기(SELECT) 전용으로만 사용.
+@st.cache_resource(show_spinner=False)
+def init_supabase_secret_client():
+    return create_client(SUPABASE_URL, SUPABASE_SECRET_KEY)
+
 supabase = init_supabase_client()
+supabase_secret = init_supabase_secret_client()
 
 # ------------------------------------------------------------------
 # 🗺️ [내비게이션 동기화] 브라우저 뒤로가기(Query Params) 지원 (상단: URL -> State)
@@ -346,9 +354,9 @@ def get_chatgpt_company_summary(stock_name, news_text=""):
     try:
         gpt_stock_key = f"[GPT]{stock_name}"
         # 같은 종목의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다
-        supabase.table("gemini_summaries").delete().eq("stock_name", gpt_stock_key).execute()
+        supabase_secret.table("gemini_summaries").delete().eq("stock_name", gpt_stock_key).execute()
         
-        supabase.table("gemini_summaries").insert({
+        supabase_secret.table("gemini_summaries").insert({
             "stock_name": gpt_stock_key,
             "news_text": news_text,
             "summary": summary
@@ -404,9 +412,9 @@ def get_gemini_company_summary(stock_name, news_text=""):
     # 3. 기존 캐시 삭제 후 새로운 결과 저장
     try:
         # 같은 종목의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다
-        supabase.table("gemini_summaries").delete().eq("stock_name", stock_name).execute()
+        supabase_secret.table("gemini_summaries").delete().eq("stock_name", stock_name).execute()
         
-        supabase.table("gemini_summaries").insert({
+        supabase_secret.table("gemini_summaries").insert({
             "stock_name": stock_name,
             "news_text": news_text,
             "summary": summary
@@ -490,8 +498,8 @@ def get_gemini_theme_summary(theme_name, news_text=""):
 
     try:
         theme_key = f"[THEME]{theme_name}"
-        supabase.table("gemini_summaries").delete().eq("stock_name", theme_key).execute()
-        supabase.table("gemini_summaries").insert({
+        supabase_secret.table("gemini_summaries").delete().eq("stock_name", theme_key).execute()
+        supabase_secret.table("gemini_summaries").insert({
             "stock_name": theme_key,
             "news_text": news_text,
             "summary": summary
@@ -540,8 +548,8 @@ def get_chatgpt_theme_summary(theme_name, news_text=""):
 
     try:
         theme_key = f"[GPT-THEME]{theme_name}"
-        supabase.table("gemini_summaries").delete().eq("stock_name", theme_key).execute()
-        supabase.table("gemini_summaries").insert({
+        supabase_secret.table("gemini_summaries").delete().eq("stock_name", theme_key).execute()
+        supabase_secret.table("gemini_summaries").insert({
             "stock_name": theme_key,
             "news_text": news_text,
             "summary": summary
@@ -706,8 +714,8 @@ def get_gemini_market_briefing(market_type, index_data_text, latest_date_str="")
     try:
         market_key = f"[MARKET]{market_type}"
         # 같은 시장의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다
-        supabase.table("gemini_summaries").delete().eq("stock_name", market_key).execute()
-        supabase.table("gemini_summaries").insert({
+        supabase_secret.table("gemini_summaries").delete().eq("stock_name", market_key).execute()
+        supabase_secret.table("gemini_summaries").insert({
             "stock_name": market_key,
             "news_text": index_data_text,
             "summary": summary
@@ -774,8 +782,8 @@ def get_chatgpt_market_briefing(market_type, index_data_text, latest_date_str=""
     try:
         market_key = f"[MARKET]{market_type}"
         # 같은 시장의 예전 요약본(또는 만료된 캐시)을 깔끔하게 지웁니다(Gemini/ChatGPT 공용 키)
-        supabase.table("gemini_summaries").delete().eq("stock_name", market_key).execute()
-        supabase.table("gemini_summaries").insert({
+        supabase_secret.table("gemini_summaries").delete().eq("stock_name", market_key).execute()
+        supabase_secret.table("gemini_summaries").insert({
             "stock_name": market_key,
             "news_text": index_data_text,
             "summary": summary
@@ -1191,7 +1199,7 @@ def show_summary_dialog(stock_name, stock_code="", trigger_id=0):
                 st.warning("⚠️ 종목코드를 확인할 수 없어 관심종목에 추가하지 못했습니다.")
             else:
                 try:
-                    supabase.table("user_watchlist").upsert({
+                    supabase_secret.table("user_watchlist").upsert({
                         "username": st.session_state.get('username', ''),
                         "stock_code": str(stock_code).strip().zfill(6),
                         "stock_name": stock_name,
@@ -1368,14 +1376,14 @@ def mock_data_dialog(stock, date_str):
                     "side": "매수"
                 }
                 
-                res = supabase.table("whale_log").insert(record).execute()
+                res = supabase_secret.table("whale_log").insert(record).execute()
                 inserted_id = res.data[0]['id']
                 
                 track_data = {
                     "key": f"mock_whale_id_{inserted_id}",
                     "value": str(inserted_id)
                 }
-                supabase.table("system_settings").insert(track_data).execute()
+                supabase_secret.table("system_settings").insert(track_data).execute()
                 
                 st.session_state.pop('show_mock_dialog', None)
                 st.success("✅ 가상 데이터가 성공적으로 입력되었습니다! 화면을 갱신합니다.")
@@ -1646,7 +1654,7 @@ def get_kis_access_token():
         # 새 토큰을 Supabase에 기록 (수집기와 공유)
         try:
             payload = json.dumps({"token": new_token, "timestamp": time.time()})
-            supabase.table("system_settings").upsert({"key": TOKEN_KEY, "value": payload}, on_conflict="key").execute()
+            supabase_secret.table("system_settings").upsert({"key": TOKEN_KEY, "value": payload}, on_conflict="key").execute()
         except Exception:
             pass
         return new_token
@@ -1869,7 +1877,7 @@ def render_profile_edit_panel(user_data, current_id, db_phone):
                 update_payload["password_hash"] = encrypt_password(new_pw)
                 
             # 3. Supabase 데이터베이스 메인 창고로 패킷 발송!
-            supabase.table("users").update(update_payload).eq("username", current_id).execute()
+            supabase_secret.table("users").update(update_payload).eq("username", current_id).execute()
 
             st.success("✅ 자격 정보 및 알림 설정이 메모리에 성공적으로 반영되었습니다!")
             st.session_state['force_menu_change'] = "🏠 홈화면"
@@ -1911,7 +1919,7 @@ def render_admin_panel():
         st.write("") 
         if st.button("시스템 영점 저장 💾", use_container_width=True):
             try:
-                supabase.table("system_settings").upsert({
+                supabase_secret.table("system_settings").upsert({
                     "key": "prev_upper_limit_window_days",
                     "value": str(new_window),
                     "updated_at": datetime.now().isoformat()
@@ -1940,7 +1948,7 @@ def render_admin_panel():
         if st.button("조회수 모드 적용 💾", use_container_width=True):
             try:
                 val = "False" if new_show_views == "비공개 (사령관만 보임)" else "True"
-                supabase.table("system_settings").upsert({
+                supabase_secret.table("system_settings").upsert({
                     "key": "brag_board_show_views",
                     "value": val,
                     "updated_at": datetime.now().isoformat()
@@ -1975,7 +1983,7 @@ def render_admin_panel():
             col_b1, col_b2, col_b3, col_b4 = st.columns(4)
             if col_b1.button("🔒 선택 차단", key="bulk_block"):
                 if selected_user_ids:
-                    supabase.table("users").update({"is_allowed": False}).in_("id", selected_user_ids).execute()
+                    supabase_secret.table("users").update({"is_allowed": False}).in_("id", selected_user_ids).execute()
                     st.success("✅ 선택된 계정이 일괄 차단되었습니다.")
                     st.rerun()
                 else:
@@ -1983,7 +1991,7 @@ def render_admin_panel():
                     
             if col_b2.button("🔓 선택 재승인", key="bulk_approve"):
                 if selected_user_ids:
-                    supabase.table("users").update({"is_allowed": True}).in_("id", selected_user_ids).execute()
+                    supabase_secret.table("users").update({"is_allowed": True}).in_("id", selected_user_ids).execute()
                     st.success("✅ 선택된 계정이 일괄 승인되었습니다.")
                     st.rerun()
                 else:
@@ -1992,7 +2000,7 @@ def render_admin_panel():
             if col_b3.button("⏳ 기간 연장 (+1개월)", key="bulk_extend"):
                 if selected_user_ids:
                     new_expire = (datetime.now() + timedelta(days=30)).isoformat()
-                    supabase.table("users").update({"valid_until": new_expire}).in_("id", selected_user_ids).execute()
+                    supabase_secret.table("users").update({"valid_until": new_expire}).in_("id", selected_user_ids).execute()
                     st.success("⏳ 선택된 계정의 유효기간이 30일 연장되었습니다.")
                     st.rerun()
                 else:
@@ -2009,7 +2017,7 @@ def render_admin_panel():
                     
                     if blocked_selected_ids:
                         # 2단계 실행: 차단된 유저들만 골라서 창고에서 파쇄!
-                        supabase.table("users").delete().in_("id", blocked_selected_ids).execute()
+                        supabase_secret.table("users").delete().in_("id", blocked_selected_ids).execute()
                         
                         # 만약 정상 유저가 섞여 있어서 제외되었다면 안내 신호 다르게 인가
                         skipped_count = len(selected_user_ids) - len(blocked_selected_ids)
@@ -2095,7 +2103,7 @@ def render_admin_panel():
             col_p1, col_p2 = st.columns(2)
             
             if col_p1.button("🚀 신청자 전체 승인", use_container_width=True, key="btn_approve_all"):
-                supabase.table("users").update({
+                supabase_secret.table("users").update({
                     "is_allowed": True, 
                     "valid_until": calculated_expire  
                 }).in_("id", all_pending_ids).execute()
@@ -2104,7 +2112,7 @@ def render_admin_panel():
                 
             if col_p2.button("🎯 선택된 신청자만 승인", use_container_width=True, key="btn_approve_selected"):
                 if selected_pending_ids:
-                    supabase.table("users").update({
+                    supabase_secret.table("users").update({
                         "is_allowed": True, 
                         "valid_until": calculated_expire  
                     }).in_("id", selected_pending_ids).execute()
@@ -2148,7 +2156,7 @@ def render_admin_panel():
             if st.button("테마 저장 💾", use_container_width=True):
                 if t_stock.strip() and t_themes.strip():
                     try:
-                        supabase.table("stock_themes").upsert({
+                        supabase_secret.table("stock_themes").upsert({
                             "stock_name": t_stock.strip(),
                             "theme_names": t_themes.strip(),
                             "updated_at": datetime.now().isoformat()
@@ -2251,7 +2259,7 @@ def render_admin_panel():
 
                                 if bulk_data:
                                     # Supabase bulk upsert (기존 데이터가 있다면 덮어씁니다)
-                                    supabase.table("stock_themes").upsert(bulk_data).execute()
+                                    supabase_secret.table("stock_themes").upsert(bulk_data).execute()
                                     success_msg = f"✅ 총 {len(bulk_data)}개 종목의 테마 세팅이 완벽하게 업로드되었습니다!"
                                     if skipped_rows:
                                         success_msg += f" (형식이 맞지 않아 건너뛴 줄 {skipped_rows}개)"
@@ -2277,7 +2285,7 @@ def render_admin_panel():
                 with st.expander("🗑️ 종목 테마 삭제"):
                     del_stock = st.selectbox("삭제할 종목 선택", theme_df['종목명'].tolist())
                     if st.button("해당 종목 테마 영구 삭제 🚨"):
-                        supabase.table("stock_themes").delete().eq("stock_name", del_stock).execute()
+                        supabase_secret.table("stock_themes").delete().eq("stock_name", del_stock).execute()
                         st.success(f"🗑️ {del_stock}의 테마 정보가 삭제되었습니다.")
                         st.rerun()
 
@@ -2290,7 +2298,7 @@ def render_admin_panel():
                     if st.button("🚨 전체 테마 데이터 영구 삭제", disabled=not confirm_wipe, key="theme_wipe_btn"):
                         # Supabase delete()는 조건절이 필요해서, stock_name(NOT NULL)이 빈 문자열이
                         # 아닌 모든 행을 지우는 조건으로 사실상 "전체 삭제"를 구현.
-                        supabase.table("stock_themes").delete().neq("stock_name", "").execute()
+                        supabase_secret.table("stock_themes").delete().neq("stock_name", "").execute()
                         st.success("🗑️ 전체 테마 데이터가 삭제되었습니다. 이제 새 CSV를 업로드해 주세요.")
                         st.rerun()
             else:
@@ -2359,7 +2367,7 @@ def render_admin_panel():
                                 
                             if insert_data:
                                 # 1. whale_log에 삽입
-                                res = supabase.table("whale_log").insert(insert_data).execute()
+                                res = supabase_secret.table("whale_log").insert(insert_data).execute()
                                 if res.data and len(res.data) > 0:
                                     inserted_id = res.data[0]['id']
                                     
@@ -2368,7 +2376,7 @@ def render_admin_panel():
                                         "key": f"mock_whale_id_{inserted_id}",
                                         "value": str(inserted_id)
                                     }
-                                    supabase.table("system_settings").insert(track_data).execute()
+                                    supabase_secret.table("system_settings").insert(track_data).execute()
                                     
                                     st.success(f"✅ 가상 데이터가 성공적으로 등록되었습니다. (ID: {inserted_id})")
                                 else:
@@ -2392,11 +2400,11 @@ def render_admin_panel():
                     # 2. whale_log에서 삭제
                     for item in mock_ids_res.data:
                         del_id = int(item['value'])
-                        supabase.table("whale_log").delete().eq("id", del_id).execute()
+                        supabase_secret.table("whale_log").delete().eq("id", del_id).execute()
                         deleted_count += 1
                     
                     # 3. system_settings에서 기록 지우기
-                    supabase.table("system_settings").delete().like("key", "mock_whale_id%").execute()
+                    supabase_secret.table("system_settings").delete().like("key", "mock_whale_id%").execute()
                     st.success(f"🗑️ 총 {deleted_count}개의 가상 데이터가 안전하게 삭제되었습니다.")
                 else:
                     st.info("삭제할 가상 데이터 기록이 없습니다.")
@@ -3198,7 +3206,7 @@ def draw_whale_bar_chart(target_code, target_name, df):
                 st.warning("🚫 정회원만 이용할 수 있습니다.")
             else:
                 try:
-                    supabase.table("user_watchlist").upsert({
+                    supabase_secret.table("user_watchlist").upsert({
                         "username": st.session_state.get('username', ''),
                         "stock_code": str(target_code).strip().zfill(6),
                         "stock_name": target_name,
@@ -3340,7 +3348,7 @@ if choice == "🔐 로그인/가입":
                         st.error(f"❌ '{new_name}' 닉네임(호출명)은 이미 사용 중입니다. 다른 이름을 입력해 주십시오.")
                     else:
                         try:
-                            supabase.table("users").insert({
+                            supabase_secret.table("users").insert({
                                 "username": new_id,
                                 "name": new_name,
                                 "password_hash": hashed_pw,
@@ -5134,8 +5142,8 @@ if choice == "🏠 홈화면":
                                     
                                     # DB에 캐시 저장 (조건에 맞는 기존 캐시 삭제 후 인서트하여 중복 키 에러 방지)
                                     try:
-                                        supabase.table('return_rate_cache').delete().eq('period_month', pure_month).eq('period_week', sel_week).eq('min_amount', min_krw).execute()
-                                        supabase.table('return_rate_cache').upsert(cache_records).execute()
+                                        supabase_secret.table('return_rate_cache').delete().eq('period_month', pure_month).eq('period_week', sel_week).eq('min_amount', min_krw).execute()
+                                        supabase_secret.table('return_rate_cache').upsert(cache_records).execute()
                                         
                                         # 요약본(이정표) 생성 및 system_settings 에 저장
                                         summary_key = f"cache_summary_{pure_month}_{sel_week}_{min_krw}"
@@ -5146,7 +5154,7 @@ if choice == "🏠 홈화면":
                                             'count': len(final_cache_df),
                                             'updated_at': datetime.utcnow().isoformat()
                                         }
-                                        supabase.table('system_settings').upsert({
+                                        supabase_secret.table('system_settings').upsert({
                                             'key': summary_key,
                                             'value': json.dumps(summary_val, ensure_ascii=False)
                                         }).execute()
@@ -5334,7 +5342,7 @@ if choice == "🏠 홈화면":
                                 "req_time": datetime.utcnow().isoformat()
                             }
                             try:
-                                supabase.table("system_settings").insert({
+                                supabase_secret.table("system_settings").insert({
                                     "key": f"yield_req_{req_id}",
                                     "value": json.dumps(req_data, ensure_ascii=False)
                                 }).execute()
@@ -5422,7 +5430,7 @@ if choice == "🏠 홈화면":
                                                     r['status'] = "완료됨"
                                                     db_key = r.pop('db_key')
                                                     try:
-                                                        supabase.table("system_settings").upsert({"key": db_key, "value": json.dumps(r, ensure_ascii=False)}).execute()
+                                                        supabase_secret.table("system_settings").upsert({"key": db_key, "value": json.dumps(r, ensure_ascii=False)}).execute()
                                                         st.success("✅ 처리 완료!")
                                                         import time
                                                         time.sleep(0.5)
@@ -5940,7 +5948,7 @@ if choice == "🏠 홈화면":
                             match_code_w = str(row_match_w['Code']).strip().zfill(6)
                             match_name_w = str(row_match_w['Name']).strip()
 
-                            supabase.table("user_watchlist").upsert({
+                            supabase_secret.table("user_watchlist").upsert({
                                 "username": watch_username,
                                 "stock_code": match_code_w,
                                 "stock_name": match_name_w,
@@ -6188,7 +6196,7 @@ if choice == "🏠 홈화면":
                     with del_cols[idx_w % 4]:
                         if st.button(f"❌ {w['stock_name']}", key=f"watch_del_{w['stock_code']}", use_container_width=True):
                             try:
-                                supabase.table("user_watchlist").delete().eq("username", watch_username).eq("stock_code", w['stock_code']).execute()
+                                supabase_secret.table("user_watchlist").delete().eq("username", watch_username).eq("stock_code", w['stock_code']).execute()
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"삭제 실패: {e}")
@@ -7217,7 +7225,7 @@ if choice == "🏠 홈화면":
                                 st.error(f"이미지 압축 실패: {e}")
                                 
                         try:
-                            supabase.table("brag_board").insert({
+                            supabase_secret.table("brag_board").insert({
                                 "author": st.session_state.get('current_user', 'Guest'),
                                 "title": st.session_state["brag_title_input"].strip(),
                                 "content": st.session_state["brag_text_input"].strip(),
@@ -7243,7 +7251,7 @@ if choice == "🏠 홈화면":
                 else:
                     new_likes += 1
                     new_users.append(current_user)
-                supabase.table("brag_board").update({
+                supabase_secret.table("brag_board").update({
                     "likes_count": new_likes,
                     "liked_users": new_users
                 }).eq("id", post_id).execute()
@@ -7253,7 +7261,7 @@ if choice == "🏠 홈화면":
                 st.session_state[text_key] = content
 
             def cb_save_edit(post_id, edit_key, text_key):
-                supabase.table("brag_board").update({"content": st.session_state.get(text_key, "")}).eq("id", post_id).execute()
+                supabase_secret.table("brag_board").update({"content": st.session_state.get(text_key, "")}).eq("id", post_id).execute()
                 st.session_state[edit_key] = False
 
             def cb_cancel_edit(edit_key):
@@ -7342,7 +7350,7 @@ if choice == "🏠 홈화면":
                                 idx += 1
                                 with cols[idx]:
                                     if st.button("🗑️ 삭제", key=f"del_{post['id']}", use_container_width=True):
-                                        supabase.table("brag_board").delete().eq("id", post['id']).execute()
+                                        supabase_secret.table("brag_board").delete().eq("id", post['id']).execute()
                                         st.success("게시글이 삭제되었습니다.")
                                         st.rerun()
                                 idx += 1
@@ -7350,26 +7358,26 @@ if choice == "🏠 홈화면":
                             if not is_hidden:
                                 with cols[idx]:
                                     if st.button("🙈 숨기기", key=f"hide_{post['id']}", use_container_width=True):
-                                        supabase.table("brag_board").update({"is_hidden": True}).eq("id", post['id']).execute()
+                                        supabase_secret.table("brag_board").update({"is_hidden": True}).eq("id", post['id']).execute()
                                         st.success("숨김 처리되었습니다.")
                                         st.rerun()
                                 idx += 1
                                 with cols[idx]:
                                     if st.button("🗑️ 삭제", key=f"del_admin_{post['id']}", use_container_width=True):
-                                        supabase.table("brag_board").delete().eq("id", post['id']).execute()
+                                        supabase_secret.table("brag_board").delete().eq("id", post['id']).execute()
                                         st.success("게시글이 삭제되었습니다.")
                                         st.rerun()
                                 idx += 1
                             else:
                                 with cols[idx]:
                                     if st.button("👀 숨김 해제", key=f"unhide_{post['id']}", use_container_width=True):
-                                        supabase.table("brag_board").update({"is_hidden": False}).eq("id", post['id']).execute()
+                                        supabase_secret.table("brag_board").update({"is_hidden": False}).eq("id", post['id']).execute()
                                         st.success("숨김 해제되었습니다.")
                                         st.rerun()
                                 idx += 1
                                 with cols[idx]:
                                     if st.button("🗑️ 완전 삭제", key=f"fulldel_{post['id']}", use_container_width=True):
-                                        supabase.table("brag_board").delete().eq("id", post['id']).execute()
+                                        supabase_secret.table("brag_board").delete().eq("id", post['id']).execute()
                                         st.success("영구 삭제되었습니다.")
                                         st.rerun()
                                 idx += 1
@@ -7489,7 +7497,7 @@ if choice == "🏠 홈화면":
                                         st.session_state["brag_view_mode"] = "detail"
                                         st.session_state["brag_selected_post"] = post_id
                                         # 조회수 1 증가 (DB 직빵 업데이트)
-                                        supabase.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
+                                        supabase_secret.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
                                         
                                     st.button(title_text, key=f"list_btn_{p['id']}", on_click=view_detail_cb, type="tertiary")
                                 with c2:
@@ -7527,7 +7535,7 @@ if choice == "🏠 홈화면":
                                                 def view_detail_cb_grid(post_id=p['id'], current_views=p.get('views_count') or 0):
                                                     st.session_state["brag_view_mode"] = "detail"
                                                     st.session_state["brag_selected_post"] = post_id
-                                                    supabase.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
+                                                    supabase_secret.table("brag_board").update({"views_count": current_views + 1}).eq("id", post_id).execute()
                                                 
                                                 # 버튼의 라벨 길이를 자르거나 할 수 있지만 여기선 그대로 렌더링
                                                 st.button(title_text, key=f"grid_btn_{p['id']}", on_click=view_detail_cb_grid, use_container_width=True)
@@ -8535,7 +8543,11 @@ if choice == "🏠 홈화면":
                             "No.": st.column_config.NumberColumn("순번", format="%,d"),
                             "date": "체결일자",
                             "time": "체결시간",
-                            "name": "종목명",
+                            # 🔧 [수정 2026-08-07] 사용자 요청: 종목명(+상한가 로켓/핫시그널 아이콘)이 잘려서
+                            # 안 보이는 문제 → 폭을 기존 자동폭(이 프로젝트 기준 small≈80px) 대비 2.5배인
+                            # 200px(medium 기준)로 명시 고정. 이 표는 "실시간"/"상한가" 버튼과 검색(차트
+                            # 이동) 결과가 전부 공유하는 단일 렌더링 지점이라 여기 한 곳만 고치면 됨.
+                            "name": st.column_config.TextColumn("종목명", width=200),
                             "price": st.column_config.NumberColumn(("\u00A0" * 16) + "체결가 (원)", format="%,d"),
                             "volume": st.column_config.NumberColumn(("\u00A0" * 16) + "체결량 (주)", format="%,d"),
                             "buy_amount": st.column_config.NumberColumn("매수금액 (백만)", format="%,d"), 
