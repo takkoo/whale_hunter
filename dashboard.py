@@ -8122,9 +8122,9 @@ if choice == "🏠 홈화면":
                     "stock_code": r.get('stock_code', ''),
                     "현재가": r['close_price'],
                     "등락률": r['change_rate'],
-                    "융자잔고금액": r['loan_balance_amount'],
+                    "융자잔고금액(만원)": r['loan_balance_amount'],
                     "융자잔고비율": f"({r['loan_balance_ratio']:.2f}%)",
-                    "대주잔고금액": r['short_loan_balance_amount'],
+                    "대주잔고금액(만원)": r['short_loan_balance_amount'],
                     "대주잔고비율": f"({r['short_loan_balance_ratio']:.2f}%)",
                 } for r in cb_rows])
 
@@ -8140,7 +8140,7 @@ if choice == "🏠 홈화면":
                 cb_reset_key = st.session_state.get('cb_reset_counter', 0)
                 cb_event = st.dataframe(
                     cb_styled,
-                    column_order=["순위", "종목명", "현재가", "등락률", "융자잔고금액", "융자잔고비율", "대주잔고금액", "대주잔고비율"],
+                    column_order=["순위", "종목명", "현재가", "등락률", "융자잔고금액(만원)", "융자잔고비율", "대주잔고금액(만원)", "대주잔고비율"],
                     column_config={
                         # 🔧 [수정 2026-08-02, 3차] 헤더 라벨이 6자로 긴 컬럼(융자잔고금액/융자잔고비율/
                         # 대주잔고금액/대주잔고비율)은 100px로는 헤더 텍스트가 잘려서(...) 표시됨 —
@@ -8149,9 +8149,9 @@ if choice == "🏠 홈화면":
                         "종목명": st.column_config.TextColumn(width=120),
                         "현재가": st.column_config.NumberColumn(format="%,.0f", width=100),
                         "등락률": st.column_config.NumberColumn(format="%+.2f%%", width=100),
-                        "융자잔고금액": st.column_config.NumberColumn(format="%,.0f", width=140),
+                        "융자잔고금액(만원)": st.column_config.NumberColumn(format="%,.0f", width=170),
                         "융자잔고비율": st.column_config.TextColumn(width=140),
-                        "대주잔고금액": st.column_config.NumberColumn(format="%,.0f", width=140),
+                        "대주잔고금액(만원)": st.column_config.NumberColumn(format="%,.0f", width=170),
                         "대주잔고비율": st.column_config.TextColumn(width=140),
                     },
                     hide_index=True,
