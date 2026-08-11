@@ -23,6 +23,7 @@ import plotly.express as px
 import requests
 import json
 import uuid
+import random  # 🎲 [신규 2026-08-12] 브래그보드 좋아요 수 랜덤 조정용
 import io
 from PIL import Image
 from streamlit_paste_button import paste_image_button
@@ -1957,6 +1958,50 @@ def render_admin_panel():
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 설정 변경 실패: {e}")
+
+    # 4. 브래그보드 좋아요 수 조정 (초기 트래픽 부양용, 2026-08-12 신규)
+    st.write("---")
+    col_l1, col_l2, col_l3 = st.columns([1, 1.3, 1.7])
+    with col_l1:
+        likes_adj_op = st.selectbox(
+            "가감 방식",
+            options=["➕ 더하기", "➖ 빼기"],
+            key="brag_likes_adj_op",
+            label_visibility="collapsed"
+        )
+    with col_l2:
+        likes_adj_date = st.date_input(
+            "대상 날짜",
+            value=datetime.now().date(),
+            key="brag_likes_adj_date",
+            label_visibility="collapsed"
+        )
+    with col_l3:
+        if st.button("👍 좋아요 조정", use_container_width=True, key="brag_likes_adj_btn"):
+            try:
+                all_posts_res = supabase.table("brag_board").select("id, likes_count, created_at").execute()
+                target_posts = []
+                for p in (all_posts_res.data or []):
+                    p_time_utc = pd.to_datetime(p['created_at'])
+                    if p_time_utc.tzinfo is None:
+                        p_time_utc = p_time_utc.tz_localize('UTC')
+                    p_time_seoul = p_time_utc.tz_convert('Asia/Seoul')
+                    if p_time_seoul.date() == likes_adj_date:
+                        target_posts.append(p)
+
+                if not target_posts:
+                    st.warning(f"⚠️ {likes_adj_date} 날짜에 작성된 자랑글이 없습니다.")
+                else:
+                    for p in target_posts:
+                        delta = random.randint(70, 100)
+                        if likes_adj_op == "➖ 빼기":
+                            delta = -delta
+                        new_likes = max(0, (p.get('likes_count') or 0) + delta)
+                        supabase_secret.table("brag_board").update({"likes_count": new_likes}).eq("id", p['id']).execute()
+                    st.success(f"✅ {likes_adj_date} 게시글 {len(target_posts)}건의 좋아요 수를 [{likes_adj_op}] 조정했습니다! (게시글당 랜덤 70~100 적용)")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ 좋아요 조정 실패: {e}")
 
     st.write("---")
     # ==================================================================
