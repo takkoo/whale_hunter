@@ -4505,19 +4505,20 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "외기 TOP 100 화면"
                     st.rerun()
     with btn_col7:
-        # 🌟 [신규 2026-07-30] "내관심" — 관심종목(즐겨찾기) 화면. 골든픽/외기와 동일한 접근 규칙(정회원 이상).
-        is_watch_active = (current_scrn == "내 관심종목")
-        cls_watch = "btn-style-green-active" if is_watch_active else "btn-style-green"
-        st.markdown(f'<div class="{cls_watch}"></div>', unsafe_allow_html=True)
-        if st.button("내관심", key="btn_watchlist", use_container_width=True):
+        # 🔄 [버튼 재배치 2026-08-13] 사용자 요청: "내관심"(→ 3번째 줄로 이동, 관리자 전용으로 전환 — 기능은 추후 더 다듬어서 제공 예정)과
+        # "기폭주"(← 이 자리로 이동, 정회원 이상 사용 가능으로 전환 — 종목 선정에 도움되는 기능이라 우선 공개) 위치/권한을 맞바꿈.
+        is_res1_active = (current_scrn == "기간 누적 폭주")
+        cls_res1 = "btn-style-red-active" if is_res1_active else "btn-style-red"
+        st.markdown(f'<div class="{cls_res1}"></div>', unsafe_allow_html=True)
+        if st.button("기폭주", key="btn_res1", use_container_width=True):
             if not st.session_state.get('authenticated', False):
                 guest_msg.error("🚫 정회원만 이용할 수 있습니다.")
                 import time
                 time.sleep(1.5)
                 guest_msg.empty()
             else:
-                if st.session_state.get('scrn_select_radio') != "내 관심종목":
-                    st.session_state['scrn_select_radio'] = "내 관심종목"
+                if st.session_state.get('scrn_select_radio') != "기간 누적 폭주":
+                    st.session_state['scrn_select_radio'] = "기간 누적 폭주"
                     st.rerun()
     with btn_col8:
         # 🌟 [신규 2026-07-30] "테마킹" — 테마주 랭킹(섹터 모멘텀) 화면. 골든픽/외기와 동일한 접근 규칙(정회원 이상).
@@ -4546,11 +4547,16 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "상선고 화면"
                     st.rerun()
         with btn_col10:
-            cls_res1 = "btn-style-red-active" if scrn_select == "기간 누적 폭주" else "btn-style-red"
-            st.markdown(f'<div class="{cls_res1}"></div>', unsafe_allow_html=True)
-            if st.button("기폭주", key="btn_res1", use_container_width=True):
-                if st.session_state.get('scrn_select_radio') != "기간 누적 폭주":
-                    st.session_state['scrn_select_radio'] = "기간 누적 폭주"
+            # 🔄 [버튼 재배치 2026-08-13] 사용자 요청: "내관심"(← 2번째 줄에서 이동, 관리자 전용으로 전환 — 기능은 추후 더 다듬어서 제공 예정)과
+            # "기폭주"(→ 2번째 줄로 이동, 정회원 이상 사용 가능으로 전환 — 종목 선정에 도움되는 기능이라 우선 공개) 위치/권한을 맞바꿈.
+            # 이 줄 전체가 이미 위쪽의 is_admin 게이트로 보호되므로, 다른 3번째 줄 버튼들과 동일하게
+            # 개별 authenticated 체크는 따로 두지 않음.
+            is_watch_active = (scrn_select == "내 관심종목")
+            cls_watch = "btn-style-green-active" if is_watch_active else "btn-style-green"
+            st.markdown(f'<div class="{cls_watch}"></div>', unsafe_allow_html=True)
+            if st.button("내관심", key="btn_watchlist", use_container_width=True):
+                if st.session_state.get('scrn_select_radio') != "내 관심종목":
+                    st.session_state['scrn_select_radio'] = "내 관심종목"
                     st.rerun()
         with btn_col11:
             # 🌟 [신규 2026-08-01] "공매도·대차잔고 워치" — 골든스코어(매수세 쏠림)의 반대편,
@@ -4580,7 +4586,7 @@ if choice == "🏠 홈화면":
     
     # 🌟 [ 전체 요약 기간 스위치 ]를 데이터 쿼리 이전에 배치하여 DB 검색 범위 최적화!
     global_period = st.sidebar.radio(
-        "📊 전체 요약 및 TOP 10 기간 선택",
+        "📊 기간 선택",
         ["당일 데이터만", "최근 1주일 누적", "최근 1개월 누적"],
         index=2
     )
