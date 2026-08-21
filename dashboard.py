@@ -5583,6 +5583,19 @@ if choice == "🏠 홈화면":
             with col_gold_left:
                 st.markdown("<h4 style='color:#E040FB; border-left: 4px solid #E040FB; padding-left: 10px; margin-top: 0;'>🏆 고래 골든픽 TOP 20</h4>", unsafe_allow_html=True)
                 st.caption("시장 세력 수급, 외인/기관 쌍끌이, 상한가 족보, 실시간 고래 활동 및 위험 배지를 입체 종합 분석하여 산출된 1~20위 최정예 종목입니다. 🚀")
+
+                # 🌟 [신규 2026-08-21] 사용자 요청: 골든픽 화면 상단(제목 아래 빈 공간)에 눈에 띄는
+                # 홍보 배너 박스 추가. Supabase system_settings(key='golden_pick_banner_html')에서
+                # HTML 문자열을 그대로 읽어와 렌더링만 하는 구조 — 형님이나 다른 프로그램이 이 DB 값을
+                # 수시로 갱신하면 dashboard.py 코드 수정/재배포 없이 문구·색상·스타일이 즉시 바뀜.
+                # 값이 없거나 조회 실패 시 배너를 조용히 생략(부가 기능이라 화면 전체에 영향 안 주게 방어).
+                try:
+                    _gp_banner_res = supabase.table("system_settings").select("value").eq("key", "golden_pick_banner_html").execute()
+                    if _gp_banner_res.data and _gp_banner_res.data[0].get('value'):
+                        st.markdown(_gp_banner_res.data[0]['value'], unsafe_allow_html=True)
+                except Exception:
+                    pass
+
                 st.write("")
 
 
@@ -5879,24 +5892,29 @@ if choice == "🏠 홈화면":
 
                         top20_key_gp = f"golden_pick_table_{st.session_state.get('gp_reset_counter', 0)}"
 
-                        display_gp = top20_gp[['순위', 'name', 'market', 'score', 'warning', 'total_net', 'frgn_net', 'orgn_net', 'rt_buy', 'news_sentiment', 'reason']].copy()
+                        display_gp = top20_gp[['순위', 'name', 'market', 'score', 'total_net', 'frgn_net', 'orgn_net', 'rt_buy', 'news_sentiment', 'reason']].copy()
                         display_gp = display_gp.rename(columns={
                             'name': '종목명', 'market': '시장', 'score': '황금점수',
-                            'warning': '특이사항', 'total_net': '🟣외/기 순매수(억)',
-                            'frgn_net': '🟣외국인 순매수(억)', 'orgn_net': '🟡기관 순매수(억)',
-                            'rt_buy': '🐋고래매수 일평균(백만)', 'news_sentiment': '📰 뉴스감성',
+                            # 🔧 [수정 2026-08-19] 사용자 요청: "특이사항" 컬럼 비표시(위 selection에서 제외),
+                            # 나머지 금액 컬럼들은 헤드라인 공간 절약을 위해 아이콘 이모지 제거.
+                            # 🔧 [수정 2026-08-21 3차] 사용자 요청(홍보 담당자 피드백): "핵심 추천 포인트" 컬럼
+                            # 공간을 더 확보하기 위해 헤드라인의 단위 괄호(억/백만)도 제거 — 대신 단위는
+                            # 아래 column_config format에서 셀 값 쪽에 다시 표기(헤드라인은 최대한 짧게).
+                            'total_net': '외/기 순매수',
+                            'frgn_net': '외국인 순매수', 'orgn_net': '기관 순매수',
+                            'rt_buy': '고래매수 일평균', 'news_sentiment': '뉴스감성',
                             'reason': '핵심 추천 포인트'
                         })
 
                         # 🔧 [수정 2026-08-03] 사용자 요청: -5~+5 숫자 대신 신용등급 스타일(AAA~F) 문자 등급으로 표시.
                         # 데이터 없는 경우는 그대로 None(빈칸) 유지. 공통 헬퍼(get_sentiment_grade)는 위쪽
                         # get_market_force_score 근처에 정의됨.
-                        display_gp['📰 뉴스감성'] = display_gp['📰 뉴스감성'].apply(get_sentiment_grade)
+                        display_gp['뉴스감성'] = display_gp['뉴스감성'].apply(get_sentiment_grade)
 
                         # 🌟 [신규 2026-07-30] 뉴스감성 등급 색상(빨강=AAA/AA/A, 주황=BBB/BB/B, 파랑=CCC/CC/C,
                         # 녹색=D, 보라=F, 없음=회색) — 🔧 [수정 2026-08-03] 등급 전환에 맞춰 get_sentiment_grade_color로 교체.
                         # 🔧 [수정 2026-07-30] font-size 시도는 반영이 안 되는 것으로 확인되어 제거.
-                        #    대신 "🟡기관 순매수(억)" 컬럼처럼 Styler를 아예 안 씌운(스타일 없는 기본) 컬럼과 폰트가
+                        #    대신 "기관 순매수" 컬럼처럼 Styler를 아예 안 씌운(스타일 없는 기본) 컬럼과 폰트가
                         #    똑같아 보이도록 color만 남기고 font-weight/font-size는 모두 제거함(컬러 로직은 그대로 유지).
                         def _get_sentiment_color(grade):
                             return f'color: {get_sentiment_grade_color(grade)};'
@@ -5905,10 +5923,34 @@ if choice == "🏠 홈화면":
                         def _get_golden_score_color(_val):
                             return 'color: #ff4b4b;'
 
+                        # 🔧 [수정 2026-08-21] 사용자 요청: 헤드라인 텍스트는 그대로 두고, 대신 헤드라인에서
+                        # 뺐던 아이콘(🟣/🟡/🐋) 색상을 각 컬럼의 셀 데이터 값에 입혀서 구분되게 표시.
+                        # 색상 코드는 이 파일 다른 화면(대차잔고 상위종목, ~7100줄)에서 이미 쓰던
+                        # 아이콘↔색 매핑을 그대로 재사용(🟣=#b388ff 밝은 보라, 🟡=#ffd54f 노랑).
+                        # 🐋(고래)는 기존 매핑에 없어 바다/고래 느낌의 파랑(#1e90ff, 기존 🔵 매핑과 동일)으로 새로 지정.
+                        # 🔧 [수정 2026-08-21 2차] 사용자 피드백: "외/기 순매수"와 "외국인 순매수" 두 컬럼이
+                        # 같은 보라색이라 구분이 잘 안 됨 → "외국인 순매수"만 밝은 녹색으로 분리(이 파일
+                        # ~3505줄 시계 위젯에서 이미 쓰던 밝은 녹색 #00E676 재사용, 기존 진녹 🟢=#2e8b57 매핑과는 별개).
+                        def _get_frgn_flow_color(_val):
+                            return 'color: #b388ff;'
+
+                        def _get_frgn_only_color(_val):
+                            return 'color: #00E676;'
+
+                        def _get_orgn_flow_color(_val):
+                            return 'color: #ffd54f;'
+
+                        def _get_whale_color(_val):
+                            return 'color: #1e90ff;'
+
                         # 🔧 [수정 2026-07-30] Streamlit Cloud 배포 시 최신 pandas(applymap 완전 제거)에서
                         # AttributeError 발생 확인 → pandas 2.1+에서 applymap의 대체 메서드인 Styler.map으로 교체
-                        styled_gp = display_gp.style.map(_get_sentiment_color, subset=['📰 뉴스감성']) \
-                                              .map(_get_golden_score_color, subset=['황금점수'])
+                        styled_gp = display_gp.style.map(_get_sentiment_color, subset=['뉴스감성']) \
+                                              .map(_get_golden_score_color, subset=['황금점수']) \
+                                              .map(_get_frgn_flow_color, subset=['외/기 순매수']) \
+                                              .map(_get_frgn_only_color, subset=['외국인 순매수']) \
+                                              .map(_get_orgn_flow_color, subset=['기관 순매수']) \
+                                              .map(_get_whale_color, subset=['고래매수 일평균'])
 
                         event_gp = st.dataframe(
                             styled_gp,
@@ -5920,14 +5962,24 @@ if choice == "🏠 홈화면":
                             key=top20_key_gp,
                             column_config={
                                 # 🔧 [수정 2026-07-30] 숫자 가독성을 위해 1000단위 콤마(,) 포맷 전면 적용
-                                "순위": st.column_config.NumberColumn("순위", format="%,d위"),
-                                "황금점수": st.column_config.NumberColumn("황금점수", format="%,d점"),
-                                "🟣외/기 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
-                                "🟣외국인 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
-                                "🟡기관 순매수(억)": st.column_config.NumberColumn(format="%,.0f억"),
-                                "🐋고래매수 일평균(백만)": st.column_config.NumberColumn(format="%,.0f백만"),
+                                # 🔧 [수정 2026-08-21 4차] 사용자 요청(홍보 담당자 피드백): "핵심 추천 포인트" 글자가
+                                # 최대한 안 잘리고 보이도록, 이 컬럼만 width="large"로 넓히고 나머지 짧은 값을 담는
+                                # 컬럼들은 전부 width="small"로 좁혀서 남는 폭을 "핵심 추천 포인트"로 몰아줌.
+                                # (글자 크기 자체를 줄이는 방식은 2026-07-30에 이미 시도했다가 glide-data-grid에
+                                # 반영이 안 되는 것으로 확인된 전례가 있어 이번엔 시도하지 않음 — 위쪽 주석 참고.)
+                                # 🔧 [수정 2026-08-21 5차] 사용자 요청: "순위"는 기존 small(75px)의 절반 수준(45px)으로,
+                                # "종목명"/"시장"은 이름이 잘려 보인다는 피드백으로 width 지정을 다시 제거(자동 폭으로 복귀).
+                                "순위": st.column_config.NumberColumn("순위", format="%,d위", width=45),
+                                "황금점수": st.column_config.NumberColumn("황금점수", format="%,d점", width="small"),
+                                # 🔧 [수정 2026-08-21 3차] 사용자 요청(홍보 담당자 피드백): 헤드라인은 단위 없이 짧게,
+                                # 대신 셀 값에 단위 접미사를 다시 표기(직전 2026-08-19 결정에서 반대 방향으로 재변경).
+                                "외/기 순매수": st.column_config.NumberColumn(format="%,.0f억", width="small"),
+                                "외국인 순매수": st.column_config.NumberColumn(format="%,.0f억", width="small"),
+                                "기관 순매수": st.column_config.NumberColumn(format="%,.0f억", width="small"),
+                                "고래매수 일평균": st.column_config.NumberColumn(format="%,.0f백만", width="small"),
                                 # 🔧 [수정 2026-08-03] 숫자(%+d) → 등급 문자열 표시로 바뀌어 TextColumn으로 교체.
-                                "📰 뉴스감성": st.column_config.TextColumn(help="배치 스크립트(fetch_news_sentiment.py)가 매일 채워주는 실험적 뉴스 감성 점수를 신용등급 스타일(AAA~F, 좋음→나쁨)로 표시. 아직 데이터 없으면 빈칸."),
+                                "뉴스감성": st.column_config.TextColumn(help="배치 스크립트(fetch_news_sentiment.py)가 매일 채워주는 실험적 뉴스 감성 점수를 신용등급 스타일(AAA~F, 좋음→나쁨)로 표시. 아직 데이터 없으면 빈칸.", width="small"),
+                                "핵심 추천 포인트": st.column_config.TextColumn(width="large"),
                             }
                         )
 
