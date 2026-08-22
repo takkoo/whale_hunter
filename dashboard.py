@@ -1702,6 +1702,82 @@ def fetch_investor_net_buying(stock_code):
         return df[['date_str', 'frgn_buy_100m', 'frgn_sell_100m', 'orgn_buy_100m', 'orgn_sell_100m', 'frgn_net_100m', 'orgn_net_100m']]
     return pd.DataFrame()
 
+# 🌟 [신규 2026-08-22] "테마킹" 실시간(장중) 모드 — stock_themes에 매핑된 종목 전체를 대상으로
+# 종목별 KIS 투자자별 매매동향(fetch_investor_net_buying, 위 함수 — 원래 종목상세 30일 차트용으로
+# 이미 쓰이던 실시간에 가까운 API)에서 "오늘" 행의 외국인+기관 순매수 누적치를 가져오고, 여기에
+# 오늘자 whale_log(대형 체결 로그) 순매수를 더해 테마별로 합산한다. 장마감 모드(daily_whale_top200,
+# 16시 배치)와 달리 이 함수는 16시 이전에도 항상 "오늘"만 계산하며, 장마감 후에는 이 값이 마지막
+# 조회 시점 그대로 멈춰있는 형태로 남는다(별도 폴백 로직 불필요 — 사용자 요청 사양 그대로).
+# cache_date_str을 인자로 받는 이유: @st.cache_data는 인자값이 바뀌어야 캐시를 새로 만들기 때문에,
+# 날짜가 바뀌면(자정 넘어 다음 거래일) 자동으로 새 캐시가 생기도록 "오늘 날짜"를 캐시 키에 포함시킴.
+@st.cache_data(ttl=600)
+def get_realtime_theme_agg(cache_date_str):
+    import time  # 이 파일 관례상 time 모듈은 전역 import 없이 필요한 함수 내에서 로컬 import함
+    try:
+        stock_themes_res = supabase.table("stock_themes").select("stock_name, theme_names").execute()
+        theme_rows_rt = stock_themes_res.data or []
+    except Exception:
+        theme_rows_rt = []
+    if not theme_rows_rt:
+        return {}
+
+    try:
+        krx_rt = get_cached_krx_listing()
+    except Exception:
+        krx_rt = pd.DataFrame()
+
+    def _name_to_code(nm):
+        if krx_rt.empty:
+            return ''
+        m = krx_rt[krx_rt['Name'] == nm]
+        return m.iloc[0]['Code'] if not m.empty else ''
+
+    # investor_df의 date_str 포맷("MM-DD")과 맞추기 위해 "YYYY-MM-DD"에서 월-일만 추출.
+    today_md_rt = cache_date_str[5:7] + "-" + cache_date_str[8:10]
+
+    # 오늘자 whale_log 순매수(억) — 장마감 모드(daily_whale_top200 보완용)와 동일한 계산식 재사용.
+    whale_net_map_rt = {}
+    try:
+        whale_res_rt = supabase.table("whale_log").select("name, side, amount_krw").eq("date", cache_date_str).execute()
+        df_whale_rt = pd.DataFrame(whale_res_rt.data) if whale_res_rt.data else pd.DataFrame()
+        if not df_whale_rt.empty:
+            df_whale_rt['signed_amt'] = df_whale_rt.apply(
+                lambda r: r['amount_krw'] if r['side'] == '매수' else -r['amount_krw'], axis=1
+            )
+            whale_net_map_rt = (df_whale_rt.groupby('name')['signed_amt'].sum() / 100_000_000).to_dict()
+    except Exception:
+        pass
+
+    theme_agg_rt = {}
+    for row_rt in theme_rows_rt:
+        name_rt = row_rt.get('stock_name', '')
+        theme_str_rt = row_rt.get('theme_names', '') or ''
+        if not name_rt or not theme_str_rt:
+            continue
+        code_rt = _name_to_code(name_rt)
+        if not code_rt:
+            continue
+
+        investor_net_rt = 0.0
+        try:
+            inv_df_rt = fetch_investor_net_buying(code_rt)
+            if not inv_df_rt.empty:
+                today_row_rt = inv_df_rt[inv_df_rt['date_str'] == today_md_rt]
+                if not today_row_rt.empty:
+                    investor_net_rt = float(today_row_rt.iloc[0]['frgn_net_100m'] + today_row_rt.iloc[0]['orgn_net_100m'])
+        except Exception:
+            pass
+        time.sleep(0.05)  # 한투 API Rate limit(20 req/sec) 준수 — scripts/fetch_daily_top200.py와 동일한 지연
+
+        net_total_rt = investor_net_rt + whale_net_map_rt.get(name_rt, 0.0)
+
+        for t_name_rt in [t.strip() for t in theme_str_rt.split(',') if t.strip()]:
+            if t_name_rt not in theme_agg_rt:
+                theme_agg_rt[t_name_rt] = {"total_net": 0.0, "stocks": []}
+            theme_agg_rt[t_name_rt]["total_net"] += net_total_rt
+            theme_agg_rt[t_name_rt]["stocks"].append((name_rt, net_total_rt, code_rt))
+    return theme_agg_rt
+
 # ------------------------------------------------------------------
 # (set_page_config는 최상단으로 이동됨)
 
@@ -4605,6 +4681,11 @@ if choice == "🏠 홈화면":
         st.session_state['scrn_select_radio'] = "체결 로그"
     scrn_select = st.session_state['scrn_select_radio']
 
+    # 🌟 [신규 2026-08-22] 화면 전환(다른 화면→이 화면) 감지용 — 테마킹 라디오 버튼 시간대 자동 선택에 사용.
+    # 같은 화면 안에서 다른 위젯 조작으로 재실행될 때는 True가 되지 않도록, scrn_select 값 자체의 변화만 본다.
+    _is_fresh_screen_entry = st.session_state.get('_prev_scrn_select_tracker') != scrn_select
+    st.session_state['_prev_scrn_select_tracker'] = scrn_select
+
 
     # 🌟 [ 전략적 펌핑 로직 ]
     # 체결 로그(목록보기) 상태이고 검색어가 없을 때는 세션에 저장된 limit 만큼 가져옵니다.
@@ -6310,106 +6391,161 @@ if choice == "🏠 홈화면":
             themeking_header_cols = st.columns([2.3, 1])
             with themeking_header_cols[0]:
                 st.markdown("<h4 style='color:#FFD400; border-left: 4px solid #FFD400; padding-left: 10px;'>👑 테마킹 - 오늘의 테마 모멘텀 랭킹</h4>", unsafe_allow_html=True)
-                st.caption("오늘 외국인/기관 순매수 TOP 100(코스피)+TOP 100(코스닥)에 오른 종목 + 실시간 고래거래로 1억원 이상 체결이 있었던 종목을 테마별로 묶어, 어떤 테마에 수급이 몰리고 있는지 보여줍니다.")
+                st.caption("외국인/기관 순매수와 고래거래 데이터를 테마별로 묶어, 어떤 테마에 수급이 몰리고 있는지 보여줍니다. 아래에서 장마감 기준(정확)과 실시간(장중, 근사치) 중 보기 모드를 고를 수 있습니다.")
                 st.caption("⚠️ 테마 매핑 데이터가 현재 약 100개 종목에 한해 등록되어 있어, 테마 매핑이 없는 종목은 집계에서 빠질 수 있습니다.")
             with themeking_header_cols[1]:
                 tk_us_latest_date, tk_us_left_items, tk_us_right_items = get_us_theme_top_movers(left_count=8)
                 st.markdown(render_us_theme_widget_html(tk_us_latest_date, tk_us_left_items, tk_us_right_items), unsafe_allow_html=True)
 
-            # 🔧 [수정 2026-08-04] 사용자 리포트: 오전 10시~오후 4시 사이에 "테마킹"에 오면
-            # daily_whale_top200(장마감 후 16시에만 수집)에 "오늘자" 행이 아직 없어서
-            # "오늘자 수급 데이터가 아직 준비되지 않았습니다"가 뜨는 버그 발견.
-            # "고래 골든픽"/"외기 TOP100"/"공대차"/"신프로" 화면과 동일하게, 16시 이전이면
-            # 어제 날짜(이미 수집 완료된 데이터)로 폴백하도록 통일.
-            now_kst_theme = datetime.utcnow() + timedelta(hours=9)
-            if now_kst_theme.time() < datetime.strptime("16:00", "%H:%M").time():
-                target_dt_theme = now_kst_theme - timedelta(days=1)
-            else:
-                target_dt_theme = now_kst_theme
-            target_dt_theme = target_dt_theme.replace(hour=12, minute=0, second=0, microsecond=0)
-            today_theme = get_latest_market_open_date(target_dt_theme)
-            today_theme_str = today_theme.strftime("%Y-%m-%d")
-            st.caption(f"📅 {today_theme_str} 마감 기준 데이터입니다 (당일 16시 이전에는 전 거래일 자료가 표시됩니다).")
-
-            with st.spinner("🏷️ 오늘의 테마 모멘텀을 집계하는 중입니다..."):
-                try:
-                    theme_top_res = supabase.table("daily_whale_top200").select("*").eq("trade_date", today_theme_str).execute()
-                    df_theme_top = pd.DataFrame(theme_top_res.data) if theme_top_res.data else pd.DataFrame()
-                except Exception:
-                    df_theme_top = pd.DataFrame()
-
-                # 🌟 [신규 2026-08-03] 사용자 피드백: 삼성전자/SK하이닉스처럼 그날 "순매수" TOP100+100
-                # 밖(순매도였거나 순매수폭이 작았던 날)이면 테마 매핑이 있어도 테마 집계에서 통째로
-                # 빠지는 문제 발견 → daily_whale_top200에 없는 종목이라도, 오늘 실시간 고래거래(whale_log)에서
-                # 1억원 이상 단일 체결이 한 번이라도 있었다면 보완적으로 테마 집계에 포함시킴.
-                # (whale_log는 대형 개별 체결만 모은 로그라 진짜 "하루 전체 순매수"는 아니지만, TOP100+100
-                # 밖의 종목에 대해 우리가 가진 유일한 근사치라 이걸로 보완함.)
-                try:
-                    whale_theme_res = supabase.table("whale_log").select("name, code, side, amount_krw").eq("date", today_theme_str).execute()
-                    df_whale_theme = pd.DataFrame(whale_theme_res.data) if whale_theme_res.data else pd.DataFrame()
-                except Exception:
-                    df_whale_theme = pd.DataFrame()
-
-            if df_theme_top.empty and df_whale_theme.empty:
-                st.warning("⚠️ 오늘자 수급 데이터가 아직 준비되지 않았습니다.")
-            else:
-                if not df_theme_top.empty:
-                    df_theme_top['frgn_net'] = df_theme_top['frgn_buy'] - df_theme_top['frgn_sell']
-                    df_theme_top['orgn_net'] = df_theme_top['orgn_buy'] - df_theme_top['orgn_sell']
-                    df_theme_top['total_net'] = df_theme_top['frgn_net'] + df_theme_top['orgn_net']
-
-                existing_names_theme = set(df_theme_top['stock_name'].tolist()) if not df_theme_top.empty else set()
-
-                # 🌟 [신규 2026-08-03] whale_log 보완 후보 추출: 1억원 이상 단일 체결이 있었고,
-                # 이미 daily_whale_top200에 있는 종목은 중복 방지로 제외.
-                extra_names_theme = []
-                extra_net_map = {}
-                extra_code_map = {}
-                if not df_whale_theme.empty:
-                    df_whale_theme['signed_amt'] = df_whale_theme.apply(
-                        lambda r: r['amount_krw'] if r['side'] == '매수' else -r['amount_krw'], axis=1
-                    )
-                    whale_grp_theme = df_whale_theme.groupby('name').agg(
-                        max_amt=('amount_krw', 'max'),
-                        net_amt=('signed_amt', 'sum'),
-                        code=('code', 'first'),
-                    ).reset_index()
-                    whale_grp_theme = whale_grp_theme[whale_grp_theme['max_amt'] >= 100_000_000]
-                    whale_grp_theme = whale_grp_theme[~whale_grp_theme['name'].isin(existing_names_theme)]
-                    extra_names_theme = whale_grp_theme['name'].tolist()
-                    extra_net_map = dict(zip(whale_grp_theme['name'], whale_grp_theme['net_amt'] / 100_000_000))
-                    extra_code_map = dict(zip(whale_grp_theme['name'], whale_grp_theme['code']))
-
-                theme_map_today = get_themes_for_stocks(
-                    (df_theme_top['stock_name'].tolist() if not df_theme_top.empty else []) + extra_names_theme
+            # 🌟 [신규 2026-08-22] 사용자 요청: 장중에는 daily_whale_top200(16시 배치)이 아직 없어서
+            # "전 거래일 마감 기준" 데이터만 보여줄 수밖에 없던 한계를 보완 — 라디오 버튼으로 기존
+            # "장마감 기준"(정확하지만 배치 대기 필요) / 신규 "실시간(장중)"(근사치, 즉시 반영) 두
+            # 모드를 선택할 수 있게 함. 두 분기 모두 동일한 theme_agg 딕셔너리를 만들고, 그 이후의
+            # 표/트리맵/AI요약 렌더링(_render_theme_king_results)은 완전히 공유함(중복 없음).
+            # 🌟 [신규 2026-08-22] 사용자 요청: 화면에 "새로" 들어올 때는 현재 시각(장중 여부)에 따라
+            # 보기 모드를 자동 선택 — 장중(is_market_open_now())이면 실시간, 장외 시간이면 장마감 기준.
+            # 화면에 머무는 동안 사용자가 직접 고른 선택은 그대로 유지(다른 위젯 조작 시엔 재설정 안 함).
+            if _is_fresh_screen_entry:
+                st.session_state['theme_king_view_mode'] = (
+                    "⚡ 실시간 (장중, 근사치)" if is_market_open_now() else "📅 장마감 기준 (기존)"
                 )
 
-                theme_agg = {}
-                for _, r_t in df_theme_top.iterrows():
-                    theme_str_t = theme_map_today.get(r_t['stock_name'], "")
-                    if not theme_str_t:
-                        continue
-                    stock_code_t = r_t.get('stock_code', '')
-                    for t_name in [t.strip() for t in theme_str_t.split(',') if t.strip()]:
-                        if t_name not in theme_agg:
-                            theme_agg[t_name] = {"total_net": 0.0, "stocks": []}
-                        theme_agg[t_name]["total_net"] += r_t['total_net']
-                        # 🌟 [2026-07-31] 테마별 AI 요약 시 대표 종목 뉴스를 긁어오려면 종목코드가 필요해서 튜플에 코드 추가
-                        theme_agg[t_name]["stocks"].append((r_t['stock_name'], r_t['total_net'], stock_code_t))
+            theme_view_mode = st.radio(
+                "테마킹 보기 모드",
+                ["📅 장마감 기준 (기존)", "⚡ 실시간 (장중, 근사치)"],
+                horizontal=True,
+                key="theme_king_view_mode",
+                label_visibility="collapsed",
+            )
 
-                # 🌟 [신규 2026-08-03] whale_log 보완 종목을 동일한 방식으로 theme_agg에 병합
-                for name_e in extra_names_theme:
-                    theme_str_e = theme_map_today.get(name_e, "")
-                    if not theme_str_e:
-                        continue
-                    net_e = extra_net_map.get(name_e, 0.0)
-                    code_e = extra_code_map.get(name_e, '')
-                    for t_name in [t.strip() for t in theme_str_e.split(',') if t.strip()]:
-                        if t_name not in theme_agg:
-                            theme_agg[t_name] = {"total_net": 0.0, "stocks": []}
-                        theme_agg[t_name]["total_net"] += net_e
-                        theme_agg[t_name]["stocks"].append((name_e, net_e, code_e))
+            if theme_view_mode == "📅 장마감 기준 (기존)":
+                # 🔧 [수정 2026-08-04] 사용자 리포트: 오전 10시~오후 4시 사이에 "테마킹"에 오면
+                # daily_whale_top200(장마감 후 16시에만 수집)에 "오늘자" 행이 아직 없어서
+                # "오늘자 수급 데이터가 아직 준비되지 않았습니다"가 뜨는 버그 발견.
+                # "고래 골든픽"/"외기 TOP100"/"공대차"/"신프로" 화면과 동일하게, 16시 이전이면
+                # 어제 날짜(이미 수집 완료된 데이터)로 폴백하도록 통일.
+                now_kst_theme = datetime.utcnow() + timedelta(hours=9)
+                if now_kst_theme.time() < datetime.strptime("16:00", "%H:%M").time():
+                    target_dt_theme = now_kst_theme - timedelta(days=1)
+                else:
+                    target_dt_theme = now_kst_theme
+                target_dt_theme = target_dt_theme.replace(hour=12, minute=0, second=0, microsecond=0)
+                today_theme = get_latest_market_open_date(target_dt_theme)
+                today_theme_str = today_theme.strftime("%Y-%m-%d")
+                st.caption(f"📅 {today_theme_str} 마감 기준 데이터입니다 (당일 16시 이전에는 전 거래일 자료가 표시됩니다).")
 
+                with st.spinner("🏷️ 오늘의 테마 모멘텀을 집계하는 중입니다..."):
+                    try:
+                        theme_top_res = supabase.table("daily_whale_top200").select("*").eq("trade_date", today_theme_str).execute()
+                        df_theme_top = pd.DataFrame(theme_top_res.data) if theme_top_res.data else pd.DataFrame()
+                    except Exception:
+                        df_theme_top = pd.DataFrame()
+
+                    # 🌟 [신규 2026-08-03] 사용자 피드백: 삼성전자/SK하이닉스처럼 그날 "순매수" TOP100+100
+                    # 밖(순매도였거나 순매수폭이 작았던 날)이면 테마 매핑이 있어도 테마 집계에서 통째로
+                    # 빠지는 문제 발견 → daily_whale_top200에 없는 종목이라도, 오늘 실시간 고래거래(whale_log)에서
+                    # 1억원 이상 단일 체결이 한 번이라도 있었다면 보완적으로 테마 집계에 포함시킴.
+                    # (whale_log는 대형 개별 체결만 모은 로그라 진짜 "하루 전체 순매수"는 아니지만, TOP100+100
+                    # 밖의 종목에 대해 우리가 가진 유일한 근사치라 이걸로 보완함.)
+                    try:
+                        whale_theme_res = supabase.table("whale_log").select("name, code, side, amount_krw").eq("date", today_theme_str).execute()
+                        df_whale_theme = pd.DataFrame(whale_theme_res.data) if whale_theme_res.data else pd.DataFrame()
+                    except Exception:
+                        df_whale_theme = pd.DataFrame()
+
+                if df_theme_top.empty and df_whale_theme.empty:
+                    st.warning("⚠️ 오늘자 수급 데이터가 아직 준비되지 않았습니다.")
+                    theme_agg = {}
+                else:
+                    if not df_theme_top.empty:
+                        df_theme_top['frgn_net'] = df_theme_top['frgn_buy'] - df_theme_top['frgn_sell']
+                        df_theme_top['orgn_net'] = df_theme_top['orgn_buy'] - df_theme_top['orgn_sell']
+                        df_theme_top['total_net'] = df_theme_top['frgn_net'] + df_theme_top['orgn_net']
+
+                    existing_names_theme = set(df_theme_top['stock_name'].tolist()) if not df_theme_top.empty else set()
+
+                    # 🌟 [신규 2026-08-03] whale_log 보완 후보 추출: 1억원 이상 단일 체결이 있었고,
+                    # 이미 daily_whale_top200에 있는 종목은 중복 방지로 제외.
+                    extra_names_theme = []
+                    extra_net_map = {}
+                    extra_code_map = {}
+                    if not df_whale_theme.empty:
+                        df_whale_theme['signed_amt'] = df_whale_theme.apply(
+                            lambda r: r['amount_krw'] if r['side'] == '매수' else -r['amount_krw'], axis=1
+                        )
+                        whale_grp_theme = df_whale_theme.groupby('name').agg(
+                            max_amt=('amount_krw', 'max'),
+                            net_amt=('signed_amt', 'sum'),
+                            code=('code', 'first'),
+                        ).reset_index()
+                        whale_grp_theme = whale_grp_theme[whale_grp_theme['max_amt'] >= 100_000_000]
+                        whale_grp_theme = whale_grp_theme[~whale_grp_theme['name'].isin(existing_names_theme)]
+                        extra_names_theme = whale_grp_theme['name'].tolist()
+                        extra_net_map = dict(zip(whale_grp_theme['name'], whale_grp_theme['net_amt'] / 100_000_000))
+                        extra_code_map = dict(zip(whale_grp_theme['name'], whale_grp_theme['code']))
+
+                    theme_map_today = get_themes_for_stocks(
+                        (df_theme_top['stock_name'].tolist() if not df_theme_top.empty else []) + extra_names_theme
+                    )
+
+                    theme_agg = {}
+                    for _, r_t in df_theme_top.iterrows():
+                        theme_str_t = theme_map_today.get(r_t['stock_name'], "")
+                        if not theme_str_t:
+                            continue
+                        stock_code_t = r_t.get('stock_code', '')
+                        for t_name in [t.strip() for t in theme_str_t.split(',') if t.strip()]:
+                            if t_name not in theme_agg:
+                                theme_agg[t_name] = {"total_net": 0.0, "stocks": []}
+                            theme_agg[t_name]["total_net"] += r_t['total_net']
+                            # 🌟 [2026-07-31] 테마별 AI 요약 시 대표 종목 뉴스를 긁어오려면 종목코드가 필요해서 튜플에 코드 추가
+                            theme_agg[t_name]["stocks"].append((r_t['stock_name'], r_t['total_net'], stock_code_t))
+
+                    # 🌟 [신규 2026-08-03] whale_log 보완 종목을 동일한 방식으로 theme_agg에 병합
+                    for name_e in extra_names_theme:
+                        theme_str_e = theme_map_today.get(name_e, "")
+                        if not theme_str_e:
+                            continue
+                        net_e = extra_net_map.get(name_e, 0.0)
+                        code_e = extra_code_map.get(name_e, '')
+                        for t_name in [t.strip() for t in theme_str_e.split(',') if t.strip()]:
+                            if t_name not in theme_agg:
+                                theme_agg[t_name] = {"total_net": 0.0, "stocks": []}
+                            theme_agg[t_name]["total_net"] += net_e
+                            theme_agg[t_name]["stocks"].append((name_e, net_e, code_e))
+            else:
+                # 🌟 [수정 2026-08-22] 사용자 요청: 화면에 들어올 때마다 직접 계산(30~40초 대기)하는 대신,
+                # scripts/fetch_realtime_theme_agg.py가 장중 매시 정각에 미리 계산해 Supabase
+                # realtime_theme_snapshot(id=1 고정 1행)에 저장해둔 "최신 스냅샷"을 그대로 읽어와 즉시 보여줌.
+                # 계산이 진행 중(status='computing')이어도 theme_agg_json 필드 자체는 계산 완료 시점에만
+                # 갱신되므로, 계산 중에는 자동으로 "이전 시간 데이터"가 그대로 표시됨(사용자 요청 사양).
+                try:
+                    snap_res = supabase.table("realtime_theme_snapshot").select("*").eq("id", 1).execute()
+                    snap_row = snap_res.data[0] if snap_res.data else None
+                except Exception:
+                    snap_row = None
+
+                if not snap_row or not snap_row.get("theme_agg_json"):
+                    st.info("⚡ 아직 실시간 스냅샷이 없습니다. 스케줄러가 장중 매시 정각에 첫 계산을 시작합니다(약 30~40초 소요). 잠시 후 새로고침해 주세요.")
+                    theme_agg = {}
+                else:
+                    theme_agg = snap_row["theme_agg_json"]
+                    today_kst_str = (datetime.utcnow() + timedelta(hours=9)).strftime("%Y-%m-%d")
+                    snap_date = snap_row.get("trade_date", "") or ""
+                    snap_hour = snap_row.get("snapshot_hour", "") or ""
+                    is_computing = snap_row.get("status") == "computing"
+
+                    if snap_date and snap_date != today_kst_str:
+                        st.caption(f"⚠️ 오늘자 첫 계산이 아직 끝나지 않았습니다 — {snap_date} {snap_hour} 기준(전일 마지막) 데이터를 보여드립니다.")
+                    else:
+                        st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 테마 매핑 종목 전체(현재 100개)의 KIS 투자자별 매매동향(외국인+기관, 해당 시각 누적) + 실시간 고래거래를 합산합니다.")
+
+                    if is_computing:
+                        st.caption("🔄 다음 시간 데이터를 계산하는 중입니다(약 30~40초 소요) — 완료 전까지는 위 데이터가 계속 표시되며, 완료 후 새로고침하면 최신 데이터로 바뀝니다.")
+
+
+
+            def _render_theme_king_results(theme_agg):
                 if not theme_agg:
                     st.info("오늘 TOP 200 종목 중 테마 매핑이 확인된 종목이 없습니다.")
                 else:
@@ -6654,6 +6790,8 @@ if choice == "🏠 홈화면":
                                     "trigger_id": trigger_theme
                                 }
                                 st.rerun()
+
+            _render_theme_king_results(theme_agg)
 
         elif scrn_select == "상선고 화면":
             st.markdown("<h4 style='color:#FF8C00; border-left: 4px solid #FF8C00; padding-left: 10px;'>📡 상한가 선행 고래 포착 레이더 (상선고)</h4>", unsafe_allow_html=True)
