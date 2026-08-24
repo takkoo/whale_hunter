@@ -1635,7 +1635,7 @@ def get_kis_access_token():
 
     # 1. Supabase에서 유효한 토큰 읽기 시도
     try:
-        res = supabase.table("system_settings").select("value").eq("key", TOKEN_KEY).execute()
+        res = supabase_secret.table("system_settings").select("value").eq("key", TOKEN_KEY).execute()
         if res.data:
             data = json.loads(res.data[0]["value"])
             if time.time() - data.get("timestamp", 0) < TOKEN_TTL:
@@ -1913,7 +1913,7 @@ def render_profile_edit_panel(user_data, current_id, db_phone):
             
             # 닉네임 중복 체크
             if new_nickname != user_data['name']:
-                name_check = supabase.table("users").select("id").eq("name", new_nickname).execute()
+                name_check = supabase_secret.table("users").select("id").eq("name", new_nickname).execute()
                 if name_check.data:
                     msg_container.error(f"❌ '{new_nickname}' 닉네임은 이미 사용 중입니다. 다른 이름을 입력해 주십시오.")
                     import time
@@ -1974,7 +1974,7 @@ def render_admin_panel():
     st.caption("🛰️ 수집기 엔진의 전상(전일 상한가) 인정 범위를 튜닝합니다.")
     
     # 1. DB에서 현재 설정값 읽어오기
-    settings_res = supabase.table("system_settings").select("*").eq("key", "prev_upper_limit_window_days").execute()
+    settings_res = supabase_secret.table("system_settings").select("*").eq("key", "prev_upper_limit_window_days").execute()
     
     if settings_res.data:
         current_window = int(settings_res.data[0]['value'])
@@ -2008,7 +2008,7 @@ def render_admin_panel():
 
     # 3. 수익율 자랑 조회수 표시 제어 노브
     st.write("---")
-    views_res = supabase.table("system_settings").select("*").eq("key", "brag_board_show_views").execute()
+    views_res = supabase_secret.table("system_settings").select("*").eq("key", "brag_board_show_views").execute()
     current_show_views = "비공개 (사령관만 보임)" if views_res.data and views_res.data[0]['value'] == "False" else "전체 공개"
     
     col_v1, col_v2 = st.columns([3, 1])
@@ -2055,7 +2055,7 @@ def render_admin_panel():
     with col_l3:
         if st.button("👍 좋아요 조정", use_container_width=True, key="brag_likes_adj_btn"):
             try:
-                all_posts_res = supabase.table("brag_board").select("id, likes_count, created_at").execute()
+                all_posts_res = supabase_secret.table("brag_board").select("id, likes_count, created_at").execute()
                 target_posts = []
                 for p in (all_posts_res.data or []):
                     p_time_utc = pd.to_datetime(p['created_at'])
@@ -2091,7 +2091,7 @@ def render_admin_panel():
     with tab1:
         st.markdown("📋 전체 사용자 데이터베이스")
         
-        users_res = supabase.table("users").select("*").order("created_at", desc=True).execute()
+        users_res = supabase_secret.table("users").select("*").order("created_at", desc=True).execute()
         
         if users_res.data:
             # 레지스터 사전 채집 (체크박스 스캔)
@@ -2202,7 +2202,7 @@ def render_admin_panel():
     with tab2:
         st.markdown("📥 신규 권한 신청 현황")
         
-        pending_res = supabase.table("users").select("*").eq("is_allowed", False).execute()
+        pending_res = supabase_secret.table("users").select("*").eq("is_allowed", False).execute()
         
         if pending_res.data:
             selected_pending_ids = [
@@ -2515,7 +2515,7 @@ def render_admin_panel():
         if st.button("🚨 추적된 가상 데이터 일괄 삭제 🚨"):
             try:
                 # 1. system_settings에서 기록된 ID 가져오기
-                mock_ids_res = supabase.table("system_settings").select("value").like("key", "mock_whale_id%").execute()
+                mock_ids_res = supabase_secret.table("system_settings").select("value").like("key", "mock_whale_id%").execute()
                 if mock_ids_res.data:
                     deleted_count = 0
                     # 2. whale_log에서 삭제
@@ -3418,7 +3418,7 @@ if choice == "🔐 로그인/가입":
         
         if submit_login:
             if login_id and login_pw:
-                res = supabase.table("users").select("*").eq("username", login_id).execute()
+                res = supabase_secret.table("users").select("*").eq("username", login_id).execute()
                 if res.data:
                     user_info = res.data[0]
                     if user_info['password_hash'] == encrypt_password(login_pw):
@@ -3464,7 +3464,7 @@ if choice == "🔐 로그인/가입":
                     encoded_phone = encode_phone(new_phone)
                     
                     # 닉네임 중복 체크
-                    name_check = supabase.table("users").select("id").eq("name", new_name).execute()
+                    name_check = supabase_secret.table("users").select("id").eq("name", new_name).execute()
                     if name_check.data:
                         st.error(f"❌ '{new_name}' 닉네임(호출명)은 이미 사용 중입니다. 다른 이름을 입력해 주십시오.")
                     else:
@@ -4723,7 +4723,7 @@ if choice == "🏠 홈화면":
         if not search_keyword.strip():
             if show_only_upper_limit:
                 # 🚀 [DB 오프로딩 최적화] 상한가 종목을 먼저 찾고, DB에 해당 종목 데이터만 요청합니다!
-                sys_set = supabase.table("system_settings").select("value").eq("key", "prev_upper_limit_window_days").execute()
+                sys_set = supabase_secret.table("system_settings").select("value").eq("key", "prev_upper_limit_window_days").execute()
                 upper_window_days = int(sys_set.data[0]['value']) if sys_set.data else 3
                 upper_start_date = today - timedelta(days=upper_window_days)
                 
@@ -5485,7 +5485,7 @@ if choice == "🏠 홈화면":
                             
             # 요청 목록 및 캐시된 목록 불러오기
             try:
-                req_res = supabase.table("system_settings").select("*").like("key", "yield_req_%").execute()
+                req_res = supabase_secret.table("system_settings").select("*").like("key", "yield_req_%").execute()
                 req_list = []
                 for row in req_res.data:
                     try:
@@ -5671,7 +5671,7 @@ if choice == "🏠 홈화면":
                 # 수시로 갱신하면 dashboard.py 코드 수정/재배포 없이 문구·색상·스타일이 즉시 바뀜.
                 # 값이 없거나 조회 실패 시 배너를 조용히 생략(부가 기능이라 화면 전체에 영향 안 주게 방어).
                 try:
-                    _gp_banner_res = supabase.table("system_settings").select("value").eq("key", "golden_pick_banner_html").execute()
+                    _gp_banner_res = supabase_secret.table("system_settings").select("value").eq("key", "golden_pick_banner_html").execute()
                     if _gp_banner_res.data and _gp_banner_res.data[0].get('value'):
                         st.markdown(_gp_banner_res.data[0]['value'], unsafe_allow_html=True)
                 except Exception:
@@ -6146,7 +6146,7 @@ if choice == "🏠 홈화면":
             st.write("---")
 
             try:
-                watch_res = supabase.table("user_watchlist").select("*").eq("username", watch_username).order("created_at", desc=True).execute()
+                watch_res = supabase_secret.table("user_watchlist").select("*").eq("username", watch_username).order("created_at", desc=True).execute()
                 watch_list = watch_res.data if watch_res.data else []
             except Exception:
                 watch_list = []
@@ -6526,7 +6526,7 @@ if choice == "🏠 홈화면":
                     snap_row = None
 
                 if not snap_row or not snap_row.get("theme_agg_json"):
-                    st.info("⚡ 아직 실시간 스냅샷이 없습니다. 스케줄러가 장중 매시 정각에 첫 계산을 시작합니다(약 30~40초 소요). 잠시 후 새로고침해 주세요.")
+                    st.info("⚡ 아직 실시간 스냅샷이 없습니다. 스케줄러가 장중 10분마다 계산합니다. 잠시 후 새로고침해 주세요.")
                     theme_agg = {}
                 else:
                     theme_agg = snap_row["theme_agg_json"]
@@ -6538,10 +6538,10 @@ if choice == "🏠 홈화면":
                     if snap_date and snap_date != today_kst_str:
                         st.caption(f"⚠️ 오늘자 첫 계산이 아직 끝나지 않았습니다 — {snap_date} {snap_hour} 기준(전일 마지막) 데이터를 보여드립니다.")
                     else:
-                        st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 테마 매핑 종목 전체(현재 100개)의 KIS 투자자별 매매동향(외국인+기관, 해당 시각 누적) + 실시간 고래거래를 합산합니다.")
+                        st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 테마 매핑 종목 전체의 오늘자 체결(매수-매도, 투자자 구분 없이 시장 전체 수급)을 합산합니다. 10분마다 자동 갱신됩니다.")
 
                     if is_computing:
-                        st.caption("🔄 다음 시간 데이터를 계산하는 중입니다(약 30~40초 소요) — 완료 전까지는 위 데이터가 계속 표시되며, 완료 후 새로고침하면 최신 데이터로 바뀝니다.")
+                        st.caption("🔄 다음 데이터를 계산하는 중입니다 — 완료 전까지는 위 데이터가 계속 표시되며, 완료 후 새로고침하면 최신 데이터로 바뀝니다.")
 
 
 
@@ -7513,7 +7513,7 @@ if choice == "🏠 홈화면":
             def render_post(post_id):
                 try:
                     # 렌더링 시점에 DB에서 최신 상태를 가져옵니다.
-                    fresh_res = supabase.table("brag_board").select("*").eq("id", post_id).execute()
+                    fresh_res = supabase_secret.table("brag_board").select("*").eq("id", post_id).execute()
                     if not fresh_res.data:
                         return
                     post = fresh_res.data[0]
@@ -7642,9 +7642,9 @@ if choice == "🏠 홈화면":
                     view_mode = st.session_state.get("brag_layout_mode_radio", "바둑판형")
                     
                     if view_mode == "목록형":
-                        brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden").order("created_at", desc=True).limit(100).execute()
+                        brag_res = supabase_secret.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden").order("created_at", desc=True).limit(100).execute()
                     else:
-                        brag_res = supabase.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden, image_base64").order("created_at", desc=True).limit(100).execute()
+                        brag_res = supabase_secret.table("brag_board").select("id, title, author, created_at, likes_count, views_count, is_hidden, image_base64").order("created_at", desc=True).limit(100).execute()
                     
                     if not brag_res.data:
                         st.info("아직 자랑글이 없습니다. 첫 번째로 자랑해 보세요!")
@@ -7692,7 +7692,7 @@ if choice == "🏠 홈화면":
                             st.html("<div class='my-table-start'></div>")
                         
                             # --- 테이블 헤더 ---
-                            show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
+                            show_views_res = supabase_secret.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
                             show_views_public = True
                             if show_views_res.data and show_views_res.data[0]['value'] == "False":
                                 show_views_public = False
@@ -7752,7 +7752,7 @@ if choice == "🏠 홈화면":
                                     st.html(f"<div style='text-align:center; font-size:14px; color:#FFB4B4; margin-top:4px;'>{likes}</div>")
                         
                         elif view_mode == "바둑판형":
-                            show_views_res = supabase.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
+                            show_views_res = supabase_secret.table("system_settings").select("value").eq("key", "brag_board_show_views").execute()
                             show_views_public = True
                             if show_views_res.data and show_views_res.data[0]['value'] == "False":
                                 show_views_public = False
@@ -8861,7 +8861,7 @@ if choice == "🏠 홈화면":
 
 elif choice == "📝 내 정보 수정":
     current_id = st.session_state['username']
-    user_res = supabase.table("users").select("*").eq("username", current_id).execute()
+    user_res = supabase_secret.table("users").select("*").eq("username", current_id).execute()
     if user_res.data:
         user_data = user_res.data[0]
         try:
