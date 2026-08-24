@@ -1571,7 +1571,7 @@ def get_sentiment_grade_color(grade):
 # ⚠️ 당일 실시간 틱(df, 세션에 이미 로드된 실시간 데이터)을 더하는 부분은 캐시 밖(호출부)에 그대로 남겨둬서
 # 캐시가 실시간성을 완전히 죽이지는 않도록 함 — df 병합은 이미 메모리에 있는 데이터라 비용이 거의 없음.
 @st.cache_data(ttl=86400, show_spinner=False)
-def _fetch_golden_pick_base_data(sel_date_str, start_date_str):
+def _fetch_golden_pick_base_data_cached(sel_date_str, start_date_str):
     top_res = supabase.table("daily_whale_top200").select("*").eq("trade_date", sel_date_str).limit(1000).execute()
     hist_res = supabase.table("daily_whale_top200").select("stock_code, trade_date").gte("trade_date", start_date_str).lte("trade_date", sel_date_str).limit(5000).execute()
     upper_res = supabase.table("upper_limit_stocks").select("name").gte("recorded_date", start_date_str).lte("recorded_date", sel_date_str).execute()
@@ -1594,6 +1594,20 @@ def _fetch_golden_pick_base_data(sel_date_str, start_date_str):
         "upper_data": upper_res.data or [],
         "whale_log_data": all_w_data,
     }
+
+# 🐛 [수정 2026-08-24] 실제 사고: 16시 직후 daily_whale_top200 배치가 아직 안 끝난 시점에 골든픽
+# 화면을 한 번 열면, 위 함수가 "빈 결과"를 24시간(ttl=86400) 캐시에 그대로 굳혀버려서, 몇 분 뒤
+# 배치가 실제로 끝나 데이터가 들어와도 캐시가 안 갱신되는 한 계속 "데이터가 준비되지 않았습니다"만
+# 보여주는 버그 발생. 아래 래퍼가 캐시된 결과의 top_data가 비어있을 때만 캐시를 무시하고 즉시
+# 한 번 더 직접(가벼운 쿼리로) 확인해서, 실제로 데이터가 들어왔으면 캐시를 지우고 새로 채운다.
+def _fetch_golden_pick_base_data(sel_date_str, start_date_str):
+    data = _fetch_golden_pick_base_data_cached(sel_date_str, start_date_str)
+    if not data["top_data"]:
+        fresh_check = supabase.table("daily_whale_top200").select("stock_code").eq("trade_date", sel_date_str).limit(1).execute()
+        if fresh_check.data:
+            _fetch_golden_pick_base_data_cached.clear()
+            data = _fetch_golden_pick_base_data_cached(sel_date_str, start_date_str)
+    return data
 
 
 @st.cache_data(ttl=600)
@@ -1876,6 +1890,34 @@ def get_latest_market_open_date(base_date=None):
             continue
         break
     return target.date()
+
+# 🌟 [신규 2026-08-24] 사용자 요청: daily_whale_top200(16시 배치) 참조 화면들이 16시가 지났는데도
+# 그날 배치가 아직 안 끝나 있으면(지연) "데이터 없음" 경고를 띄우던 문제 수정. 16시가 지났어도
+# 실제로 daily_whale_top200에 그 날짜 데이터가 있는지 가볍게 확인해서, 없으면 전 거래일로 한 번
+# 더 폴백시켜 장중처럼 "직전 완성 데이터"를 계속 보여주도록 함(배치가 끝나면 다음 재실행부터 자동 전환).
+@st.cache_data(ttl=60, show_spinner=False)
+def _daily_top200_has_data(date_str):
+    try:
+        res = supabase.table("daily_whale_top200").select("stock_code").eq("trade_date", date_str).limit(1).execute()
+        return bool(res.data)
+    except Exception:
+        return True  # 조회 자체가 실패하면 안전하게 "있다"고 간주 — 무한 폴백 방지, 기존 동작 유지
+
+def get_batch_ready_market_date(now_kst):
+    if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
+        target_dt = now_kst - timedelta(days=1)
+    else:
+        target_dt = now_kst
+    target_dt = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
+    candidate = get_latest_market_open_date(target_dt)
+
+    if now_kst.time() >= datetime.strptime("16:00", "%H:%M").time():
+        if not _daily_top200_has_data(candidate.strftime("%Y-%m-%d")):
+            fallback_dt = (candidate - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+            candidate = get_latest_market_open_date(fallback_dt)
+
+    return candidate
+
 
 def render_profile_edit_panel(user_data, current_id, db_phone):
     st.subheader("📝 내 정보 수정")
@@ -5683,12 +5725,10 @@ if choice == "🏠 홈화면":
             with col_gold_right:
                 # 📅 골든픽 전용 커스텀 HTML 달력 연동
                 now_kst = datetime.utcnow() + timedelta(hours=9)
-                if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
-                    target_dt = now_kst - timedelta(days=1)
-                else:
-                    target_dt = now_kst
-                target_dt = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
-                today_kor = get_latest_market_open_date(target_dt)
+                # 🌟 [수정 2026-08-24] 사용자 요청: 16시가 지났는데도 그날 배치가 아직 안 끝나 있으면
+                # (지연) "데이터 없음"이 뜨는 대신, 배치가 실제로 채워질 때까지 전 거래일 데이터를
+                # 계속 보여주도록 get_batch_ready_market_date()로 교체(휴일/주말 스킵 로직은 그대로 재사용).
+                today_kor = get_batch_ready_market_date(now_kst)
                 min_date = today_kor - timedelta(days=90)
                 
                 import calendar
@@ -5699,6 +5739,13 @@ if choice == "🏠 홈화면":
                     st.session_state.golden_cal_month = today_kor.month
                     st.session_state.golden_selected_date = today_kor
                     st.session_state.golden_cal_reset = 0
+                    st.session_state.golden_date_touched = False
+                elif not st.session_state.get('golden_date_touched', False):
+                    # 사용자가 달력을 직접 클릭한 적 없으면 매 재실행마다 "배치가 실제로 채워진
+                    # 최신 거래일"로 계속 맞춰줌 — 배치가 끝나는 순간부터 자동으로 오늘자 전환.
+                    st.session_state.golden_cal_year = today_kor.year
+                    st.session_state.golden_cal_month = today_kor.month
+                    st.session_state.golden_selected_date = today_kor
                 
                 cal_year = st.session_state.golden_cal_year
                 cal_month = st.session_state.golden_cal_month
@@ -5773,6 +5820,7 @@ if choice == "🏠 홈화면":
                 elif g_clicked.startswith('gcal_date_'):
                     date_str = g_clicked.split('gcal_date_')[1]
                     st.session_state.golden_selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    st.session_state.golden_date_touched = True
                     st.session_state.golden_cal_reset += 1
                     st.rerun()
 
@@ -7146,17 +7194,10 @@ if choice == "🏠 홈화면":
                     # 달력 선택기 (오늘 ~ 3개월 전)
                     # 탑백 데이터는 매일 오후 4시에 수집되므로, 4시 이전에는 전날 데이터를 기본으로 보여주도록 설정합니다.
                     now_kst = datetime.utcnow() + timedelta(hours=9)
-                    if now_kst.time() < datetime.strptime("16:00", "%H:%M").time():
-                        # 오후 4시 이전이면 전날 기준
-                        target_dt = now_kst - timedelta(days=1)
-                    else:
-                        target_dt = now_kst
-                        
-                    # get_latest_market_open_date 내부의 '오전 9시 이전이면 하루 빼기' 로직을 회피하기 위해 시간을 정오로 고정합니다.
-                    target_dt = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
-                        
-                    # 휴일/주말을 건너뛰고 가장 최근 유효한 장 마감일을 가져옵니다.
-                    today_kor = get_latest_market_open_date(target_dt)
+                    # 🌟 [수정 2026-08-24] 사용자 요청: 16시가 지났는데도 그날 배치가 아직 안 끝나 있으면
+                    # (지연) "데이터 없음"이 뜨는 대신, 배치가 실제로 채워질 때까지 전 거래일 데이터를
+                    # 계속 보여주도록 get_batch_ready_market_date()로 교체(휴일/주말 스킵 로직은 그대로 재사용).
+                    today_kor = get_batch_ready_market_date(now_kst)
                     min_date = today_kor - timedelta(days=90)
                     
                     import calendar
@@ -7167,6 +7208,13 @@ if choice == "🏠 홈화면":
                         st.session_state.top100_cal_month = today_kor.month
                         st.session_state.top100_selected_date = today_kor
                         st.session_state.top100_cal_reset = 0
+                        st.session_state.top100_date_touched = False
+                    elif not st.session_state.get('top100_date_touched', False):
+                        # 사용자가 달력을 직접 클릭한 적 없으면 매 재실행마다 "배치가 실제로 채워진
+                        # 최신 거래일"로 계속 맞춰줌 — 배치가 끝나는 순간부터 자동으로 오늘자 전환.
+                        st.session_state.top100_cal_year = today_kor.year
+                        st.session_state.top100_cal_month = today_kor.month
+                        st.session_state.top100_selected_date = today_kor
                     
                     cal_year = st.session_state.top100_cal_year
                     cal_month = st.session_state.top100_cal_month
@@ -7243,6 +7291,7 @@ if choice == "🏠 홈화면":
                     elif clicked.startswith('cal_date_'):
                         date_str = clicked.split('cal_date_')[1]
                         st.session_state.top100_selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                        st.session_state.top100_date_touched = True
                         st.session_state.top100_cal_reset += 1
                         st.rerun()
                 
