@@ -977,6 +977,53 @@ def get_themes_for_stocks(stock_names):
     except Exception as e:
         return {}
 
+# 🌟 [신규 2026-08-25] 골든픽 화면에 "실시간 테마킹" 순위 배지를 얹기 위한 헬퍼.
+# 사용자 요청: 골든픽의 점수 계산 로직(외국인/기관 순매수 기반)은 절대 건드리지 않고,
+# "핵심 추천 포인트" 컬럼 맨 앞에 참고용 배지 문구만 얹어줌(순수 정보 표시, 점수 미반영).
+# realtime_theme_snapshot(테마킹 실시간 모드가 10분마다 갱신)의 테마별 순매수를 그대로
+# 순위만 매겨서 재사용 — 새로운 계산/쿼리 부하 없이 기존 스냅샷을 얇게 얹는 방식.
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_realtime_theme_rank_map():
+    try:
+        snap_res = supabase.table("realtime_theme_snapshot").select("trade_date, theme_agg_json").eq("id", 1).execute()
+        snap_row = snap_res.data[0] if snap_res.data else None
+    except Exception:
+        return {}, 0
+    if not snap_row or not snap_row.get("theme_agg_json"):
+        return {}, 0
+    # 오늘자 스냅샷이 아니면(예: 아직 오늘 첫 계산 전 = 전일 마지막 스냅샷) 배지를 아예 안 붙임 —
+    # 배지는 "지금 이 순간의 실시간 테마 순위"만 의미가 있어서, 날짜가 다르면 오해를 줄 수 있음.
+    today_kst_str = (datetime.utcnow() + timedelta(hours=9)).strftime("%Y-%m-%d")
+    if snap_row.get("trade_date") != today_kst_str:
+        return {}, 0
+    theme_agg = snap_row["theme_agg_json"]
+    ranked = sorted(theme_agg.items(), key=lambda kv: kv[1].get("total_net", 0), reverse=True)
+    rank_map = {t_name: idx + 1 for idx, (t_name, _info) in enumerate(ranked)}
+    return rank_map, len(ranked)
+
+def _get_realtime_theme_badge(clean_name, theme_map, rank_map, total_themes):
+    if not rank_map or total_themes == 0:
+        return None
+    theme_str = theme_map.get(clean_name, "")
+    if not theme_str:
+        return None
+    best_rank, best_theme = None, None
+    for t_name in [t.strip() for t in theme_str.split(',') if t.strip()]:
+        r = rank_map.get(t_name)
+        if r is not None and (best_rank is None or r < best_rank):
+            best_rank, best_theme = r, t_name
+    if best_rank is None:
+        return None
+    if best_rank == 1:
+        return f"🥇 실시간 테마 1위({best_theme})"
+    if best_rank == 2:
+        return f"🥈 실시간 테마 2위({best_theme})"
+    if best_rank == 3:
+        return f"🥉 실시간 테마 3위({best_theme})"
+    if total_themes >= 5 and best_rank == total_themes:
+        return f"🧊 실시간 테마 꼴찌({best_theme})"
+    return None
+
 # 🔧 [수정 2026-07-31, 3번째] table 레이아웃으로 바꾼 뒤에도 다이얼로그 기본 폭이 좁아서
 # 그 안에서 텍스트가 원치 않게 줄바꿈되는 문제(종목코드가 이름 아래로, 52주고저/현재가가
 # 2줄로 분리)가 있어 사용자가 지적함 → 처음엔 width="large"로 시도했으나 사용자가 "너무 넓어졌다,
@@ -5882,6 +5929,28 @@ if choice == "🏠 홈화면":
                             existing_b, existing_s = whale_realtime.get(c_code, (0, 0))
                             whale_realtime[c_code] = (existing_b + b_sum, existing_s + s_sum)
 
+                    # 🌟 [신규 2026-08-25] 실시간 테마킹 순위 배지 — 사용자 요청(2026-08-25): 골든픽 점수 계산
+                    # 로직(외국인/기관 순매수 기반)은 절대 건드리지 않고, "핵심 추천 포인트" 컬럼 맨 앞에
+                    # 참고용 배지 문구만 얹어줌(순수 정보 표시, 점수 미반영).
+                    # 🔧 [수정 2026-08-25 2차] 사용자 요청: 배지는 "지금 이 순간 핫한 테마"라는 의미라서,
+                    # 장 마감 후에는 (스냅샷 자체는 마감 직전 값이 자정까지 그대로 남아있지만) 참고할
+                    # 가치가 없다고 보고 아예 표시하지 않기로 함 — is_market_open_now()로 게이트.
+                    # 그리고 "오늘" 실제 날짜를 보고 있을 때만 조회(배치 지연으로 selected_date가
+                    # 어제로 폴백된 경우엔 실시간 데이터와 날짜가 안 맞으므로 배지를 표시하지 않음).
+                    if selected_date == now_kst.date() and is_market_open_now():
+                        _gp_theme_rank_map, _gp_total_themes = _fetch_realtime_theme_rank_map()
+                    else:
+                        _gp_theme_rank_map, _gp_total_themes = {}, 0
+
+                    if _gp_theme_rank_map:
+                        _gp_clean_names = [
+                            n.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
+                            for n in df_latest_gp['stock_name'].tolist()
+                        ]
+                        _gp_theme_map = get_themes_for_stocks(_gp_clean_names)
+                    else:
+                        _gp_theme_map = {}
+
                     candidates = []
                     for _, r_val in df_latest_gp.iterrows():
                         name_str = r_val['stock_name']
@@ -5897,6 +5966,7 @@ if choice == "🏠 홈화면":
 
                         score = 25
                         reasons = []
+                        _rt_badge = _get_realtime_theme_badge(clean_n, _gp_theme_map, _gp_theme_rank_map, _gp_total_themes)
 
                         # 🔧 [버그 수정 2026-07-29]: 이름(clean_n/name_str) 대신 종목코드로 조회 (whale_realtime도 code 기준으로 통일됨)
                         rt_buy, rt_sell = whale_realtime.get(str(code_str).strip().zfill(6), (0, 0))
@@ -5955,6 +6025,8 @@ if choice == "🏠 홈화면":
 
                         if not reasons:
                             reasons.append("수급 순매수 우상향")
+                        if _rt_badge:
+                            reasons.insert(0, _rt_badge)
 
                         candidates.append({
                             "code": code_str,
@@ -6085,7 +6157,11 @@ if choice == "🏠 홈화면":
                             styled_gp,
                             use_container_width=True,
                             hide_index=True,
-                            height=580,
+                            # 🔧 [수정 2026-08-25] 사용자 피드백: 20개 행 중 15개만 보이고 나머지는
+                            # 그리드 내부 스크롤이 필요했는데, 이 내부 스크롤 중에 glide-data-grid의
+                            # 행 강조(커서바)가 깨져 보이는 렌더링 버그가 있었음 → 아예 내부 스크롤이
+                            # 필요 없도록 높이를 20행 전체 + 헤더가 한 번에 다 보이는 값으로 확장.
+                            height=775,
                             on_select="rerun",
                             selection_mode="single-row",
                             key=top20_key_gp,
@@ -6598,11 +6674,20 @@ if choice == "🏠 홈화면":
                     st.info("오늘 TOP 200 종목 중 테마 매핑이 확인된 종목이 없습니다.")
                 else:
                     theme_rows = []
+                    # 🌟 [신규 2026-08-25] 사용자 리포트: "실시간(장중)" 모드는 하루 누적 순매수가
+                    # 보통 10억 미만으로 작아서, 기존처럼 소수점 없이 반올림(:,.0f)하면 대부분
+                    # "0억"으로 표시되어 실제로는 있는 수급 신호가 안 보이는 문제 발견(장마감 모드는
+                    # 보통 수십~수만억 단위라 원래 소수점 없이도 문제없었음). 이 화면에 지금 넘어온
+                    # theme_agg의 최대 절대값이 작으면(10억 미만) 자동으로 소수점 1자리까지 보여줌 —
+                    # 장마감/실시간 두 모드를 이 함수 하나가 같이 그리므로 모드를 직접 구분하는 대신
+                    # 데이터 규모로 자동 판단.
+                    _theme_max_abs = max((abs(info_t.get("total_net", 0)) for info_t in theme_agg.values()), default=0)
+                    _theme_decimals = 1 if _theme_max_abs < 10 else 0
                     for t_name, info_t in theme_agg.items():
                         top_stocks_t = sorted(info_t["stocks"], key=lambda x: x[1], reverse=True)[:3]
                         # 🔧 [수정 2026-08-03] 사용자 요청: 트리맵 호버 메시지에서 종목 이름만 빨간색으로 강조
                         # (호버 텍스트도 차트 text와 동일한 pseudo-html 렌더러를 쓰므로 <span style> 사용 가능).
-                        top_stocks_str_t = ", ".join([f"<span style='color:#FF4B4B; font-weight:bold;'>{n}</span>({v:,.0f}억)" for n, v, c in top_stocks_t])
+                        top_stocks_str_t = ", ".join([f"<span style='color:#FF4B4B; font-weight:bold;'>{n}</span>({v:,.{_theme_decimals}f}억)" for n, v, c in top_stocks_t])
                         theme_rows.append({
                             "테마명": t_name,
                             "종목수": len(info_t["stocks"]),
@@ -6713,8 +6798,8 @@ if choice == "🏠 홈화면":
                     # (균일 28px, 사용자가 "아주 좋았어!"로 확인한 상태)로 되돌림. 순위별 차등 폰트는
                     # 추후 검증 가능한 방법을 찾을 때까지 보류.
                     fig_treemap.update_traces(
-                        texttemplate="<b>%{label}</b><br>%{customdata[2]:,.0f}억",
-                        hovertemplate="<b>%{label}</b><br>합산 외/기 순매수: %{customdata[2]:,.0f}억<br>종목수: %{customdata[0]}개<br>대표 종목: %{customdata[1]}<extra></extra>",
+                        texttemplate=f"<b>%{{label}}</b><br>%{{customdata[2]:,.{_theme_decimals}f}}억",
+                        hovertemplate=f"<b>%{{label}}</b><br>합산 외/기 순매수: %{{customdata[2]:,.{_theme_decimals}f}}억<br>종목수: %{{customdata[0]}}개<br>대표 종목: %{{customdata[1]}}<extra></extra>",
                         textposition="middle center",
                         textfont_size=28,
                         # 🔧 [수정 2026-08-03] 사용자 요청: 호버 메시지 글자 크기를 기존(플롯리 기본 13px) 대비
@@ -6789,7 +6874,7 @@ if choice == "🏠 홈화면":
                         theme_name_tk = r_tk["테마명"]
                         rep_list_tk = sorted(theme_agg[theme_name_tk]["stocks"], key=lambda x: x[1], reverse=True)[:5]
                         rep_html_tk = ", ".join(
-                            f"{n}(<span style='color:#ff4b4b; font-weight:bold;'>{v:,.0f}억</span>)"
+                            f"{n}(<span style='color:#ff4b4b; font-weight:bold;'>{v:,.{_theme_decimals}f}억</span>)"
                             for n, v, c in rep_list_tk
                         )
                         theme_rank_rows_html.append(
@@ -6797,7 +6882,7 @@ if choice == "🏠 홈화면":
                             f"<td style='width:1%; white-space:nowrap; text-align:center; padding:6px 8px;'>{int(r_tk['순위'])}위</td>"
                             f"<td style='width:1%; white-space:nowrap; text-align:left; padding:6px 10px;'>{theme_name_tk}</td>"
                             f"<td style='width:1%; white-space:nowrap; text-align:center; padding:6px 8px;'>{int(r_tk['종목수'])}</td>"
-                            f"<td style='width:1%; white-space:nowrap; text-align:right; padding:6px 10px;'>{r_tk['합산 외/기 순매수(억)']:,.0f}억</td>"
+                            f"<td style='width:1%; white-space:nowrap; text-align:right; padding:6px 10px;'>{r_tk['합산 외/기 순매수(억)']:,.{_theme_decimals}f}억</td>"
                             f"<td style='text-align:left; padding:6px 10px;'>{rep_html_tk}</td>"
                             "</tr>"
                         )
