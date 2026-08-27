@@ -977,6 +977,31 @@ def get_themes_for_stocks(stock_names):
     except Exception as e:
         return {}
 
+# 🌈 [위치 이동 2026-08-27] 원래 "테마 랭킹" 화면(_render_theme_king_results) 안에서만 지역변수로
+# 정의돼있던 트리맵 순위별 색상표를 모듈 레벨로 끌어올림 — 골든픽 "특기" 컬럼(아래
+# _get_theme_display)도 트리맵과 "동일한 순위=동일한 색" 원칙을 공유해야 해서, 두 곳이 서로 다른
+# 사본을 들고 있다가 색이 어긋나는 일이 없도록 하나만 두고 같이 참조하게 함. 색상표 자체(내용/순서)는
+# 2026-08-04에 확정된 것 그대로 전혀 안 바꿈.
+_THEME_RANK_COLORS = [
+    "#FF4B4B",  # 1위 빨강
+    "#FFA500",  # 2위 주황
+    "#FFD700",  # 3위 노랑
+    "#00E676",  # 4위 초록
+    "#4B89B5",  # 5위 파랑
+    "#3E4F69",  # 6위 남색 (btn-style-darkblue와 동일 톤)
+    "#683B91",  # 7위 보라 (btn-style-purple과 동일 톤)
+    "#FFB6C1",  # 8위 분홍
+    "#FF69B4",  # 9위 = "💖 수익율 자랑" 버튼 색
+    "#9E6C2E",  # 10위 = "상선고" 버튼 색
+]
+
+def _rank_to_theme_color(rank):
+    """1부터 시작하는 테마 순위를 위 _THEME_RANK_COLORS 색상표의 hex 색으로 변환(범위 밖은 회색 폴백)."""
+    if rank is None or rank < 1:
+        return "#777777"
+    idx = rank - 1
+    return _THEME_RANK_COLORS[idx] if idx < len(_THEME_RANK_COLORS) else "#777777"
+
 # 🌟 [신규 2026-08-25] 골든픽 화면에 "실시간 테마킹" 순위 배지를 얹기 위한 헬퍼.
 # 사용자 요청: 골든픽의 점수 계산 로직(외국인/기관 순매수 기반)은 절대 건드리지 않고,
 # "핵심 추천 포인트" 컬럼 맨 앞에 참고용 배지 문구만 얹어줌(순수 정보 표시, 점수 미반영).
@@ -1023,6 +1048,99 @@ def _get_realtime_theme_badge(clean_name, theme_map, rank_map, total_themes):
     if total_themes >= 5 and best_rank == total_themes:
         return f"🧊 실시간 테마 꼴찌({best_theme})"
     return None
+
+# 🌟 [신규 2026-08-27] 골든픽 "특기" 컬럼(구 "시장")용 — 장마감 후/과거 날짜를 볼 때는 위
+# _fetch_realtime_theme_rank_map(장중 전용, 오늘자 스냅샷만 인정)을 쓸 수 없으므로, "테마 랭킹"
+# 화면의 "📅 장마감 기준" 분기(daily_whale_top200 + whale_log 보완, ~6600줄대)와 동일한 집계
+# 로직을 지정한 날짜 하나에 대해 재계산하는 버전. 그 화면 코드를 직접 함수로 뽑아 공용화하는
+# 리팩터링은 (오래 검증된 화면을 건드리는 리스크가 있어) 하지 않고, 별도 함수로 가볍게 복제함
+# — "테마 랭킹" 화면 로직을 고칠 때 이 함수도 같이 봐야 한다는 점을 인지하고 있음.
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_eod_theme_rank_map(date_str):
+    try:
+        theme_top_res = supabase.table("daily_whale_top200").select("*").eq("trade_date", date_str).execute()
+        df_theme_top_e = pd.DataFrame(theme_top_res.data) if theme_top_res.data else pd.DataFrame()
+    except Exception:
+        df_theme_top_e = pd.DataFrame()
+    try:
+        whale_theme_res = supabase.table("whale_log").select("name, code, side, amount_krw").eq("date", date_str).execute()
+        df_whale_theme_e = pd.DataFrame(whale_theme_res.data) if whale_theme_res.data else pd.DataFrame()
+    except Exception:
+        df_whale_theme_e = pd.DataFrame()
+
+    if df_theme_top_e.empty and df_whale_theme_e.empty:
+        return {}, 0
+
+    if not df_theme_top_e.empty:
+        df_theme_top_e['frgn_net'] = df_theme_top_e['frgn_buy'] - df_theme_top_e['frgn_sell']
+        df_theme_top_e['orgn_net'] = df_theme_top_e['orgn_buy'] - df_theme_top_e['orgn_sell']
+        df_theme_top_e['total_net'] = df_theme_top_e['frgn_net'] + df_theme_top_e['orgn_net']
+
+    existing_names_e = set(df_theme_top_e['stock_name'].tolist()) if not df_theme_top_e.empty else set()
+
+    extra_names_e = []
+    extra_net_map_e = {}
+    if not df_whale_theme_e.empty:
+        df_whale_theme_e['signed_amt'] = df_whale_theme_e.apply(
+            lambda r: r['amount_krw'] if r['side'] == '매수' else -r['amount_krw'], axis=1
+        )
+        whale_grp_e = df_whale_theme_e.groupby('name').agg(
+            max_amt=('amount_krw', 'max'),
+            net_amt=('signed_amt', 'sum'),
+        ).reset_index()
+        whale_grp_e = whale_grp_e[whale_grp_e['max_amt'] >= 100_000_000]
+        whale_grp_e = whale_grp_e[~whale_grp_e['name'].isin(existing_names_e)]
+        extra_names_e = whale_grp_e['name'].tolist()
+        extra_net_map_e = dict(zip(whale_grp_e['name'], whale_grp_e['net_amt'] / 100_000_000))
+
+    theme_map_e = get_themes_for_stocks(
+        (df_theme_top_e['stock_name'].tolist() if not df_theme_top_e.empty else []) + extra_names_e
+    )
+
+    theme_totals_e = {}
+    for _, r_e in df_theme_top_e.iterrows():
+        theme_str_e = theme_map_e.get(r_e['stock_name'], "")
+        if not theme_str_e:
+            continue
+        for t_name in [t.strip() for t in theme_str_e.split(',') if t.strip()]:
+            theme_totals_e[t_name] = theme_totals_e.get(t_name, 0.0) + r_e['total_net']
+    for name_e in extra_names_e:
+        theme_str_e = theme_map_e.get(name_e, "")
+        if not theme_str_e:
+            continue
+        net_e = extra_net_map_e.get(name_e, 0.0)
+        for t_name in [t.strip() for t in theme_str_e.split(',') if t.strip()]:
+            theme_totals_e[t_name] = theme_totals_e.get(t_name, 0.0) + net_e
+
+    if not theme_totals_e:
+        return {}, 0
+    ranked_e = sorted(theme_totals_e.items(), key=lambda kv: kv[1], reverse=True)
+    rank_map_e = {t_name: idx + 1 for idx, (t_name, _v) in enumerate(ranked_e)}
+    return rank_map_e, len(ranked_e)
+
+# 🌟 [신규 2026-08-27] 골든픽 "특기" 컬럼 값(테마명 또는 기존 시장명) + 순위 색을 결정하는 헬퍼.
+# 위 배지(_get_realtime_theme_badge)와 달리 이건 "표시할 값 자체"를 바꾸는 것이라 (1) 종목이
+# 테마에 속해있으면 순위 데이터 유무와 무관하게 항상 테마명을 보여주고(사용자 요청: "테마에
+# 속해있다면 그 테마주 이름을 표시"), (2) 순위 데이터가 있을 때만 그 순위에 해당하는 트리맵 색을
+# 같이 반환해 표에서 색으로 강조. 한 종목이 여러 테마에 걸쳐 있으면(예: 한국항공우주=방산+우주항공)
+# 배지와 동일한 원칙으로 "순위가 가장 좋은 테마 하나"만 선택. 테마가 아예 없으면 (테마명, None) 대신
+# (기존 시장명, None)을 그대로 반환 — "테마 아닌 종목은 지금처럼 시장이름" 요청 그대로 유지.
+def _get_theme_display(clean_name, theme_map, rank_map, fallback_market):
+    theme_str = theme_map.get(clean_name, "")
+    themes = [t.strip() for t in theme_str.split(',') if t.strip()] if theme_str else []
+    if not themes:
+        return fallback_market, None
+    if rank_map:
+        best_rank, best_theme = None, None
+        for t_name in themes:
+            r = rank_map.get(t_name)
+            if r is not None and (best_rank is None or r < best_rank):
+                best_rank, best_theme = r, t_name
+        if best_theme is not None:
+            return best_theme, _rank_to_theme_color(best_rank)
+    # 테마는 있는데 지금 순위 데이터에 그 테마가 없는 경우(예: 아주 드물게 오늘 집계에서 아예
+    # 빠진 테마) — 순위색 없이 테마명만(첫 번째 테마) 보여줌.
+    return themes[0], None
 
 # 🔧 [수정 2026-07-31, 3번째] table 레이아웃으로 바꾼 뒤에도 다이얼로그 기본 폭이 좁아서
 # 그 안에서 텍스트가 원치 않게 줄바꿈되는 문제(종목코드가 이름 아래로, 52주고저/현재가가
@@ -5942,14 +6060,30 @@ if choice == "🏠 홈화면":
                     else:
                         _gp_theme_rank_map, _gp_total_themes = {}, 0
 
+                    # 🌟 [신규 2026-08-27] "특기" 컬럼(구 "시장") 요청: 종목이 테마에 속해있으면 항상
+                    # 그 테마명을 보여줘야 해서, 위 배지용 실시간 순위맵과 무관하게 테마 매핑 자체는
+                    # 항상 조회함(예전엔 배지가 안 뜨는 상황이면 이 조회조차 생략했었음).
+                    _gp_clean_names = [
+                        n.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
+                        for n in df_latest_gp['stock_name'].tolist()
+                    ]
+                    _gp_theme_map = get_themes_for_stocks(_gp_clean_names)
+
+                    # 🌟 [신규 2026-08-27] "특기" 컬럼의 순위/색 기준 — 배지와 달리 장마감 후에도 계속
+                    # 표시할 값이라서, 장중(오늘+개장)이면 위에서 이미 구한 실시간 순위맵을 그대로
+                    # 재사용하고, 그 외(장 마감 후 또는 과거 날짜 조회)엔 그 날짜의 장마감(EOD) 순위를
+                    # 새로 계산해서 사용 — "테마 랭킹" 화면의 "📅 장마감 기준" 결과와 동일한 순위/색이 되도록.
                     if _gp_theme_rank_map:
-                        _gp_clean_names = [
-                            n.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
-                            for n in df_latest_gp['stock_name'].tolist()
-                        ]
-                        _gp_theme_map = get_themes_for_stocks(_gp_clean_names)
+                        _gp_teukgi_rank_map, _gp_teukgi_total = _gp_theme_rank_map, _gp_total_themes
                     else:
-                        _gp_theme_map = {}
+                        _gp_teukgi_rank_map, _gp_teukgi_total = _fetch_eod_theme_rank_map(sel_date_str)
+
+                    # Styler.map은 셀 "값"만 받고 행 정보는 못 받으므로, 테마명 → 색 매핑을 미리
+                    # 딕셔너리로 만들어두고 아래에서 값 기준으로 색을 입힘(시장명은 이 딕셔너리에 없어
+                    # 자동으로 기존처럼 색 없는 기본 텍스트로 남음).
+                    _gp_teukgi_color_lookup = {
+                        t_name: _rank_to_theme_color(r) for t_name, r in _gp_teukgi_rank_map.items()
+                    } if _gp_teukgi_rank_map else {}
 
                     candidates = []
                     for _, r_val in df_latest_gp.iterrows():
@@ -5957,6 +6091,9 @@ if choice == "🏠 홈화면":
                         clean_n = name_str.replace("🚀","").replace("👑","").replace("🔥","").replace("💥","").replace("✨","").replace("🌱","").strip()
                         code_str = r_val['stock_code']
                         market_str = r_val['market']
+                        # 🌟 [신규 2026-08-27] "특기" 컬럼(구 "시장") — 테마에 속한 종목은 시장명 대신
+                        # 그 테마명(+순위색)을, 테마가 없는 종목은 기존 그대로 시장명을 사용.
+                        teukgi_str, _teukgi_color_unused = _get_theme_display(clean_n, _gp_theme_map, _gp_teukgi_rank_map, market_str)
                         frgn_net = (r_val['frgn_buy'] - r_val['frgn_sell'])
                         orgn_net = (r_val['orgn_buy'] - r_val['orgn_sell'])
                         total_net = frgn_net + orgn_net
@@ -6031,7 +6168,7 @@ if choice == "🏠 홈화면":
                         candidates.append({
                             "code": code_str,
                             "name": name_str,
-                            "market": market_str,
+                            "market": teukgi_str,
                             "score": max(0, min(score, 100)),
                             "total_net": total_net,
                             "frgn_net": frgn_net,
@@ -6084,18 +6221,51 @@ if choice == "🏠 홈화면":
                         st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
                         st.markdown("<h5 style='color:#FFFFFF;'>📋 골든 픽 TOP 20 전체 순위 전광판</h5>", unsafe_allow_html=True)
                         st.write("")
-                        click_action_gp = st.radio(
-                            "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
-                            ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
-                            horizontal=True,
-                            key="gp_click_action_radio"
-                        )
+                        # 🌟 [신규 2026-08-27] 사용자 요청: "특기" 컬럼에 뜨는 색(예: 반도체=주황)이
+                        # 무슨 순위를 의미하는지 일반 사용자는 알 수 없다는 피드백 → 라디오 버튼 옆에
+                        # "특기 색순위: 1위[색] 2위[색] ..." 범례를 나란히 배치. 색상은 트리맵/특기 컬럼과
+                        # 완전히 동일한 _THEME_RANK_COLORS를 그대로 재사용(색이 어긋날 일이 없음), 표시
+                        # 개수는 오늘 실제로 순위가 매겨진 테마 개수(_gp_teukgi_total)만큼만(고정 10개를
+                        # 항상 다 보여주면 실제 테마 수보다 많아 보일 수 있어서).
+                        col_click_action, col_teukgi_legend = st.columns([1.3, 2])
+                        with col_click_action:
+                            click_action_gp = st.radio(
+                                "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:",
+                                ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"],
+                                horizontal=True,
+                                key="gp_click_action_radio"
+                            )
+                        with col_teukgi_legend:
+                            if _gp_teukgi_total > 0:
+                                _legend_n = min(_gp_teukgi_total, len(_THEME_RANK_COLORS))
+                                # 밝은 배경(주황/노랑/초록/분홍 계열)은 검정 글자, 어두운 배경(네이비/보라/갈색 등)은
+                                # 흰 글자를 써서 어느 순위 칩이든 눈에 잘 띄도록 함(트리맵 텍스트 색과는 별개 결정).
+                                _dark_bg_idx = {0, 4, 5, 6, 9}  # 1위(빨강)/5위(파랑)/6위(남색)/7위(보라)/10위(갈색)
+                                _legend_chips = "".join(
+                                    f"<span style='background:{_THEME_RANK_COLORS[i]}; "
+                                    f"color:{'#fff' if i in _dark_bg_idx else '#111'}; "
+                                    f"font-size:11px; font-weight:bold; padding:3px 9px; border-radius:10px; "
+                                    f"margin-right:4px; white-space:nowrap;'>{i + 1}위</span>"
+                                    for i in range(_legend_n)
+                                )
+                                st.markdown(
+                                    "<div style='display:flex; align-items:center; flex-wrap:wrap; "
+                                    "gap:4px; margin-top:28px;'>"
+                                    "<span style='color:#aaa; font-size:12px; margin-right:6px; white-space:nowrap;'>"
+                                    "🎨 특기 색순위:</span>"
+                                    f"{_legend_chips}"
+                                    "</div>",
+                                    unsafe_allow_html=True,
+                                )
 
                         top20_key_gp = f"golden_pick_table_{st.session_state.get('gp_reset_counter', 0)}"
 
                         display_gp = top20_gp[['순위', 'name', 'market', 'score', 'total_net', 'frgn_net', 'orgn_net', 'rt_buy', 'news_sentiment', 'reason']].copy()
                         display_gp = display_gp.rename(columns={
-                            'name': '종목명', 'market': '시장', 'score': '황금점수',
+                            # 🔧 [수정 2026-08-27] 사용자 요청: "시장" 컬럼을 "특기"로 개명 — 종목이
+                            # 테마에 속해있으면 시장명(코스피/코스닥) 대신 그 테마명을 candidates 단계에서
+                            # 이미 넣어뒀음(위 teukgi_str), 테마 없는 종목은 그대로 시장명이 들어있음.
+                            'name': '종목명', 'market': '특기', 'score': '황금점수',
                             # 🔧 [수정 2026-08-19] 사용자 요청: "특이사항" 컬럼 비표시(위 selection에서 제외),
                             # 나머지 금액 컬럼들은 헤드라인 공간 절약을 위해 아이콘 이모지 제거.
                             # 🔧 [수정 2026-08-21 3차] 사용자 요청(홍보 담당자 피드백): "핵심 추천 포인트" 컬럼
@@ -6144,10 +6314,19 @@ if choice == "🏠 홈화면":
                         def _get_whale_color(_val):
                             return 'color: #1e90ff;'
 
+                        # 🌟 [신규 2026-08-27] "특기" 컬럼 색상 — 값이 테마명이면(위 _gp_teukgi_color_lookup에
+                        # 있으면) 그 테마의 현재 순위색(트리맵과 동일한 _THEME_RANK_COLORS)을 입히고,
+                        # 값이 시장명(코스피/코스닥 등, 이 딕셔너리에 없음)이면 빈 문자열을 반환해 기존처럼
+                        # 색 없는 기본 텍스트로 남김. Styler.map은 셀 값만 받으므로 이 방식이 자연스럽게 맞음.
+                        def _get_teukgi_color(_val):
+                            _c = _gp_teukgi_color_lookup.get(_val)
+                            return f'color: {_c}; font-weight: bold;' if _c else ''
+
                         # 🔧 [수정 2026-07-30] Streamlit Cloud 배포 시 최신 pandas(applymap 완전 제거)에서
                         # AttributeError 발생 확인 → pandas 2.1+에서 applymap의 대체 메서드인 Styler.map으로 교체
                         styled_gp = display_gp.style.map(_get_sentiment_color, subset=['뉴스감성']) \
                                               .map(_get_golden_score_color, subset=['황금점수']) \
+                                              .map(_get_teukgi_color, subset=['특기']) \
                                               .map(_get_frgn_flow_color, subset=['외/기 순매수']) \
                                               .map(_get_frgn_only_color, subset=['외국인 순매수']) \
                                               .map(_get_orgn_flow_color, subset=['기관 순매수']) \
@@ -6650,7 +6829,7 @@ if choice == "🏠 홈화면":
                     snap_row = None
 
                 if not snap_row or not snap_row.get("theme_agg_json"):
-                    st.info("⚡ 아직 실시간 스냅샷이 없습니다. 스케줄러가 장중 10분마다 계산합니다. 잠시 후 새로고침해 주세요.")
+                    st.info("⚡ 아직 실시간 스냅샷이 없습니다. 스케줄러가 장중 5분마다 계산합니다. 잠시 후 새로고침해 주세요.")
                     theme_agg = {}
                 else:
                     theme_agg = snap_row["theme_agg_json"]
@@ -6662,7 +6841,7 @@ if choice == "🏠 홈화면":
                     if snap_date and snap_date != today_kst_str:
                         st.caption(f"⚠️ 오늘자 첫 계산이 아직 끝나지 않았습니다 — {snap_date} {snap_hour} 기준(전일 마지막) 데이터를 보여드립니다.")
                     else:
-                        st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 테마 매핑 종목 전체의 오늘자 체결(매수-매도, 투자자 구분 없이 시장 전체 수급)을 합산합니다. 10분마다 자동 갱신됩니다.")
+                        st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 테마 매핑 종목 전체의 오늘자 분봉(매수-매도, 투자자 구분 없이 시장 전체 수급)을 합산합니다. 5분마다 자동 갱신됩니다.")
 
                     if is_computing:
                         st.caption("🔄 다음 데이터를 계산하는 중입니다 — 완료 전까지는 위 데이터가 계속 표시되며, 완료 후 새로고침하면 최신 데이터로 바뀝니다.")
@@ -6766,26 +6945,25 @@ if choice == "🏠 홈화면":
                     # 9번째·10번째 색은 사용자가 명시한 대로 이 화면의 "수익율 자랑"/"상선고" 버튼과
                     # 동일한 색(각각 btn-style-brag #FF69B4, btn-style-orange #9E6C2E)을 그대로 재사용.
                     # 10개를 넘는 테마가 나오는 경우(현재 테마 매핑상 흔치 않음)를 대비해 회색을 폴백으로 둠.
-                    _THEME_RANK_COLORS = [
-                        "#FF4B4B",  # 1위 빨강
-                        "#FFA500",  # 2위 주황
-                        "#FFD700",  # 3위 노랑
-                        "#00E676",  # 4위 초록
-                        "#4B89B5",  # 5위 파랑
-                        "#3E4F69",  # 6위 남색 (btn-style-darkblue와 동일 톤)
-                        "#683B91",  # 7위 보라 (btn-style-purple과 동일 톤)
-                        "#FFB6C1",  # 8위 분홍
-                        "#FF69B4",  # 9위 = "💖 수익율 자랑" 버튼 색
-                        "#9E6C2E",  # 10위 = "상선고" 버튼 색
-                    ]
-                    _rank_color_seq = _THEME_RANK_COLORS + ["#777777"] * max(0, len(df_treemap) - len(_THEME_RANK_COLORS))
+                    # 🔧 [위치 이동 2026-08-27] 색상표 자체는 모듈 레벨 _THEME_RANK_COLORS로 옮김(골든픽
+                    # "특기" 컬럼과 공유하기 위함) — 여기서는 그 상수를 그대로 가져다 쓰기만 함.
+                    # 🐛 [수정 2026-08-27 밤] Plotly Express는 color_discrete_sequence를 줘도, 카테고리
+                    # (테마명)별 색을 df 행 순서(=순위 순서)가 아니라 Plotly 내부의 자체 카테고리 정렬
+                    # 순서로 배정한다 — 그 결과 실제로는 순위 순서와 다르게 색이 입혀져서, 골든픽
+                    # "특기" 컬럼/범례(_rank_to_theme_color로 순위를 직접 색인)와 트리맵의 색이 서로
+                    # 어긋나는 버그가 있었음(사용자 제보). color_discrete_map으로 "테마명 → 순위색"을
+                    # 명시적으로 고정해 두 화면이 항상 동일한 색을 쓰도록 수정.
+                    _treemap_color_map = {
+                        row_tm["테마명"]: _rank_to_theme_color(row_tm["순위"])
+                        for _, row_tm in df_treemap.iterrows()
+                    }
 
                     fig_treemap = px.treemap(
                         df_treemap,
                         path=[px.Constant("전체 테마"), "테마명"],
                         values="박스크기",
                         color="테마명",
-                        color_discrete_sequence=_rank_color_seq,
+                        color_discrete_map=_treemap_color_map,
                         custom_data=["종목수", "대표 종목", "합산 외/기 순매수(억)"],
                         hover_data=None,
                     )
