@@ -7051,9 +7051,13 @@ if choice == "🏠 홈화면":
                     for _, r_tk in df_theme_rank.iterrows():
                         theme_name_tk = r_tk["테마명"]
                         rep_list_tk = sorted(theme_agg[theme_name_tk]["stocks"], key=lambda x: x[1], reverse=True)[:5]
+                        # 🌟 [신규 2026-08-27 밤] 사용자 요청: "대표 종목" 중 맨 앞(=순매수 1위=그 테마의
+                        # 대장주)만 녹색으로 강조 표시("대장주만 쫓아라") — 상승률 표시는 복잡하니 생략,
+                        # 대장주 이름만 녹색으로. 나머지 종목명은 기존처럼 색 없이, 금액(빨강)은 전부 동일.
                         rep_html_tk = ", ".join(
-                            f"{n}(<span style='color:#ff4b4b; font-weight:bold;'>{v:,.{_theme_decimals}f}억</span>)"
-                            for n, v, c in rep_list_tk
+                            (f"<span style='color:#00E676; font-weight:bold;'>{n}</span>" if idx_rep == 0 else n)
+                            + f"(<span style='color:#ff4b4b; font-weight:bold;'>{v:,.{_theme_decimals}f}억</span>)"
+                            for idx_rep, (n, v, c) in enumerate(rep_list_tk)
                         )
                         theme_rank_rows_html.append(
                             "<tr style='border-bottom:1px solid #2a2d35;'>"
