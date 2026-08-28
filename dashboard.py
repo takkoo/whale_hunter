@@ -7054,8 +7054,10 @@ if choice == "🏠 홈화면":
                         # 🌟 [신규 2026-08-27 밤] 사용자 요청: "대표 종목" 중 맨 앞(=순매수 1위=그 테마의
                         # 대장주)만 녹색으로 강조 표시("대장주만 쫓아라") — 상승률 표시는 복잡하니 생략,
                         # 대장주 이름만 녹색으로. 나머지 종목명은 기존처럼 색 없이, 금액(빨강)은 전부 동일.
+                        # 🔥 [추가 2026-08-27 밤] 사용자가 깜빡이는(blink) 효과를 요청했으나 과하다고 판단해
+                        # 거절 — 대신 절충안으로 대장주 이름 앞에 🔥 이모지만 붙이기로 합의.
                         rep_html_tk = ", ".join(
-                            (f"<span style='color:#00E676; font-weight:bold;'>{n}</span>" if idx_rep == 0 else n)
+                            (f"<span style='color:#00E676; font-weight:bold;'>🔥{n}</span>" if idx_rep == 0 else n)
                             + f"(<span style='color:#ff4b4b; font-weight:bold;'>{v:,.{_theme_decimals}f}억</span>)"
                             for idx_rep, (n, v, c) in enumerate(rep_list_tk)
                         )
