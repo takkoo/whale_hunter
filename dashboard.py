@@ -3090,21 +3090,27 @@ def get_accumulated_hot_signals(df):
         return []
         
     # 기간 누적: latest_date 필터링 없이 전체 df 사용
-    
+
     # 종목별 순매수액(Net Buy) 및 매수 횟수 계산
     buy_df = df[df['side'] == '매수']
     sell_df = df[df['side'] == '매도']
-    
+
     buy_sum = buy_df.groupby('name')['amount_krw'].sum()
     sell_sum = sell_df.groupby('name')['amount_krw'].sum()
     buy_count = buy_df.groupby('name').size()
-    
+    # 🌟 [신규 2026-08-28] 사용자 요청: "기폭주" 카드에 PER/PBR/ROE를 같이 보여주려면 종목코드가
+    # 필요함(get_naver_company_summary(stock_code) 호출용). 원본 df(whale_log 조회 결과)에 이미
+    # 'code' 컬럼이 있으므로(draw_whale_bar_chart에서도 동일하게 사용), 이름별 첫 코드값을 그대로
+    # 대표 코드로 사용 — 같은 이름이면 코드도 항상 동일하므로 groupby.first()로 충분.
+    code_map = df.groupby('name')['code'].first() if 'code' in df.columns else pd.Series(dtype=object)
+
     # 데이터프레임 조인
     summary = pd.DataFrame({
         'buy_amount': buy_sum,
         'sell_amount': sell_sum,
-        'buy_count': buy_count
-    }).fillna(0)
+        'buy_count': buy_count,
+        'code': code_map
+    }).fillna({'buy_amount': 0, 'sell_amount': 0, 'buy_count': 0})
     
     summary['net_buy'] = summary['buy_amount'] - summary['sell_amount']
     
@@ -3144,9 +3150,10 @@ def get_accumulated_hot_signals(df):
             'score': score,
             'icon': icon,
             'net_buy': row['net_buy'],
-            'buy_count': row['buy_count']
+            'buy_count': row['buy_count'],
+            'code': row.get('code', '')
         })
-        
+
     return result
 
 def draw_whale_bar_chart(target_code, target_name, df):
@@ -4672,6 +4679,46 @@ if choice == "🏠 홈화면":
                     st.session_state['scrn_select_radio'] = "체결 로그"
                     st.rerun()
             
+    # 🌟 [ 전체 요약 기간 스위치 ]를 데이터 쿼리 이전에 배치하여 DB 검색 범위 최적화!
+    # 🐛 [버그 발견+수정 2026-08-28, 1차] 사용자 리포트: "기폭주" 화면으로 사이드바 버튼을 눌러 들어갈 때
+    # 이 라디오의 실제 선택값을 참조하지 않고 무조건 '최근 1개월 누적'으로 동작하는 것 같다는 문제.
+    # 1차 원인: 이 위젯에 명시적 key=가 없었음 → key="global_period_radio" 추가로 1차 수정.
+    #
+    # 🐛 [버그 재발견+수정 2026-08-28, 2차] 1차 수정 후에도 "기폭주 첫 클릭만 틀리고 두 번째부터 맞는"
+    # 패턴이 남아있었음 — 화면전환 버튼들이 `st.session_state[...] = 새화면; st.rerun()`으로 스크립트를
+    # 도중에 끊는데, 이 라디오가 그 버튼들보다 스크립트상 *뒤*에 있어서 그 첫 번째(끊기는) 실행에서는
+    # 이 줄까지 도달하지 못했던 게 근본 원인. 그래서 검색창/버튼들보다 앞쪽으로 옮겨서 해결함(2차).
+    #
+    # 🎨 [UI 개편 2026-08-28, 3차] 사용자 요청: "기간 선택"이 검색창 위에 있으니 사이드바가 안 예쁘다 —
+    # 검색창 아래로 내리고, 라벨은 아이콘(📊)만 남기고, 그 우측에 "당일/1주/1개월"로 텍스트를 줄여서
+    # 가로로 배치, 버튼들과 간격도 최소화하자는 요청. 2차 수정의 "버튼들보다 앞" 조건은 그대로 지키되
+    # (그래야 위 버그가 재발하지 않음), "검색창보다는 뒤, 화면전환 버튼들보다는 앞"인 지금 이 위치로
+    # 재배치 — 여기도 여전히 모든 화면전환 버튼(btn_col1~)보다는 앞이므로 2차 수정의 효과는 유지됨.
+    # 표시 텍스트만 짧게(format_func) 바꾸고, 실제 반환값(global_period)은 기존 긴 문자열 그대로 둬서
+    # 파일 곳곳의 `global_period == "당일 데이터만"` 류 비교 코드는 전혀 건드릴 필요가 없게 함.
+    period_icon_col, period_radio_col = st.sidebar.columns([1, 6])
+    with period_icon_col:
+        st.markdown("<div style='padding-top: 8px; font-size: 20px; text-align: center;'>📊</div>", unsafe_allow_html=True)
+    with period_radio_col:
+        global_period = st.radio(
+            "기간 선택",
+            ["당일 데이터만", "최근 1주일 누적", "최근 1개월 누적"],
+            index=2,
+            key="global_period_radio",
+            horizontal=True,
+            label_visibility="collapsed",
+            format_func=lambda _p: {"당일 데이터만": "당일", "최근 1주일 누적": "1주", "최근 1개월 누적": "1개월"}.get(_p, _p)
+        )
+
+    # 날짜 연산을 위한 기준점 설정
+    today = get_latest_market_open_date()
+    if global_period == "당일 데이터만":
+        start_date = today
+    elif global_period == "최근 1주일 누적":
+        start_date = today - timedelta(days=7)
+    else:
+        start_date = today - timedelta(days=30)
+
     # 현재 어떤 버튼이 활성화되어 있는지 상태 확인
     current_scrn = st.session_state.get('scrn_select_radio', "체결 로그")
     is_list_active = (current_scrn == "체결 로그" and not st.session_state.get('upper_limit_filter', False))
@@ -4866,23 +4913,7 @@ if choice == "🏠 홈화면":
 
 
     exact_match = st.sidebar.toggle("🎯 검색어 완전 일치 (Exact Match)", value=True)
-    
-    # 🌟 [ 전체 요약 기간 스위치 ]를 데이터 쿼리 이전에 배치하여 DB 검색 범위 최적화!
-    global_period = st.sidebar.radio(
-        "📊 기간 선택",
-        ["당일 데이터만", "최근 1주일 누적", "최근 1개월 누적"],
-        index=2
-    )
-    
-    # 날짜 연산을 위한 기준점 설정
-    today = get_latest_market_open_date()
-    if global_period == "당일 데이터만":
-        start_date = today
-    elif global_period == "최근 1주일 누적":
-        start_date = today - timedelta(days=7)
-    else:
-        start_date = today - timedelta(days=30)
-    
+
     # 🌟 [ 화면 선택 상태 사전 로드 ]
     if 'scrn_select_radio' not in st.session_state:
         st.session_state['scrn_select_radio'] = "체결 로그"
@@ -6053,9 +6084,20 @@ if choice == "🏠 홈화면":
                     # 🔧 [수정 2026-08-25 2차] 사용자 요청: 배지는 "지금 이 순간 핫한 테마"라는 의미라서,
                     # 장 마감 후에는 (스냅샷 자체는 마감 직전 값이 자정까지 그대로 남아있지만) 참고할
                     # 가치가 없다고 보고 아예 표시하지 않기로 함 — is_market_open_now()로 게이트.
-                    # 그리고 "오늘" 실제 날짜를 보고 있을 때만 조회(배치 지연으로 selected_date가
-                    # 어제로 폴백된 경우엔 실시간 데이터와 날짜가 안 맞으므로 배지를 표시하지 않음).
-                    if selected_date == now_kst.date() and is_market_open_now():
+                    # 🐛 [버그 발견+수정 2026-08-28] 사용자 제보: 골든픽 "특기" 컬럼 색이 장중에도 항상
+                    # "장마감" 기준으로만 보인다 — 원인은 여기 조건 `selected_date == now_kst.date()`.
+                    # 골든픽 자체가 daily_whale_top200(16시 배치) 기반이라, 16시 이전(=장중 내내)에는
+                    # get_batch_ready_market_date()가 selected_date를 "어제(직전 완성 거래일)"로
+                    # 맞춰두기 때문에(위 5896번째 줄 근방), 실제로 장이 열려 있는 시간대에도
+                    # selected_date(=어제)와 now_kst.date()(=오늘)가 서로 달라 이 조건이 항상 False가
+                    # 되어 실시간 순위맵을 절대 못 타는 구조였음(사실상 죽은 코드). 반대로 16시가 지나
+                    # selected_date가 오늘로 넘어갈 즈음엔 이미 장이 닫혀 있어(장마감 15:30) 이번엔
+                    # is_market_open_now()가 False — 즉 두 조건을 동시에 만족하는 시간대가 아예
+                    # 존재하지 않았음. 사용자 요청("장중엔 실시간, 장후엔 장마감, 장중엔 좀 액티브해
+                    # 보이게")에 맞춰 selected_date 비교를 없애고, 대신 "사용자가 달력에서 과거 날짜를
+                    # 직접 선택하지 않은(=기본/최신 조회) 상태"인지만 golden_date_touched로 확인 —
+                    # 이러면 장중엔 항상 실시간, 장 마감 후(또는 과거 날짜 조회 중)엔 항상 EOD로 정확히 갈림.
+                    if not st.session_state.get('golden_date_touched', False) and is_market_open_now():
                         _gp_theme_rank_map, _gp_total_themes = _fetch_realtime_theme_rank_map()
                     else:
                         _gp_theme_rank_map, _gp_total_themes = {}, 0
@@ -6838,10 +6880,13 @@ if choice == "🏠 홈화면":
                     snap_hour = snap_row.get("snapshot_hour", "") or ""
                     is_computing = snap_row.get("status") == "computing"
 
+                    # 🔧 [수정 2026-08-28] 사용자 요청: 트리맵 위에 "⚡ 기준 데이터입니다..." 캡션과,
+                    # 트리맵 바로 위 "박스 크기 = ..." 캡션이 따로따로 두 군데 떠서 산만함 → 하나로
+                    # 합치기로 함(아래 _render_theme_king_results 안 "🗺️ 테마 모멘텀 트리맵" 헤더
+                    # 바로 밑으로 이동). 여기 있던 평소 케이스 캡션은 제거하고, 스냅샷이 하루 지난
+                    # 데이터라는 특수 경고 캡션만 그대로 유지.
                     if snap_date and snap_date != today_kst_str:
                         st.caption(f"⚠️ 오늘자 첫 계산이 아직 끝나지 않았습니다 — {snap_date} {snap_hour} 기준(전일 마지막) 데이터를 보여드립니다.")
-                    else:
-                        st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 테마 매핑 종목 전체의 오늘자 분봉(매수-매도, 투자자 구분 없이 시장 전체 수급)을 합산합니다. 5분마다 자동 갱신됩니다.")
 
                     if is_computing:
                         st.caption("🔄 다음 데이터를 계산하는 중입니다 — 완료 전까지는 위 데이터가 계속 표시되며, 완료 후 새로고침하면 최신 데이터로 바뀝니다.")
@@ -6881,7 +6926,13 @@ if choice == "🏠 홈화면":
                     # 박스 색상: 실제 순매수 방향/강도(빨강=매수 강세, 파랑=매도 강세). 사용자가 보여준 참고 이미지
                     # (다른 사이트의 테마 모멘텀 트리맵)와 유사한 형태를 이 프로젝트의 매수/매도 색 관례(빨강/파랑)로 구현.
                     st.markdown("<h5 style='color:#FFD400; margin-top:10px;'>🗺️ 테마 모멘텀 트리맵</h5>", unsafe_allow_html=True)
-                    st.caption("박스 크기 = 테마 합산 외/기 순매수 규모(단, 작은 테마도 알아보기 쉽도록 크기 격차를 압축하되 테마 간 순위는 항상 유지, 어느 테마도 전체 면적의 25%는 넘지 않도록 보정), 색상 = 순위별 구분(1위~10위 각각 다른 색). 박스를 클릭하면 바로 AI 요약이 뜹니다(혹시 클릭이 안 먹으면 아래 '테마별 AI 요약 보기' 버튼을 이용해주세요).")
+                    # 🔧 [수정 2026-08-28] 사용자 요청: 트리맵 위에 두 군데 나뉘어 있던 안내 캡션
+                    # ("⚡ 기준 데이터입니다..."는 실시간 모드 데이터 로딩 부분에, "박스 크기 = ..."는
+                    # 여기에) 하나로 합침 — 실시간 모드일 때만 위쪽에 스냅샷 시각 캡션을 추가로 보여주고,
+                    # 그 아래에 박스 크기/클릭 안내 캡션(장마감·실시간 공통, 문구는 간결화)을 이어서 표시.
+                    if theme_view_mode == "⚡ 실시간 (장중, 근사치)":
+                        st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 오늘자 분봉(매수-매도, 투자자 구분 없이 시장 전체 수급)을 기반으로 하고, 5분마다 갱신됩니다.")
+                    st.caption("박스 크기는 테마 합산 외/기 순매수 규모. 테마 이름을 클릭하면 바로 테마 AI 요약이, 박스를 클릭하면 해당 종목 AI요약이 뜹니다.")
 
                     # 🌟 [신규 2026-07-31] 사용자 피드백: "AI 반도체"처럼 압도적으로 큰 테마 하나가
                     # 트리맵 전체 면적을 거의 다 차지해버려서(예: 72,829억 vs 나머지 800억대)
@@ -6958,36 +7009,108 @@ if choice == "🏠 홈화면":
                         for _, row_tm in df_treemap.iterrows()
                     }
 
-                    fig_treemap = px.treemap(
-                        df_treemap,
-                        path=[px.Constant("전체 테마"), "테마명"],
-                        values="박스크기",
-                        color="테마명",
-                        color_discrete_map=_treemap_color_map,
-                        custom_data=["종목수", "대표 종목", "합산 외/기 순매수(억)"],
-                        hover_data=None,
-                    )
+                    # 🌟 [신규 2026-08-28] 사용자 요청("네모 안에 또 종목들이 크기별로 표시되는 것도
+                    # 폼이 나서") — 동료 직원이 보여준 해외 히트맵 레퍼런스처럼, 테마 박스 하나가
+                    # 단색으로 끝나지 않고 그 안에 소속 종목들이 각자 순매수 금액 크기만큼 서브박스로
+                    # 나뉘어 보이도록 2단계(테마→종목) 계층형 트리맵으로 개편.
+                    # ⚠️ 기존엔 px.treemap(Express 편의 래퍼)을 썼는데, 이번엔 "부모(테마)는 순위색,
+                    # 자식(종목)은 순매수 방향(빨강=매수/파랑=매도, 오늘 '테마 랭킹 표'에 추가한 색
+                    # 규칙과 동일)"처럼 레벨마다 다른 색 규칙이 필요해서 px.treemap으로는 안 되고,
+                    # 더 저수준인 go.Treemap(ids/labels/parents/values 직접 구성)으로 교체.
+                    # branchvalues="remainder"(기본값)이라 부모(테마)의 값을 0으로 주면, 화면에 보이는
+                    # 테마 박스 크기는 자동으로 "그 테마 소속 종목 서브박스들의 합"이 됨 — 즉 테마 박스
+                    # 자체의 상대적 크기(다른 테마 대비 비율)는 기존 로직(_compress_treemap_values +
+                    # _cap_treemap_share로 계산해둔 "박스크기")과 완전히 동일하게 유지되고, 그 안의
+                    # 종목별 비율만 새로 추가되는 구조.
+                    # ⚠️ 이 샌드박스는 plotly가 설치돼 있지 않고 네트워크 설치도 불가능해 실제 렌더링을
+                    # 직접 검증하지 못했음 — 위 "되돌림 2026-08-01" 이력처럼 미검증 상태로 배포했다가
+                    # 렌더링이 깨진 전례가 있으니, 반드시 사용자가 실제 화면에서 확인해줘야 함(문제
+                    # 생기면 배포 직전 백업 파일로 즉시 되돌릴 것).
+                    _treemap_ids = ["전체 테마"]
+                    _treemap_labels = ["전체 테마"]
+                    _treemap_parents = [""]
+                    _treemap_values = [0]
+                    _treemap_colors = ["rgba(0,0,0,0)"]
+                    _treemap_hover = [""]
+                    _treemap_amt_text = [""]
 
-                    # ⚠️ [되돌림 2026-08-01, 3번째] 순위별로 textfont.size를 배열(리스트)로 지정하는
-                    # 시도(1~7위 28px / 8위 이하 20px)를 했었는데, 실제 배포본에서 트리맵 전체가
-                    # 빈 단색 박스로 깨지는 렌더링 실패가 발생함(사용자 스크린샷으로 확인). 이 샌드박스는
-                    # plotly가 설치돼 있지 않고 네트워크 설치도 불가능해 사전에 직접 렌더링 검증을 하지
-                    # 못한 채 반영했던 것이 원인으로 보임 → 즉시 마지막으로 확인됐던 안전한 상태
-                    # (균일 28px, 사용자가 "아주 좋았어!"로 확인한 상태)로 되돌림. 순위별 차등 폰트는
-                    # 추후 검증 가능한 방법을 찾을 때까지 보류.
-                    fig_treemap.update_traces(
-                        texttemplate=f"<b>%{{label}}</b><br>%{{customdata[2]:,.{_theme_decimals}f}}억",
-                        hovertemplate=f"<b>%{{label}}</b><br>합산 외/기 순매수: %{{customdata[2]:,.{_theme_decimals}f}}억<br>종목수: %{{customdata[0]}}개<br>대표 종목: %{{customdata[1]}}<extra></extra>",
+                    for _, row_tm in df_treemap.iterrows():
+                        _theme_name_tm = row_tm["테마명"]
+                        _theme_id_tm = f"테마::{_theme_name_tm}"
+                        _theme_total_amt_tm = row_tm["합산 외/기 순매수(억)"]
+
+                        _treemap_ids.append(_theme_id_tm)
+                        _treemap_labels.append(_theme_name_tm)
+                        _treemap_parents.append("전체 테마")
+                        _treemap_values.append(0)  # 자식(종목) 서브박스 값의 합으로 자동 계산되도록 0으로 둠
+                        _treemap_colors.append(_treemap_color_map[_theme_name_tm])
+                        _treemap_hover.append(
+                            f"합산 외/기 순매수: {_theme_total_amt_tm:,.{_theme_decimals}f}억<br>"
+                            f"종목수: {row_tm['종목수']}개<br>대표 종목: {row_tm['대표 종목']}"
+                        )
+                        _treemap_amt_text.append(f"{_theme_total_amt_tm:,.{_theme_decimals}f}억")
+
+                        # 종목별 서브박스 크기: 테마 내부에서도 한 종목이 압도하지 않도록 동일한
+                        # 거듭제곱 압축(alpha=0.45, 위 테마 간 압축과 동일 계수)을 한 번 더 적용한 뒤,
+                        # 합이 이미 계산해둔 이 테마의 "박스크기"와 정확히 같아지도록 비례 스케일링.
+                        # 🔧 [수정 2026-08-28] 사용자 리포트: 순매수 방향(빨강=매수/파랑=매도)으로 칠했더니
+                        # 실제 화면에서 모든 테마의 모든 종목 서브박스가 전부 빨간색으로만 나옴(이 샌드박스는
+                        # plotly가 없어 원인을 직접 렌더링해서 확인하지 못함 — 다음에 원인 규명 필요).
+                        # 사용자가 대안으로 제안한 방식으로 교체: "각 테마 바탕색은 그대로 두고, 그 안의
+                        # 종목별 색은 테마 바탕색을 뺀 나머지 색상표(_THEME_RANK_COLORS)를 순서대로 사용".
+                        # 매수/매도 방향 정보 자체는 없어지지 않음 — 박스 안 텍스트/호버에 찍히는 금액이
+                        # 음수면 "-70억"처럼 "-" 부호가 그대로 표시되므로 그걸로 구분 가능.
+                        _remaining_colors_tm = [c for c in _THEME_RANK_COLORS if c != _treemap_color_map[_theme_name_tm]]
+                        _stocks_in_theme_tm = theme_agg.get(_theme_name_tm, {}).get("stocks", [])
+                        if _stocks_in_theme_tm:
+                            _raw_abs_tm = [max(abs(v_s), 0.1) for _, v_s, _ in _stocks_in_theme_tm]
+                            _compressed_tm = _compress_treemap_values(_raw_abs_tm, alpha=0.45)
+                            _sum_compressed_tm = sum(_compressed_tm) or 1.0
+                            _scale_tm = row_tm["박스크기"] / _sum_compressed_tm
+                            for _idx_s, ((n_s, v_s, c_s), comp_val) in enumerate(zip(_stocks_in_theme_tm, _compressed_tm)):
+                                _treemap_ids.append(f"{_theme_id_tm}::{n_s}")
+                                _treemap_labels.append(n_s)
+                                _treemap_parents.append(_theme_id_tm)
+                                _treemap_values.append(comp_val * _scale_tm)
+                                _treemap_colors.append(_remaining_colors_tm[_idx_s % len(_remaining_colors_tm)])
+                                _treemap_hover.append(f"{_theme_name_tm} 테마<br>순매수: {v_s:,.{_theme_decimals}f}억")
+                                _treemap_amt_text.append(f"{v_s:,.{_theme_decimals}f}억")
+
+                    fig_treemap = go.Figure(go.Treemap(
+                        ids=_treemap_ids,
+                        labels=_treemap_labels,
+                        parents=_treemap_parents,
+                        values=_treemap_values,
+                        branchvalues="remainder",
+                        marker=dict(colors=_treemap_colors, line=dict(width=1, color="#12141a")),
+                        customdata=list(zip(_treemap_hover, _treemap_amt_text)),
+                        texttemplate="<b>%{label}</b><br>%{customdata[1]}",
+                        hovertemplate="<b>%{label}</b><br>%{customdata[0]}<extra></extra>",
                         textposition="middle center",
-                        textfont_size=28,
                         # 🔧 [수정 2026-08-03] 사용자 요청: 호버 메시지 글자 크기를 기존(플롯리 기본 13px) 대비
-                        # 약 50% 확대(20px). 스칼라 값만 사용 — 위 "되돌림" 이력처럼 배열/리스트 지정은
-                        # 렌더링 실패 사례가 있어 피함.
+                        # 약 50% 확대(20px). 스칼라 값만 사용 — "되돌림 2026-08-01" 이력처럼 배열/리스트
+                        # 지정은 렌더링 실패 사례가 있어 피함.
                         hoverlabel=dict(font_size=20),
-                    )
+                        # 🔧 [수정 2026-08-28] 사용자 요청: "테마 박스 헤드라인 글자를 2포인트쯤, 나머지
+                        # 종목 글자는 1~2포인트 키우고, 대신 아주 작은 박스는 지금처럼 계속 알아서
+                        # 작아지게 두자" → 최종적으로 "기본 크기만 1~2포인트 키우자"로 단순화됨.
+                        # 지금까지는 textfont.size를 아예 지정하지 않아 Plotly가 박스마다 알아서
+                        # 크기를 자동 계산했음(2단계 계층이 되며 박스 크기 편차가 커져서 그렇게 둔
+                        # 상태였음). 스칼라 값(20)을 "목표/최대 크기"로 지정 — 박스가 이 크기를 담기에
+                        # 충분히 크면 20px로, 너무 작으면 지금처럼 Plotly가 자동으로 축소함(배열
+                        # 지정은 "되돌림 2026-08-01" 이력 때문에 계속 피함).
+                        # ⚠️ 렌더 검증 불가 상태로 배포: 기존에 이미 자동으로 20px보다 크게 그려지고
+                        # 있던 큰 박스(예: 헤드라인)가 있었다면 이 값이 오히려 "작게" 보일 수 있음 —
+                        # 실제로 켜보고 헤드라인/종목 글자가 커졌는지, 혹시 큰 박스가 더 작아진 건
+                        # 아닌지 꼭 확인해서 알려주면 숫자를 바로 조정하겠음.
+                        textfont=dict(size=20),
+                        pathbar=dict(visible=False),
+                    ))
                     fig_treemap.update_layout(
                         margin=dict(t=10, l=10, r=10, b=10),
-                        height=480,
+                        # 🔧 [수정 2026-08-28] 사용자 요청: 테마→종목 2단계 계층으로 바뀌면서 서브박스가
+                        # 작아져 겹쳐 보이는 문제 → 세로 높이를 기존(480) 대비 약 1.9배(900)로 확대.
+                        height=900,
                         paper_bgcolor="rgba(0,0,0,0)",
                         plot_bgcolor="rgba(0,0,0,0)",
                         font_color="#e0e0e0",
@@ -7015,8 +7138,32 @@ if choice == "🏠 홈화면":
                         points_treemap = event_treemap["selection"].get("points", [])
                         if points_treemap:
                             clicked_theme_label = points_treemap[0].get("label", "")
+                            # 🌟 [신규 2026-08-28] 사용자 요청: 트리맵 안의 "종목" 서브박스를 클릭하면
+                            # (테마 헤더가 아니라) 확대(drill-down)만 되고 아무 반응이 없던 것을, 기존
+                            # 개별 종목 AI요약 팝업(show_summary_dialog — 골든픽/내관심 등 여러 화면에서
+                            # 이미 쓰는 것과 동일)으로 연결. id가 "테마::{테마명}::{종목명}"(3단)이면
+                            # 종목 클릭, "테마::{테마명}"(2단)이면 테마 클릭으로 구분.
+                            clicked_id_treemap = points_treemap[0].get("id", "")
+                            _id_parts_treemap = clicked_id_treemap.split("::") if clicked_id_treemap else []
+                            if len(_id_parts_treemap) == 3:
+                                _clicked_theme_for_stock = _id_parts_treemap[1]
+                                _clicked_stock_name = _id_parts_treemap[2]
+                                _clicked_stock_code = ""
+                                for n_c, v_c, c_c in theme_agg.get(_clicked_theme_for_stock, {}).get("stocks", []):
+                                    if n_c == _clicked_stock_name:
+                                        _clicked_stock_code = c_c
+                                        break
+                                trigger_stock_treemap = st.session_state.get('dialog_trigger_id', 0) + 1
+                                st.session_state['dialog_trigger_id'] = trigger_stock_treemap
+                                st.session_state['show_summary_dialog'] = {
+                                    "stock": _clicked_stock_name,
+                                    "code": _clicked_stock_code,
+                                    "trigger_id": trigger_stock_treemap
+                                }
+                                st.session_state['theme_treemap_reset_counter'] = st.session_state.get('theme_treemap_reset_counter', 0) + 1
+                                st.rerun()
                             # "전체 테마"(가상 루트 박스) 클릭은 무시 — theme_agg에 없는 키라 자동으로 걸러짐
-                            if clicked_theme_label and clicked_theme_label in theme_agg:
+                            elif clicked_theme_label and clicked_theme_label in theme_agg:
                                 rep_stocks_click = [
                                     {"name": n, "net": v, "code": c}
                                     for n, v, c in sorted(theme_agg[clicked_theme_label]["stocks"], key=lambda x: x[1], reverse=True)[:5]
@@ -7061,6 +7208,21 @@ if choice == "🏠 홈화면":
                             + f"(<span style='color:#ff4b4b; font-weight:bold;'>{v:,.{_theme_decimals}f}억</span>)"
                             for idx_rep, (n, v, c) in enumerate(rep_list_tk)
                         )
+                        # 🌟 [신규 2026-08-28] 사용자 리포트: "대표 종목"엔 순매수 상위 5개만 보여서
+                        # 다 양수인데, "합산 외/기 순매수(억)"는 종목수 전체(6위 이하 포함)를 합친
+                        # 값이라 안 보이는 하위 종목들의 순매도가 크면 합계가 음수로 뒤집혀 보임 —
+                        # "표시된 건 다 플러스인데 왜 합계가 마이너스지?" 오해 방지용으로, 화면에 안
+                        # 보이는 나머지 종목들의 합산 금액을 행 끝에 추가로 표시(부호에 따라 빨강/파랑).
+                        rep_stocks_all_tk = theme_agg[theme_name_tk]["stocks"]
+                        remaining_count_tk = len(rep_stocks_all_tk) - len(rep_list_tk)
+                        if remaining_count_tk > 0:
+                            shown_sum_tk = sum(v for _, v, _ in rep_list_tk)
+                            remaining_sum_tk = r_tk['합산 외/기 순매수(억)'] - shown_sum_tk
+                            remaining_color_tk = "#ff4b4b" if remaining_sum_tk >= 0 else "#1e90ff"
+                            rep_html_tk += (
+                                f" <span style='color:#888;'>외 {remaining_count_tk}종목</span>"
+                                f"(<span style='color:{remaining_color_tk}; font-weight:bold;'>{remaining_sum_tk:,.{_theme_decimals}f}억</span>)"
+                            )
                         theme_rank_rows_html.append(
                             "<tr style='border-bottom:1px solid #2a2d35;'>"
                             f"<td style='width:1%; white-space:nowrap; text-align:center; padding:6px 8px;'>{int(r_tk['순위'])}위</td>"
@@ -8139,7 +8301,25 @@ if choice == "🏠 홈화면":
                 
                 target_df = full_df[full_df['date'] >= start_date.strftime('%Y-%m-%d')] if not full_df.empty else full_df
                 hot_signals = get_accumulated_hot_signals(target_df)
-            
+
+                # 🌟 [신규 2026-08-28] 사용자 요청: "기폭주" 파워 점수 계산 로직(위 get_accumulated_hot_signals)엔
+                # 절대 반영하지 않되(골든픽과 동일한 원칙), 카드에 참고용으로 PER/PBR/ROE를 같이 보여달라는
+                # 요청 — HTS를 따로 찾아보지 않아도 되게 시간을 아껴주자는 취지. 이미 "🏢 기업 요약 및 AI 분석"
+                # 팝업(get_naver_company_summary, 1153번째 줄 근방)에서 쓰던 네이버 금융 스크랩 함수를 그대로
+                # 재사용 — @st.cache_data(ttl=86400)라 같은 종목이면 하루 한 번만 실제로 스크랩하고 그 뒤론
+                # 캐시로 즉시 반환되므로, 10종목을 매번 다시 긁어오는 부담은 없음.
+                for _sig in hot_signals:
+                    _code = _sig.get('code', '')
+                    _fin = {}
+                    if _code and pd.notna(_code):
+                        try:
+                            _, _, _, _fin = get_naver_company_summary(str(_code).strip().zfill(6))
+                        except Exception:
+                            _fin = {}
+                    _sig['per'] = _fin.get('per', 'N/A') if _fin else 'N/A'
+                    _sig['pbr'] = _fin.get('pbr', 'N/A') if _fin else 'N/A'
+                    _sig['roe'] = _fin.get('roe', 'N/A') if _fin else 'N/A'
+
             if not hot_signals:
                 st.info(f"해당 기간({global_period}) 내에 폭주 종목이 없습니다.")
             else:
@@ -8161,17 +8341,29 @@ if choice == "🏠 홈화면":
                                 else:
                                     bg_grad, border_col, text_col, shadow_col = "linear-gradient(135deg, #261f18 0%, #1a1510 100%)", "#c28e5c", "#c28e5c", "rgba(194, 142, 92, 0.2)"
                                 
+                                # 🌟 [신규 2026-08-28] PER/PBR/ROE 참고 정보 — 점수 계산엔 미반영, 순수 표시용.
+                                # ROE는 다른 화면(1235번째 줄 근방)과 동일하게 "%" 단위 표기, 값이 없으면 N/A 그대로.
+                                # 🔧 [수정 2026-08-28, 2차] 사용자 피드백: "PER · PBR · ROE"를 한 줄에 10px로
+                                # 욱여넣으니 글씨가 작아 안 읽힘 → PER/PBR 한 줄 + ROE 한 줄로 나눠서 두 줄 다
+                                # 글씨를 키움(각각 12px). ROE가 원래 요청의 핵심 지표였던 만큼 별도 줄로 빼서
+                                # 살짝 더 눈에 띄게(밝은 색) 처리. 줄이 하나 늘어난 만큼 카드 높이도 132px→148px로 확장.
+                                _per_disp = signal.get('per', 'N/A')
+                                _pbr_disp = signal.get('pbr', 'N/A')
+                                _roe_raw = signal.get('roe', 'N/A')
+                                _roe_disp = f"{_roe_raw}%" if _roe_raw != 'N/A' else 'N/A'
                                 st.markdown(f"""
-                                <div style="background: {bg_grad}; border: 1px solid {border_col}; border-radius: 8px; padding: 10px; text-align: center; box-shadow: 0 0 10px {shadow_col}; margin-bottom: 15px; height: 110px; display: flex; flex-direction: column; justify-content: center;">
+                                <div style="background: {bg_grad}; border: 1px solid {border_col}; border-radius: 8px; padding: 10px; text-align: center; box-shadow: 0 0 10px {shadow_col}; margin-bottom: 15px; height: 148px; display: flex; flex-direction: column; justify-content: center;">
                                     <div style="font-size: 15px; font-weight: bold; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{idx+1}. {signal['name']}</div>
                                     <div style="font-size: 13px; color: {text_col}; font-weight: bold; margin-top: 6px;">{signal['icon']} 파워: {score:.1f}점</div>
                                     <div style="font-size: 11px; color: #a0a0a0; margin-top: 4px;">{int(signal['net_buy'] // 1000000):,}백만 ({int(signal['buy_count'])}회)</div>
+                                    <div style="font-size: 12px; color: #9fb0c0; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">PER {_per_disp} · PBR {_pbr_disp}</div>
+                                    <div style="font-size: 12px; color: #e8c05a; font-weight: bold; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">ROE {_roe_disp}</div>
                                 </div>
                                 """, unsafe_allow_html=True)
                             else:
                                 # 빈 슬롯
                                 st.markdown(f"""
-                                <div style="background: linear-gradient(135deg, #151515 0%, #0a0a0a 100%); border: 1px dashed #333; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 15px; height: 110px; display: flex; flex-direction: column; justify-content: center; opacity: 0.5;">
+                                <div style="background: linear-gradient(135deg, #151515 0%, #0a0a0a 100%); border: 1px dashed #333; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 15px; height: 148px; display: flex; flex-direction: column; justify-content: center; opacity: 0.5;">
                                     <div style="font-size: 15px; font-weight: bold; color: #555;">-</div>
                                 </div>
                                 """, unsafe_allow_html=True)
@@ -9114,8 +9306,27 @@ if choice == "🏠 홈화면":
                             "unknown_amount": st.column_config.NumberColumn("방미금액 (백만)", format="%,d"),
                             "market_type": "시장구분"
                         },
-                        hide_index=True,  
-                        height=620,       
+                        hide_index=True,
+                        # 🔧 [수정 2026-08-28] 사용자 리포트: "실시간" 화면에서 표를 마우스로 스크롤하면
+                        # 선택된 행의 강조(커서바)가 두 행에 걸쳐 보임(스크린샷으로 확인) — 이 표는
+                        # 6383번 줄 골든픽 TOP20 표에서 이미 한 번 겪은 것과 같은 계열의 문제(내부
+                        # 스크롤 중 glide-data-grid 행 강조가 깨지는 렌더링 버그)로 보이는데, 거기서는
+                        # "행 수가 20개로 고정"이라 아예 스크롤이 필요 없게 높이를 늘려 회피했음. 이
+                        # 표는 검색결과가 500개 단위로 계속 늘어날 수 있어(아래 "다음 500건 더
+                        # 가져오기" 참고) 그 방식은 못 씀 — 대신 사용자 제안대로 "표 높이가 1행 높이의
+                        # 정배수가 아니어서 스크롤 시 마지막 줄이 반 토막으로 걸쳐 보이는" 것으로 보고,
+                        # 높이를 (헤더 1행 + 데이터 N행) × 행높이의 정배수로 맞춤.
+                        # Streamlit 데이터프레임(glide-data-grid) 기본 행높이는 버전에 따라 정확한
+                        # px 값을 이 프로젝트에서 직접 렌더링해 잰 적이 없어서(샌드박스에 streamlit
+                        # 미설치) 커뮤니티에 널리 알려진 공식 height=(N+1)*35+3(헤더 35px+데이터행
+                        # 35px×N+테두리 3px)을 그대로 적용 — 기존 620px과 비슷한 체감 높이를 유지하려고
+                        # N=17행 기준으로 계산: (17+1)*35+3=633.
+                        # ⚠️ 이 공식이 실제 이 프로젝트 Streamlit 버전과 정확히 안 맞으면(예: 헤더 높이가
+                        # 35px가 아니거나 테두리가 3px가 아니면) 스크롤해도 여전히 마지막 줄이 반쯤 잘려
+                        # 보일 수 있음 — 실제로 스크롤해보고 (1) 커서바가 이제 한 행 안에만 깔끔하게
+                        # 들어오는지, (2) 혹시 여전히 어중간하게 잘리는 줄이 보이는지 확인해서 알려주면
+                        # 됨(그러면 35/3 같은 상수를 보정하면 됨).
+                        height=633,
                         use_container_width=False,
                         on_select="rerun",
                         selection_mode="single-row",
