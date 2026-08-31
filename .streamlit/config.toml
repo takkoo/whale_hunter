@@ -5,3 +5,15 @@ primaryColor = "#ff4b4b"
 backgroundColor = "#11111b"          # 👈 우리 차트 배경색과 일치하는 칠흑색
 secondaryBackgroundColor = "#1c1c26" # 👈 왼쪽 사이드바를 고급스러운 다크 그레이로 도색
 textColor = "#ffffff"
+
+[server]
+# 🔧 [추가 2026-08-31] 사용자 리포트: 잠깐 안 쓰면 로그인 상태가 풀려버림(재로그인 필요).
+# 원인: Streamlit은 브라우저 탭이 백그라운드로 가거나 네트워크가 잠깐 끊겨 웹소켓 연결이
+# 끊기면, 서버가 그 세션(로그인 상태 포함 session_state 전부)을 기본 120초(2분) 뒤에
+# 정리(폐기)해버림 — 이게 Streamlit 공식 기본값(disconnectedSessionTTL=120)이고, 이 프로젝트는
+# 지금까지 이 값을 따로 지정한 적이 없어서 기본 2분이 그대로 적용되고 있었음.
+# 요청대로 10분(600초)으로 늘림 — 값을 더 키우면 그만큼 접속 끊긴 세션이 서버 메모리에
+# 더 오래 남아있으니, 필요 이상으로 너무 크게 잡지는 않음.
+# ⚠️ config.toml은 Streamlit 앱을 "시작할 때"만 읽으므로, 이미 켜져 있는 서버라면 이 설정이
+# 적용되려면 streamlit 프로세스를 껐다가 다시 켜야(재시작) 함 — 껐다 켜기 전까지는 여전히 2분.
+disconnectedSessionTTL = 600
