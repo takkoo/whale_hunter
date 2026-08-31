@@ -4573,7 +4573,7 @@ if choice == "🏠 홈화면":
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 0px !important;
+            margin-bottom: 0px !important; 
             padding-bottom: 2px !important;
         }
         div.element-container:has(.btn-style-clear) + div.element-container button:hover {
