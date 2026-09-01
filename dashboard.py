@@ -3757,6 +3757,28 @@ if choice == "🏠 홈화면":
     if is_market_open_now() and user_refresh_opt and scrn_select == "체결 로그" and not search_kw.strip():
         st_autorefresh(interval=60000, key="whale_refresh")
 
+    # ⏱️ [신규 2026-09-01] 사용자 요청: "테마킹" 화면의 "실시간(장중)" 모드는 뒤에서
+    # scripts/fetch_realtime_theme_agg.py가 5분마다 realtime_theme_snapshot을 새로 계산해
+    # 채워주고 있는데, 정작 화면은 사용자가 직접 새로고침(F5)하거나 다른 화면을 갔다와야만
+    # 최신 스냅샷을 반영함 — 가만히 화면을 보고만 있으면 데이터가 갱신됐는지도 모르고 옛
+    # 숫자를 계속 보게 되는 문제. 위 "체결 로그" 자동 새로고침과 동일한 st_autorefresh
+    # 패턴을 재사용해 "테마 랭킹" 화면 + "실시간" 모드일 때만 자동 새로고침을 걸어줌.
+    # 간격은 5분(300000ms)으로 맞춤 — 백엔드 스냅샷 계산 주기와 정확히 일치시켜, 그보다
+    # 짧게 하면 어차피 안 바뀐 데이터를 괜히 자주 다시 그리는 낭비고, 그보다 길게(10분)
+    # 하면 최악의 경우 방금 갱신된 스냅샷을 최대 10분 가까이 못 보고 기다리게 됨.
+    # 위와 동일하게 "목록 자동 새로고침" 사용자 설정(auto_refresh_enabled)을 그대로
+    # 공유해서, 이 옵션을 꺼둔 사용자에게는 이 화면도 자동 새로고침되지 않도록 함.
+    # 장 시간 외에는(is_market_open_now() False) 스케줄러도 더 이상 새 스냅샷을 계산하지
+    # 않으므로(fetch_realtime_theme_agg.py는 09:00~16:01 사이만 동작) 자동 새로고침도 끔.
+    theme_view_mode_for_refresh = st.session_state.get('theme_king_view_mode', '')
+    if (
+        is_market_open_now()
+        and user_refresh_opt
+        and scrn_select == "테마 랭킹"
+        and theme_view_mode_for_refresh == "⚡ 실시간 (장중, 근사치)"
+    ):
+        st_autorefresh(interval=300000, key="theme_realtime_refresh")
+
     with st.sidebar:
         
         # 🎯 [신규 배선] Supabase 휴장일 테이블에서 명단 로드
@@ -4573,7 +4595,7 @@ if choice == "🏠 홈화면":
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 0px !important; 
+            margin-bottom: 0px !important;
             padding-bottom: 2px !important;
         }
         div.element-container:has(.btn-style-clear) + div.element-container button:hover {
@@ -4748,6 +4770,34 @@ if choice == "🏠 홈화면":
         start_date = today - timedelta(days=7)
     else:
         start_date = today - timedelta(days=30)
+
+    # 🔧 [수정 2026-09-01] 사용자 요청: "TOP10"/"기폭주" 화면 제목에 조회 기준일(오늘 날짜)을 넣어서
+    # 언제 기준으로 집계된 데이터인지 한눈에 보이게 해달라는 요청 — global_period 값별 문구를 여기서
+    # 미리 만들어두고, 두 화면 제목(TOP10 subheader / 기폭주 마크다운 헤더)에서 그대로 갖다 씀.
+    # 기폭주 쪽은 사용자가 예시로 "9월1일기준, 최근 1개월 누적"처럼 쉼표를 넣어줘서 콤마 버전을 별도로 둠.
+    #
+    # 🎨 [수정 2026-09-01, 2차] "기폭주" 제목이 밋밋해 보인다는 피드백 → 날짜 부분만 밝은 녹색(#00E676,
+    # 이 파일 다른 곳(대장주 이름 강조/골든픽 배너 "AI" 글자 등)에서 이미 쓰던 색과 동일 계열)으로
+    # 강조한 HTML 버전(_html 접미사)을 추가. 이 색은 st.markdown(unsafe_allow_html=True)로 렌더링되는
+    # "기폭주" h4 제목에만 적용 — TOP10 제목은 st.subheader라 이 HTML 태그가 안전하게 렌더된다는
+    # 보장이 없어(unsafe_allow_html 파라미터 없음) 이번엔 손대지 않음.
+    _period_date_str = f"{today.month}월 {today.day}일"
+    _period_date_html = f'<span style="color:#00E676;">{_period_date_str}</span>'
+    if global_period == "당일 데이터만":
+        global_period_label = f"{_period_date_str} 당일 데이터 기준"
+        global_period_label_comma = global_period_label
+        global_period_label_html = f"{_period_date_html} 당일 데이터 기준"
+        global_period_label_comma_html = global_period_label_html
+    elif global_period == "최근 1주일 누적":
+        global_period_label = f"{_period_date_str} 기준 최근 1주일 누적"
+        global_period_label_comma = f"{_period_date_str} 기준, 최근 1주일 누적"
+        global_period_label_html = f"{_period_date_html} 기준 최근 1주일 누적"
+        global_period_label_comma_html = f"{_period_date_html} 기준, 최근 1주일 누적"
+    else:
+        global_period_label = f"{_period_date_str} 기준 최근 1개월 누적"
+        global_period_label_html = f"{_period_date_html} 기준 최근 1개월 누적"
+        global_period_label_comma = f"{_period_date_str} 기준, 최근 1개월 누적"
+        global_period_label_comma_html = f"{_period_date_html} 기준, 최근 1개월 누적"
 
     # 현재 어떤 버튼이 활성화되어 있는지 상태 확인
     current_scrn = st.session_state.get('scrn_select_radio', "체결 로그")
@@ -5127,7 +5177,11 @@ if choice == "🏠 홈화면":
                 # 상단 헤더와 새로고침 버튼을 동일선상(Y축)에, 버튼을 차트 우측 끝단(X축)에 정렬
                 title_col, btn_col = st.columns([8.5, 1.5])
                 with title_col:
-                    st.subheader(f"&nbsp;🏆&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 오늘의 {display_market} TOP 10 ({global_period})")
+                    # 🎨 [수정 2026-09-01, 3차] "기폭주"처럼 TOP10 제목도 날짜만 녹색으로 강조해달라는 요청.
+                    # st.subheader는 unsafe_allow_html 파라미터가 없어 <span> 색상 태그를 안전하게 못 쓰므로,
+                    # 시각적으로 거의 동일한 st.markdown(<h3>...) 방식으로 교체 — 기존 굵기/크기는 h3 태그로 유지되고
+                    # global_period_label_html(날짜 부분만 #00E676로 감싼 버전)을 사용해 날짜만 녹색으로 표시.
+                    st.markdown(f"<h3>&nbsp;🏆&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 오늘의 {display_market} TOP 10 ({global_period_label_html})</h3>", unsafe_allow_html=True)
                 with btn_col:
                     # 서브헤더와 Y축 시각적 정렬을 위해 마진 추가
                     st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
@@ -6793,6 +6847,14 @@ if choice == "🏠 홈화면":
                 label_visibility="collapsed",
             )
 
+            # 🏷️ [신규 2026-09-01] 사용자 요청: "장마감" 모드의 순매수 숫자가 사실 두 가지 다른
+            # 소스(daily_whale_top200=진짜 외국인+기관 확정치 / whale_log 보완=3천만원 이상 대형
+            # 단일체결 추정치)로 섞여 있는데, 화면에는 구분 없이 똑같이 표시되고 있어서 "사용자가
+            # 숫자의 의미를 모르고 사용하게 되는" 문제가 있다는 지적에 따라, whale_log로 보완된
+            # 종목명 집합을 별도로 기억해뒀다가 아래 _render_theme_king_results에서 [추정] 배지를
+            # 붙이는 데 사용함. 실시간 모드에서는 애초에 이런 소스 혼용이 없으므로 항상 빈 집합.
+            _eod_estimated_stock_names = set()
+
             if theme_view_mode == "📅 장마감 기준 (기존)":
                 # 🔧 [수정 2026-08-04] 사용자 리포트: 오전 10시~오후 4시 사이에 "테마킹"에 오면
                 # daily_whale_top200(장마감 후 16시에만 수집)에 "오늘자" 행이 아직 없어서
@@ -6858,6 +6920,9 @@ if choice == "🏠 홈화면":
                         extra_names_theme = whale_grp_theme['name'].tolist()
                         extra_net_map = dict(zip(whale_grp_theme['name'], whale_grp_theme['net_amt'] / 100_000_000))
                         extra_code_map = dict(zip(whale_grp_theme['name'], whale_grp_theme['code']))
+                        # 🏷️ [신규 2026-09-01] 이 종목들이 바로 "외국인+기관 확정치가 아니라 대형
+                        # 단일체결 추정치"인 종목들 — 아래 렌더링 단계에서 [추정] 배지를 붙이는 기준.
+                        _eod_estimated_stock_names = set(extra_names_theme)
 
                     theme_map_today = get_themes_for_stocks(
                         (df_theme_top['stock_name'].tolist() if not df_theme_top.empty else []) + extra_names_theme
@@ -6937,11 +7002,20 @@ if choice == "🏠 홈화면":
                     # 데이터 규모로 자동 판단.
                     _theme_max_abs = max((abs(info_t.get("total_net", 0)) for info_t in theme_agg.values()), default=0)
                     _theme_decimals = 1 if _theme_max_abs < 10 else 0
+
+                    # 🏷️ [신규 2026-09-01] "장마감" 모드에서 whale_log로 보완된(=외국인+기관 확정치가
+                    # 아니라 대형 단일체결 추정치인) 종목명 뒤에 붙일 작은 배지 HTML. 실시간 모드거나
+                    # 해당 종목이 daily_whale_top200 출신이면 빈 문자열(배지 없음).
+                    def _src_tag_t(name):
+                        if theme_view_mode == "📅 장마감 기준 (기존)" and name in _eod_estimated_stock_names:
+                            return "<span style='color:#FFA500; font-size:11px;'> [추정]</span>"
+                        return ""
+
                     for t_name, info_t in theme_agg.items():
                         top_stocks_t = sorted(info_t["stocks"], key=lambda x: x[1], reverse=True)[:3]
                         # 🔧 [수정 2026-08-03] 사용자 요청: 트리맵 호버 메시지에서 종목 이름만 빨간색으로 강조
                         # (호버 텍스트도 차트 text와 동일한 pseudo-html 렌더러를 쓰므로 <span style> 사용 가능).
-                        top_stocks_str_t = ", ".join([f"<span style='color:#FF4B4B; font-weight:bold;'>{n}</span>({v:,.{_theme_decimals}f}억)" for n, v, c in top_stocks_t])
+                        top_stocks_str_t = ", ".join([f"<span style='color:#FF4B4B; font-weight:bold;'>{n}</span>{_src_tag_t(n)}({v:,.{_theme_decimals}f}억)" for n, v, c in top_stocks_t])
                         theme_rows.append({
                             "테마명": t_name,
                             "종목수": len(info_t["stocks"]),
@@ -6960,9 +7034,21 @@ if choice == "🏠 홈화면":
                     # ("⚡ 기준 데이터입니다..."는 실시간 모드 데이터 로딩 부분에, "박스 크기 = ..."는
                     # 여기에) 하나로 합침 — 실시간 모드일 때만 위쪽에 스냅샷 시각 캡션을 추가로 보여주고,
                     # 그 아래에 박스 크기/클릭 안내 캡션(장마감·실시간 공통, 문구는 간결화)을 이어서 표시.
+                    # 🔧 [수정 2026-09-01] 사용자 지적: 이 캡션이 지금까지 "박스 크기는 테마 합산
+                    # 외/기 순매수 규모"라고 두 모드 공통으로 표시돼 있었는데, 이건 "장마감" 모드에만
+                    # 맞는 설명임 — "실시간" 모드는 외국인/기관 구분 없는 시장 전체(개인 포함) 수급을
+                    # 1분봉 방향으로 추정한 값이라 "외/기"라는 표현 자체가 부정확함. 모드별로 실제
+                    # 정의에 맞는 문구를 따로 씀(실시간 문구는 사용자가 준 문장을 그대로 사용).
                     if theme_view_mode == "⚡ 실시간 (장중, 근사치)":
                         st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 오늘자 분봉(매수-매도, 투자자 구분 없이 시장 전체 수급)을 기반으로 하고, 5분마다 갱신됩니다.")
-                    st.caption("박스 크기는 테마 합산 외/기 순매수 규모. 테마 이름을 클릭하면 바로 테마 AI 요약이, 박스를 클릭하면 해당 종목 AI요약이 뜹니다.")
+                        st.caption("박스 크기는 테마구성 종목들의 순매수 합산 규모이며, 상단 테마 이름을 클릭하면 바로 테마 AI 요약이, 내부 박스를 클릭하면 해당 종목 AI요약이 뜹니다.")
+                    else:
+                        st.caption("박스 크기는 테마 합산 외국인+기관 순매수 규모. 테마 이름을 클릭하면 바로 테마 AI 요약이, 박스를 클릭하면 해당 종목 AI요약이 뜹니다.")
+                        # 🏷️ [신규 2026-09-01] "장마감" 모드는 daily_whale_top200(진짜 외국인+기관)과
+                        # whale_log 보완(대형 단일체결 추정)이 화면상 구분 없이 섞여 있었다는 사용자
+                        # 지적 반영 — [추정] 배지가 붙는 종목의 의미를 미리 안내하는 범례 캡션 추가.
+                        if _eod_estimated_stock_names:
+                            st.caption("🟠 [추정] 표시 종목은 그날 외국인+기관 순매수 TOP권에 들지 못해 공식 수치가 없는 종목으로, 3천만원 이상 대형 단일체결(투자자 구분 없음) 합산치로 대신 표시한 값입니다.")
 
                     # 🌟 [신규 2026-07-31] 사용자 피드백: "AI 반도체"처럼 압도적으로 큰 테마 하나가
                     # 트리맵 전체 면적을 거의 다 차지해버려서(예: 72,829억 vs 나머지 800억대)
@@ -7098,12 +7184,23 @@ if choice == "🏠 홈화면":
                             _sum_compressed_tm = sum(_compressed_tm) or 1.0
                             _scale_tm = row_tm["박스크기"] / _sum_compressed_tm
                             for _idx_s, ((n_s, v_s, c_s), comp_val) in enumerate(zip(_stocks_in_theme_tm, _compressed_tm)):
+                                # 🏷️ [신규 2026-09-01] 해당 종목이 daily_whale_top200(진짜 외국인+기관)이
+                                # 아니라 whale_log 보완(대형 단일체결 추정)으로 채워진 경우, 트리맵에서도
+                                # 라벨에 "*" 표시 + 호버에 상세 설명을 붙여 숫자의 의미를 바로 알 수 있게 함.
+                                # id(_theme_id_tm::n_s)는 클릭/드릴다운 로직이 그대로 쓰므로 원본 이름(n_s)을
+                                # 유지하고, 화면 표시용 label에만 "*"을 덧붙임.
+                                _is_estimated_s = (theme_view_mode == "📅 장마감 기준 (기존)" and n_s in _eod_estimated_stock_names)
+                                _label_s = f"{n_s} *" if _is_estimated_s else n_s
+                                _src_note_s = (
+                                    "<br><span style='color:#FFA500;'>[추정] 외국인+기관 데이터 없음 → 대형 단일체결 합산치</span>"
+                                    if _is_estimated_s else ""
+                                )
                                 _treemap_ids.append(f"{_theme_id_tm}::{n_s}")
-                                _treemap_labels.append(n_s)
+                                _treemap_labels.append(_label_s)
                                 _treemap_parents.append(_theme_id_tm)
                                 _treemap_values.append(comp_val * _scale_tm)
                                 _treemap_colors.append(_remaining_colors_tm[_idx_s % len(_remaining_colors_tm)])
-                                _treemap_hover.append(f"{_theme_name_tm} 테마<br>순매수: {v_s:,.{_theme_decimals}f}억")
+                                _treemap_hover.append(f"{_theme_name_tm} 테마<br>순매수: {v_s:,.{_theme_decimals}f}억{_src_note_s}")
                                 _treemap_amt_text.append(f"{v_s:,.{_theme_decimals}f}억")
 
                     fig_treemap = go.Figure(go.Treemap(
@@ -7235,6 +7332,7 @@ if choice == "🏠 홈화면":
                         # 거절 — 대신 절충안으로 대장주 이름 앞에 🔥 이모지만 붙이기로 합의.
                         rep_html_tk = ", ".join(
                             (f"<span style='color:#00E676; font-weight:bold;'>🔥{n}</span>" if idx_rep == 0 else n)
+                            + _src_tag_t(n)
                             + f"(<span style='color:#ff4b4b; font-weight:bold;'>{v:,.{_theme_decimals}f}억</span>)"
                             for idx_rep, (n, v, c) in enumerate(rep_list_tk)
                         )
@@ -8315,7 +8413,7 @@ if choice == "🏠 홈화면":
                 st.error(f"게시글 로딩 에러: {e}")
 
         elif scrn_select == "기간 누적 폭주":
-            st.markdown(f"<h4 style='color:#FF9900; border-left: 4px solid #FF9900; padding-left: 10px;'>📊 기간 누적 매수 폭주 종목 ({global_period})</h4>", unsafe_allow_html=True)
+            st.markdown(f"<h4 style='color:#FF9900; border-left: 4px solid #FF9900; padding-left: 10px;'>📊 기간 누적 매수 폭주 종목 ({global_period_label_comma_html})</h4>", unsafe_allow_html=True)
             st.write(f"선택하신 기간 동안 세력들이 가장 강력하게 매집한 Top 10 종목입니다.")
             st.write("---")
             
