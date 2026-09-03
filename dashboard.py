@@ -9359,6 +9359,38 @@ if choice == "🏠 홈화면":
                         lambda r: r['amount_krw'] / 1_000_000 if r['side'] == '방향미상' else 0, axis=1
                     ).fillna(0).astype(int)
 
+                    # 🌟 [신규 2026-09-03] 사용자 요청: "방미금액(백만)"/"시장구분" 컬럼을 빼고 종목명
+                    # 바로 뒤에 "특기" 컬럼을 신설 — 골든픽 "특기" 컬럼(994~1157번 줄 근방 헬퍼)과
+                    # 완전히 동일한 원칙: 종목이 테마에 속해있으면 테마명(+테마 순위색)을, 테마가
+                    # 없으면 기존처럼 시장구분(KOSPI/KOSDAQ)을 그대로 보여줌. 이 화면 이름 그대로
+                    # "실시간"이니까 장중에는 실시간 테마 순위(_fetch_realtime_theme_rank_map),
+                    # 장마감 후에는 그날의 장마감 테마 순위(_fetch_eod_theme_rank_map)를 색 기준으로
+                    # 사용 — 골든픽의 이중모드 분기(6184번 줄 근방)와 같은 원칙이나, 이 화면엔 골든픽의
+                    # "과거 날짜 직접 조회" 개념(golden_date_touched)이 없어 순수하게
+                    # is_market_open_now() 하나만으로 갈림.
+                    _wl_clean_names = [
+                        n.replace("🚀", "").replace("👑", "").replace("🔥", "").replace("💥", "").replace("✨", "").replace("🌱", "").strip()
+                        for n in display_df['name'].tolist()
+                    ]
+                    _wl_theme_map = get_themes_for_stocks(_wl_clean_names)
+                    if is_market_open_now():
+                        _wl_rank_map, _wl_total_themes = _fetch_realtime_theme_rank_map()
+                    else:
+                        _wl_rank_map, _wl_total_themes = {}, 0
+                    if not _wl_rank_map:
+                        _wl_now_kst = datetime.utcnow() + timedelta(hours=9)
+                        _wl_eod_date_str = get_batch_ready_market_date(_wl_now_kst).strftime("%Y-%m-%d")
+                        _wl_rank_map, _wl_total_themes = _fetch_eod_theme_rank_map(_wl_eod_date_str)
+
+                    _wl_color_lookup = {
+                        t_name: _rank_to_theme_color(r) for t_name, r in _wl_rank_map.items()
+                    } if _wl_rank_map else {}
+
+                    display_df['특기'] = [
+                        _get_theme_display(cn, _wl_theme_map, _wl_rank_map, mk)[0]
+                        for cn, mk in zip(_wl_clean_names, display_df['market_type'])
+                    ]
+
                     # 🔥 PyArrow 에러 방지용: 화면에 그리지 않는 날짜 컬럼 제거 🔥
                     if 'datetime' in display_df.columns:
                         display_df.drop(columns=['datetime'], inplace=True)
@@ -9400,23 +9432,57 @@ if choice == "🏠 홈화면":
                     # 🔢 좌측 순번(No.) 컬럼 추가 (1번부터 시작)
                     display_df.insert(0, 'No.', range(1, len(display_df) + 1))
                     
+                    # 🌟 [신규 2026-09-03] "특기" 컬럼 색상 — 값이 테마명이면(위 _wl_color_lookup에
+                    # 있으면) 그 테마의 현재 순위색(골든픽/트리맵과 동일한 _THEME_RANK_COLORS)을 입히고,
+                    # 값이 시장구분(KOSPI/KOSDAQ, 이 딕셔너리에 없음)이면 빈 문자열을 반환해 기존처럼
+                    # 색 없는 기본 텍스트로 남김.
+                    def _get_wl_teukgi_color(_val):
+                        _c = _wl_color_lookup.get(_val)
+                        return f'color: {_c}; font-weight: bold;' if _c else ''
+
                     # 🛠️ [교정 1 & 2] 스타일러 대상을 display_df로 바꾸고, 신형 style_rows 칩을 장착합니다!
                     styled_df = display_df.style \
-                        .apply(style_rows, axis=1)
-                    
-                    # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼
-                    click_action = st.radio(
-                        "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:", 
-                        ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"], 
-                        horizontal=True
-                    )
-                    
+                        .apply(style_rows, axis=1) \
+                        .map(_get_wl_teukgi_color, subset=['특기'])
+
+                    # 🔘 행 클릭 시 동작 모드 선택 라디오 버튼 + "특기" 색순위 범례(골든픽과 동일한 배치)
+                    col_click_action_wl, col_teukgi_legend_wl = st.columns([1.3, 2])
+                    with col_click_action_wl:
+                        click_action = st.radio(
+                            "👇 표에서 종목(행)을 클릭했을 때 동작을 선택하세요:",
+                            ["📊 시계열 추적 (차트 이동)", "💬 AI 요약 보기 (팝업)"],
+                            horizontal=True
+                        )
+                    with col_teukgi_legend_wl:
+                        if _wl_total_themes > 0:
+                            _wl_legend_n = min(_wl_total_themes, len(_THEME_RANK_COLORS))
+                            _wl_dark_bg_idx = {0, 4, 5, 6, 9}  # 1위(빨강)/5위(파랑)/6위(남색)/7위(보라)/10위(갈색)
+                            _wl_legend_chips = "".join(
+                                f"<span style='background:{_THEME_RANK_COLORS[i]}; "
+                                f"color:{'#fff' if i in _wl_dark_bg_idx else '#111'}; "
+                                f"font-size:11px; font-weight:bold; padding:3px 9px; border-radius:10px; "
+                                f"margin-right:4px; white-space:nowrap;'>{i + 1}위</span>"
+                                for i in range(_wl_legend_n)
+                            )
+                            st.markdown(
+                                "<div style='display:flex; align-items:center; flex-wrap:wrap; "
+                                "gap:4px; margin-top:28px;'>"
+                                "<span style='color:#aaa; font-size:12px; margin-right:6px; white-space:nowrap;'>"
+                                "🎨 특기 색순위:</span>"
+                                f"{_wl_legend_chips}"
+                                "</div>",
+                                unsafe_allow_html=True,
+                            )
+
                     # 📊 최종 전광판 디스플레이 표출
                     grid_key = f"whale_log_board_main_{st.session_state.get('upper_limit_filter', False)}_{search_keyword}_{st.session_state.get('df_reset_counter', 0)}"
                     event = st.dataframe(
                         styled_df, 
                         # 🛠️ [교정 3] 출력 전광판 순서에서 amount_krw를 폐기하고, 신형 듀얼 레일을 배치합니다!
-                        column_order=["No.", "date", "time", "name", "price", "volume", "buy_amount", "sell_amount", "unknown_amount", "market_type"],
+                        # 🔧 [수정 2026-09-03] 사용자 요청: "방미금액(백만)"/"시장구분" 컬럼은 화면에서
+                        # 빼고(내부 데이터/스타일링용으로는 display_df에 그대로 남아있음, style_rows가
+                        # unknown_amount를 계속 참조하기 때문), 종목명 바로 뒤에 "특기" 컬럼을 새로 배치.
+                        column_order=["No.", "date", "time", "name", "특기", "price", "volume", "buy_amount", "sell_amount"],
                         
                         column_config={
                             "No.": st.column_config.NumberColumn("순번", format="%,d"),
@@ -9427,6 +9493,7 @@ if choice == "🏠 홈화면":
                             # 200px(medium 기준)로 명시 고정. 이 표는 "실시간"/"상한가" 버튼과 검색(차트
                             # 이동) 결과가 전부 공유하는 단일 렌더링 지점이라 여기 한 곳만 고치면 됨.
                             "name": st.column_config.TextColumn("종목명", width=200),
+                            "특기": st.column_config.TextColumn("특기", width=120),
                             "price": st.column_config.NumberColumn(("\u00A0" * 16) + "체결가 (원)", format="%,d"),
                             "volume": st.column_config.NumberColumn(("\u00A0" * 16) + "체결량 (주)", format="%,d"),
                             "buy_amount": st.column_config.NumberColumn("매수금액 (백만)", format="%,d"), 
