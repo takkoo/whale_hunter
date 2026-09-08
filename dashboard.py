@@ -2108,7 +2108,19 @@ def get_batch_ready_market_date(now_kst):
 
     if now_kst.time() >= datetime.strptime("16:00", "%H:%M").time():
         if not _daily_top200_has_data(candidate.strftime("%Y-%m-%d")):
-            fallback_dt = (candidate - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+            # 🐛 [버그 수정 2026-09-08] 사용자 리포트(Streamlit Cloud 낮시간 에러, TypeError):
+            # candidate는 datetime이 아니라 get_latest_market_open_date()가 반환하는 date
+            # 객체라서(2087번 줄 `return target.date()`), date 객체에는 애초에 없는
+            # hour/minute/second/microsecond 키워드를 .replace()에 넘기면 즉시 TypeError로 죽었음
+            # ("'hour' is an invalid keyword argument for this function"). 오늘(16시 배치가
+            # 지연돼 daily_whale_top200에 당일자 데이터가 아직 없는 상황)처럼 이 폴백 분기가 실제로
+            # 실행되는 순간에만 터지는 잠복 버그였음 — 16시 배치가 항상 제때 끝났다면 이 분기 자체가
+            # 안 타서 지금까지 드러나지 않았을 뿐, 이 함수를 호출하는 다른 화면(골든픽 등)도 같은
+            # 상황에서는 동일하게 죽었을 것. datetime.combine()으로 먼저 진짜 datetime으로 바꾼
+            # 뒤에 하루를 빼고, 그 다음에 정오로 맞춰 get_latest_market_open_date()가 자체적으로
+            # "9시 이전이면 하루 더 전날로" 처리하는 로직(2074줄)에 걸리지 않도록 함(기존 의도 그대로 유지).
+            fallback_dt = datetime.combine(candidate - timedelta(days=1), datetime.min.time())
+            fallback_dt = fallback_dt.replace(hour=12, minute=0, second=0, microsecond=0)
             candidate = get_latest_market_open_date(fallback_dt)
 
     return candidate
