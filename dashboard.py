@@ -901,10 +901,81 @@ def show_market_briefing_dialog(market_type, trigger_id=0):
 # def문보다 먼저 실행되면 "아직 정의 안 됨" NameError가 남(위 get_themes_for_stocks 이동 사례와 동일한
 # 함정). 그래서 트리거 체크는 실제 버튼이 있는 "실시간" 화면 섹션(하단, 두 함수 정의 이후 지점)에 배치함.
 
+def _get_hantoo_stock_list_dataframe():
+    """
+    [2026-09-10 추가, 배경: 사용자가 직접 확인 -- KRX가 회원제/인증키 필수로 전환되면서
+    fdr.StockListing('KRX')의 스크래핑 방식 자체가 막힘(2026-09-08부터의 수집기 결측 사고의
+    진짜 원인). 사용자가 KRX 신규 인증키까지 발급받았지만, 검토 결과 이 프로젝트의 수집기들
+    (FindingWhale.py 등)이 이미 몇 달째 안정적으로 쓰고 있는 한국투자증권(KIS) 공개
+    마스터파일(kospi_code.mst/kosdaq_code.mst)에 한글 종목명도 이미 들어있음을 확인함(KIS
+    공식 GitHub 파싱 스펙 기준). 인증키/신규가입 전혀 불필요하고 KRX/FDR과 완전히 무관한
+    별도 공식 경로라 이번 사고 영향 밖 -- 그래서 get_cached_krx_listing()의 1순위 소스로 채택.
+    각 라인 구조: 마지막 228자가 고정폭 시세/상태 플래그 블록, 그 앞 가변구간 중
+    [0:9]=단축코드(실제 코드는 앞 6자), [9:21]=표준코드(ISIN), [21:]=한글종목명.
+    기존 fdr.StockListing('KRX') 결과와 동일하게 쓸 수 있도록 'Name'/'Code'/'Market'/'MarketId'
+    컬럼을 가진 DataFrame으로 반환.
+    """
+    import os
+    import urllib.request
+    import zipfile
+    records = []
+    urls = {
+        "KOSPI": "https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip",
+        "KOSDAQ": "https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip",
+    }
+    for market, url in urls.items():
+        filename = f"{market}_code.mst"
+        zip_filename = f"{filename}.zip"
+        try:
+            urllib.request.urlretrieve(url, zip_filename)
+            with zipfile.ZipFile(zip_filename, 'r') as zip_ref:
+                zip_ref.extractall()
+            with open(filename, "r", encoding="cp949") as f:
+                for line in f:
+                    if len(line) <= 228:
+                        continue
+                    front = line[:-228]
+                    code = front[0:9].strip()[:6].zfill(6)
+                    name = front[21:].strip()
+                    if not code or not name:
+                        continue
+                    records.append({
+                        "Name": name,
+                        "Code": code,
+                        "Market": market,
+                        "MarketId": "STK" if market == "KOSPI" else "KSQ",
+                    })
+        except Exception as e:
+            print(f"한투 마스터(종목명 포함) 로딩 실패 ({market}): {e}")
+        finally:
+            for fn in (zip_filename, filename):
+                try:
+                    if os.path.exists(fn):
+                        os.remove(fn)
+                except Exception:
+                    pass
+    if not records:
+        raise RuntimeError("한투 마스터파일에서 종목리스트를 하나도 가져오지 못함(KOSPI/KOSDAQ 둘 다 실패)")
+    print(f"✅ [대쉬보드] 한투 마스터파일 기반 종목리스트 {len(records)}개 확보 (KOSPI+KOSDAQ, 종목명 포함)")
+    return pd.DataFrame(records)
+
+
 @st.cache_data(ttl=86400)
 def get_cached_krx_listing():
-    import FinanceDataReader as fdr
-    return fdr.StockListing('KRX')
+    """
+    [2026-09-10 업데이트] 배경: KRX 회원제 전환으로 fdr.StockListing('KRX')가 영구 장애
+    상태라 이 함수(종목 저장 다이얼로그, ETF 필터링, 종목명↔코드 검색 등에서 광범위하게 쓰임)가
+    계속 실패하고 있었음. 1순위를 _get_hantoo_stock_list_dataframe()(한투 공개 마스터파일,
+    인증 불필요, KRX/FDR과 무관)로 교체. 2순위: 혹시 몰라 기존 fdr.StockListing('KRX')도
+    시도(레거시 호환, 실패해도 무해 -- 컬럼 구조가 100% 동일하진 않을 수 있어 완전한 폴백은
+    아니지만 최소한 예외를 그대로 올려 기존과 동일하게 실패 처리됨).
+    """
+    try:
+        return _get_hantoo_stock_list_dataframe()
+    except Exception as e:
+        print(f"⚠️ [대쉬보드] 한투 마스터파일 종목리스트 실패({e}) -- FDR/KRX로 재시도")
+        import FinanceDataReader as fdr
+        return fdr.StockListing('KRX')
 
 # 🔧 [복원 2026-07-30] BackUp/dashboard_bk.py에는 있었는데 현재 파일에서 누락되어 있던 함수.
 # AI 분석 결과(Gemini/ChatGPT)를 "1. 기업개요"/"2. 현재상황및평가" 굵은 빨간 헤더 + "[호재]/[악재]/[전망]" 주홍색 태그 +
