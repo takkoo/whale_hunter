@@ -236,13 +236,47 @@ if "mock_stock" in st.query_params and "mock_date" in st.query_params:
 import google.generativeai as genai
 from bs4 import BeautifulSoup
 
+_NAVER_FINANCE_HEADERS = {
+    # 🔧 [수정 2026-09-11] 배경: 2026-09-11 새벽 fetch_stock_metadata.py 배치가 전종목(8450개
+    # 키) 전부 price/high52/low52 N/A + warnings 빈 값으로 끝났고, 사용자가 직접 이 대시보드의
+    # "기업 요약" 다이얼로그(GS건설 006360)에서도 기업개요/뉴스/PER/PBR/ROE가 전부 못 가져와지는
+    # 걸 리포트함. 사용자가 자기 브라우저로 같은 URL을 직접 열어보면 정상적으로 다 보인다고
+    # 확인해줘서, 네이버 사이트 자체 장애/개편이 아니라 이 프로젝트의 스크래핑 요청만 걸러지고
+    # 있는 것으로 좁혀짐(그동안 헤더가 'User-Agent': 'Mozilla/5.0' 하나뿐이었는데, 이건 진짜
+    # 브라우저라면 절대 안 보낼 정도로 부실한 값이라 최근 강화된 봇 차단에 걸렸을 가능성이 큼).
+    # 실제 브라우저에 가깝게 User-Agent/Accept/Accept-Language/Referer를 전부 채워서 재시도 —
+    # 이걸로 해결되는지는 사용자 PC의 다음 실행(다이얼로그 재오픈 또는 다음날 배치)으로만 검증
+    # 가능(이 세션 자체는 네이버로 나가는 네트워크가 막혀있어 직접 재현 불가, KRX 때와 동일한 제약).
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': 'https://finance.naver.com/',
+}
+
+
 @st.cache_data(ttl=86400)
+def _fetch_naver_finance_html(stock_code):
+    """
+    [2026-09-11 신설] 배경: 기존엔 get_naver_company_summary() 전체에 캐시가 걸려있어서,
+    네트워크 요청 자체가 실패해도(타임아웃/차단 등) 그 실패 결과("...찾을 수 없습니다" 류
+    폴백 문구)가 그대로 24시간 캐싱되는 구조적 문제가 있었음 — 한 번의 일시적 실패가 하루
+    종일 "찾을 수 없음"으로 고정되는 셈. 이제 HTML 페이지 요청/응답만 이 함수에서 캐시하고,
+    요청 자체가 실패하면 예외를 그대로 올려서(streamlit은 예외가 발생한 호출을 캐싱하지
+    않음) 다음 호출 때 다시 시도되게 함. 파싱 단계(요청은 성공했지만 특정 필드가 없는 경우)는
+    호출부에서 처리하며, 그 결과는 정상적으로 캐싱해도 무방함(같은 페이지 구조라면 다시
+    조회해도 똑같이 없을 것이므로).
+    """
+    url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
+    res = requests.get(url, headers=_NAVER_FINANCE_HEADERS, timeout=8)
+    res.raise_for_status()
+    return res.text
+
+
 def get_naver_company_summary(stock_code):
     try:
-        url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
+        html = _fetch_naver_finance_html(stock_code)
+        soup = BeautifulSoup(html, 'html.parser')
         summary_p = soup.select_one('.summary_info p')
         summary_text = summary_p.text.strip() if summary_p else "네이버 금융에서 기업개요를 찾을 수 없습니다."
         
