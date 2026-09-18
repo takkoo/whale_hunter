@@ -5365,11 +5365,11 @@ if choice == "🏠 홈화면":
                             yaxis=dict(tickformat=",.0f", ticksuffix="억"),
                             xaxis=dict(tickangle=0) # X축 라벨이 삐딱해지지 않도록 가로로 강제 고정
                         )
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, use_container_width=True)
                     else:
                         fig = px.pie(top10_df, values='amount_krw', names='display_name', hole=0.3)
                         fig.update_traces(textposition='inside', textinfo='percent+label')
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info(f"선택하신 조건에 포착된 '{data_type}' 데이터가 없습니다.")
 
@@ -5878,7 +5878,7 @@ if choice == "🏠 홈화면":
                             height=520
                         )
                         
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, use_container_width=True)
                         
             # --- [데이터 추출 요청 게시판] ---
             st.divider()
@@ -6985,8 +6985,21 @@ if choice == "🏠 홈화면":
                     target_dt_theme = now_kst_theme
                 target_dt_theme = target_dt_theme.replace(hour=12, minute=0, second=0, microsecond=0)
                 today_theme = get_latest_market_open_date(target_dt_theme)
+                # 🔧 [수정 2026-09-19] 사용자 리포트: 과거 날짜(예: 토요일 9/12)를 한 번 고르면
+                # 그 아래 달력의 "선택 가능 최대 날짜/오늘 표시"가 전부 방금 고른 과거 날짜 기준으로
+                # 다시 계산되면서, 그보다 미래인 실제 오늘 날짜까지 전부 회색 처리되어 못 돌아오는
+                # 버그 발견 → 달력의 "진짜 오늘/최대 선택 가능일" 기준은 항상 이 시점의 실제 최신
+                # 마감일(today_theme_actual)로 고정해두고, 아래에서 today_theme 자체는 기존처럼
+                # 데이터 조회용으로만 선택된 날짜로 바뀌게 둠(둘을 분리).
+                today_theme_actual = today_theme
+
+                # 🌟 [신규 2026-09-18] 사용자 요청: 트리맵 상단 "전체 테마"(투명 가상 루트박스) 텍스트 자리에
+                # 과거 날짜 조회용 달력을 넣음(아래 _render_theme_king_results 안, 트리맵 빌드 직전에 렌더링).
+                # 사용자가 달력에서 날짜를 직접 고르면 그 날짜로, 안 고르면 기존처럼 항상 "최신 마감일"로 자동 유지.
+                if st.session_state.get('themeking_date_touched', False) and st.session_state.get('themeking_selected_date'):
+                    today_theme = st.session_state.themeking_selected_date
                 today_theme_str = today_theme.strftime("%Y-%m-%d")
-                st.caption(f"📅 {today_theme_str} 마감 기준 데이터입니다 (당일 16시 이전에는 전 거래일 자료가 표시됩니다).")
+                st.caption(f"📅 {today_theme_str} 마감 기준 데이터입니다 (당일 16시 이전에는 전 거래일 자료가 표시됩니다). 아래 트리맵 상단 달력에서 과거 날짜도 조회할 수 있어요.")
 
                 with st.spinner("🏷️ 오늘의 테마 모멘텀을 집계하는 중입니다..."):
                     try:
@@ -7106,6 +7119,141 @@ if choice == "🏠 홈화면":
 
 
             def _render_theme_king_results(theme_agg):
+                # 🌟 [신규 2026-07-31] Plotly 트리맵 시각화 — 박스 크기: 테마 합산 외/기 순매수(억) 절대값,
+                # 박스 색상: 실제 순매수 방향/강도(빨강=매수 강세, 파랑=매도 강세). 사용자가 보여준 참고 이미지
+                # (다른 사이트의 테마 모멘텀 트리맵)와 유사한 형태를 이 프로젝트의 매수/매도 색 관례(빨강/파랑)로 구현.
+                st.markdown("<h5 style='color:#FFD400; margin-top:10px;'>🗺️ 테마 모멘텀 트리맵</h5>", unsafe_allow_html=True)
+                # 🔧 [수정 2026-08-28] 사용자 요청: 트리맵 위에 두 군데 나뉘어 있던 안내 캡션
+                # ("⚡ 기준 데이터입니다..."는 실시간 모드 데이터 로딩 부분에, "박스 크기 = ..."는
+                # 여기에) 하나로 합침 — 실시간 모드일 때만 위쪽에 스냅샷 시각 캡션을 추가로 보여주고,
+                # 그 아래에 박스 크기/클릭 안내 캡션(장마감·실시간 공통, 문구는 간결화)을 이어서 표시.
+                # 🔧 [수정 2026-09-01] 사용자 지적: 이 캡션이 지금까지 "박스 크기는 테마 합산
+                # 외/기 순매수 규모"라고 두 모드 공통으로 표시돼 있었는데, 이건 "장마감" 모드에만
+                # 맞는 설명임 — "실시간" 모드는 외국인/기관 구분 없는 시장 전체(개인 포함) 수급을
+                # 1분봉 방향으로 추정한 값이라 "외/기"라는 표현 자체가 부정확함. 모드별로 실제
+                # 정의에 맞는 문구를 따로 씀(실시간 문구는 사용자가 준 문장을 그대로 사용).
+                if theme_view_mode == "⚡ 실시간 (장중, 근사치)":
+                    st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 오늘자 분봉(매수-매도, 투자자 구분 없이 시장 전체 수급)을 기반으로 하고, 5분마다 갱신됩니다.")
+                    st.caption("박스 크기는 테마구성 종목들의 순매수 합산 규모이며, 상단 테마 이름을 클릭하면 바로 테마 AI 요약이, 내부 박스를 클릭하면 해당 종목 AI요약이 뜹니다.")
+                else:
+                    st.caption("박스 크기는 테마 합산 외국인+기관 순매수 규모. 테마 이름을 클릭하면 바로 테마 AI 요약이, 박스를 클릭하면 해당 종목 AI요약이 뜹니다.")
+                    # 🏷️ [신규 2026-09-01] "장마감" 모드는 daily_whale_top200(진짜 외국인+기관)과
+                    # whale_log 보완(대형 단일체결 추정)이 화면상 구분 없이 섞여 있었다는 사용자
+                    # 지적 반영 — [추정] 배지가 붙는 종목의 의미를 미리 안내하는 범례 캡션 추가.
+                    if _eod_estimated_stock_names:
+                        st.caption("🟠 [추정] 표시 종목은 그날 외국인+기관 순매수 TOP권에 들지 못해 공식 수치가 없는 종목으로, 3천만원 이상 대형 단일체결(투자자 구분 없음) 합산치로 대신 표시한 값입니다.")
+
+                # 🌟 [신규 2026-09-18] 사용자 요청: 트리맵 상단에 투명하게 떠 있던 "전체 테마"(가상
+                # 루트박스) 텍스트 자리에, 과거 날짜의 테마킹 결과를 바로 훑어볼 수 있는 달력을 넣음.
+                # daily_whale_top200에 날짜별 이력이 이미 쌓여있어 과거 조회가 가능한 "장마감" 모드에서만
+                # 제공 — "실시간" 모드는 realtime_theme_snapshot이 "최신 1개 상태"만 저장해서 과거 조회
+                # 자체가 불가능하므로 대상에서 제외(theme_view_mode는 이 함수를 감싸는 바깥 스코프의
+                # 변수를 그대로 참조 — 위 캡션 분기(7159번 줄 부근)에서 이미 쓰던 것과 동일한 클로저 패턴).
+                # ⚠️ 이 샌드박스는 plotly가 없어 렌더링을 직접 검증 못 함 — 기존 "전체 테마" 루트박스를
+                # 완전히 없애고 테마 박스들을 최상위(parent="")로 바꾸는 구조 변경이라, 배포 후 트리맵이
+                # 예전처럼 깨지지 않고 잘 나오는지 꼭 확인 필요(문제 생기면 이 커밋 직전 백업으로 즉시 복구).
+                if theme_view_mode == "📅 장마감 기준 (기존)":
+                    # 🔧 [수정 2026-09-18] 사용자 피드백: st.columns + st.selectbox(달) 옆에 별도
+                    # click_detector(요일 스트립)를 나란히 두는 구조가 실제 화면에서 두 위젯의 기본
+                    # 여백/정렬이 서로 안 맞아 날짜 스트립이 아래로 처지고, 그만큼 트리맵도 밀려
+                    # 내려가는 문제가 있었음. → 기존 "외기 TOP100"/"골든픽" 달력과 동일하게, 월 이동
+                    # 화살표(‹ ›)+월 표시+요일 스트립을 전부 하나의 click_detector HTML 블록 안에",
+                    # 한 줄로 합쳐서 렌더링 — 위젯 종류가 하나뿐이라 정렬/여백 문제가 구조적으로 없음.
+                    import calendar as _tk_calendar_module
+                    from st_click_detector import click_detector as _tk_click_detector
+
+                    _tk_min_date = today_theme_actual - timedelta(days=90)
+                    _tk_min_month = _tk_min_date.replace(day=1)
+                    _tk_max_month = today_theme_actual.replace(day=1)
+
+                    if 'themeking_selected_date' not in st.session_state:
+                        st.session_state.themeking_cal_year = today_theme_actual.year
+                        st.session_state.themeking_cal_month = today_theme_actual.month
+                        st.session_state.themeking_selected_date = today_theme_actual
+                        st.session_state.themeking_date_touched = False
+                        st.session_state.themeking_cal_reset = 0
+                    elif not st.session_state.themeking_date_touched:
+                        # 아직 직접 고른 적 없으면 매 재실행마다 "최신 마감일"로 계속 맞춰줌
+                        st.session_state.themeking_cal_year = today_theme_actual.year
+                        st.session_state.themeking_cal_month = today_theme_actual.month
+                        st.session_state.themeking_selected_date = today_theme_actual
+
+                    cal_year_tk = st.session_state.themeking_cal_year
+                    cal_month_tk = st.session_state.themeking_cal_month
+                    _tk_cur_month = (cal_year_tk, cal_month_tk)
+                    _tk_can_prev = _tk_cur_month > (_tk_min_month.year, _tk_min_month.month)
+                    _tk_can_next = _tk_cur_month < (_tk_max_month.year, _tk_max_month.month)
+
+                    _tk_html = (
+                        "<div style='display:flex; align-items:center; gap:6px; overflow-x:auto; "
+                        "background:#1a1c24; padding:8px 10px; border-radius:8px; white-space:nowrap;'>"
+                    )
+                    if _tk_can_prev:
+                        _tk_html += "<a href='#' id='themeking_cal_prev' style='color:#ccc; text-decoration:none; padding:2px 7px; background:#2a2d3a; border-radius:4px; font-weight:bold; flex-shrink:0;'>&lt;</a>"
+                    else:
+                        _tk_html += "<span style='color:#444; padding:2px 7px; flex-shrink:0;'>&lt;</span>"
+                    _tk_html += f"<strong style='color:white; font-size:13px; padding:0 4px; flex-shrink:0;'>{cal_year_tk}년 {cal_month_tk}월</strong>"
+                    if _tk_can_next:
+                        _tk_html += "<a href='#' id='themeking_cal_next' style='color:#ccc; text-decoration:none; padding:2px 7px; background:#2a2d3a; border-radius:4px; font-weight:bold; flex-shrink:0;'>&gt;</a>"
+                    else:
+                        _tk_html += "<span style='color:#444; padding:2px 7px; flex-shrink:0;'>&gt;</span>"
+                    _tk_html += "<span style='width:1px; align-self:stretch; background:#333; flex-shrink:0;'></span>"
+
+                    _tk_cal_days = [d for d in _tk_calendar_module.Calendar(firstweekday=6).itermonthdates(cal_year_tk, cal_month_tk) if d.month == cal_month_tk]
+                    for _tk_day in _tk_cal_days:
+                        _tk_bg, _tk_color, _tk_border = "transparent", "white", "1px solid transparent"
+                        if _tk_day == st.session_state.themeking_selected_date:
+                            _tk_bg, _tk_color = "#00BFFF", "white"
+                        elif _tk_day.weekday() == 6:
+                            _tk_color = "#ff4b4b"
+                        elif _tk_day.weekday() == 5:
+                            _tk_color = "#4B89B5"
+                        if _tk_day == today_theme_actual and _tk_day != st.session_state.themeking_selected_date:
+                            _tk_border = "1px solid #555"
+                        if _tk_day > today_theme_actual or _tk_day < _tk_min_date:
+                            _tk_html += f"<span style='min-width:22px; padding:3px; text-align:center; color:#444; border:{_tk_border}; border-radius:4px; flex-shrink:0;'>{_tk_day.day}</span>"
+                        else:
+                            _tk_html += f"<a href='#' id='themeking_cal_date_{_tk_day.strftime('%Y-%m-%d')}' style='min-width:22px; padding:3px; text-align:center; background:{_tk_bg}; color:{_tk_color}; border:{_tk_border}; text-decoration:none; border-radius:4px; display:block; font-size:12px; flex-shrink:0;'>{_tk_day.day}</a>"
+                    _tk_html += "</div>"
+
+                    _tk_clicked = _tk_click_detector(_tk_html, key=f"themeking_cal_ui_{st.session_state.themeking_cal_reset}")
+
+                    if _tk_clicked == 'themeking_cal_prev' and _tk_can_prev:
+                        if cal_month_tk == 1:
+                            st.session_state.themeking_cal_year, st.session_state.themeking_cal_month = cal_year_tk - 1, 12
+                        else:
+                            st.session_state.themeking_cal_year, st.session_state.themeking_cal_month = cal_year_tk, cal_month_tk - 1
+                        st.session_state.themeking_cal_reset += 1
+                        st.rerun()
+                    elif _tk_clicked == 'themeking_cal_next' and _tk_can_next:
+                        if cal_month_tk == 12:
+                            st.session_state.themeking_cal_year, st.session_state.themeking_cal_month = cal_year_tk + 1, 1
+                        else:
+                            st.session_state.themeking_cal_year, st.session_state.themeking_cal_month = cal_year_tk, cal_month_tk + 1
+                        st.session_state.themeking_cal_reset += 1
+                        st.rerun()
+                    elif _tk_clicked and _tk_clicked.startswith('themeking_cal_date_'):
+                        _tk_date_str = _tk_clicked.split('themeking_cal_date_')[1]
+                        st.session_state.themeking_selected_date = datetime.strptime(_tk_date_str, '%Y-%m-%d').date()
+                        st.session_state.themeking_date_touched = True
+                        st.session_state.themeking_cal_reset += 1
+                        st.rerun()
+
+                    # 🔧 [수정 2026-09-18 #2] 사용자 피드백: 달력과 바로 아래 테마 박스 사이 여백이
+                    # 너무 넓다 → 기존 "잘라내기 버튼"/"자랑글 목록" 등에서 이미 쓰던 마커+CSS 패턴
+                    # (div.element-container:has(마커) + div.element-container에 margin-top 음수)을
+                    # 그대로 재사용해, 달력 바로 다음에 렌더되는 블록(데이터 없음 안내문 또는 트리맵
+                    # 헤더/차트)을 달력 쪽으로 당김.
+                    st.markdown("<span class='themeking-cal-gap-marker'></span>", unsafe_allow_html=True)
+                    st.markdown("""
+                        <style>
+                        div.element-container:has(.themeking-cal-gap-marker) { display: none; }
+                        div.element-container:has(.themeking-cal-gap-marker) + div.element-container {
+                            margin-top: -28px !important;
+                        }
+                        </style>
+                    """, unsafe_allow_html=True)
+
                 if not theme_agg:
                     st.info("오늘 TOP 200 종목 중 테마 매핑이 확인된 종목이 없습니다.")
                 else:
@@ -7142,31 +7290,6 @@ if choice == "🏠 홈화면":
 
                     df_theme_rank = pd.DataFrame(theme_rows).sort_values(by="합산 외/기 순매수(억)", ascending=False).reset_index(drop=True)
                     df_theme_rank.insert(0, "순위", df_theme_rank.index + 1)
-
-                    # 🌟 [신규 2026-07-31] Plotly 트리맵 시각화 — 박스 크기: 테마 합산 외/기 순매수(억) 절대값,
-                    # 박스 색상: 실제 순매수 방향/강도(빨강=매수 강세, 파랑=매도 강세). 사용자가 보여준 참고 이미지
-                    # (다른 사이트의 테마 모멘텀 트리맵)와 유사한 형태를 이 프로젝트의 매수/매도 색 관례(빨강/파랑)로 구현.
-                    st.markdown("<h5 style='color:#FFD400; margin-top:10px;'>🗺️ 테마 모멘텀 트리맵</h5>", unsafe_allow_html=True)
-                    # 🔧 [수정 2026-08-28] 사용자 요청: 트리맵 위에 두 군데 나뉘어 있던 안내 캡션
-                    # ("⚡ 기준 데이터입니다..."는 실시간 모드 데이터 로딩 부분에, "박스 크기 = ..."는
-                    # 여기에) 하나로 합침 — 실시간 모드일 때만 위쪽에 스냅샷 시각 캡션을 추가로 보여주고,
-                    # 그 아래에 박스 크기/클릭 안내 캡션(장마감·실시간 공통, 문구는 간결화)을 이어서 표시.
-                    # 🔧 [수정 2026-09-01] 사용자 지적: 이 캡션이 지금까지 "박스 크기는 테마 합산
-                    # 외/기 순매수 규모"라고 두 모드 공통으로 표시돼 있었는데, 이건 "장마감" 모드에만
-                    # 맞는 설명임 — "실시간" 모드는 외국인/기관 구분 없는 시장 전체(개인 포함) 수급을
-                    # 1분봉 방향으로 추정한 값이라 "외/기"라는 표현 자체가 부정확함. 모드별로 실제
-                    # 정의에 맞는 문구를 따로 씀(실시간 문구는 사용자가 준 문장을 그대로 사용).
-                    if theme_view_mode == "⚡ 실시간 (장중, 근사치)":
-                        st.caption(f"⚡ {snap_hour} 기준 데이터입니다. 오늘자 분봉(매수-매도, 투자자 구분 없이 시장 전체 수급)을 기반으로 하고, 5분마다 갱신됩니다.")
-                        st.caption("박스 크기는 테마구성 종목들의 순매수 합산 규모이며, 상단 테마 이름을 클릭하면 바로 테마 AI 요약이, 내부 박스를 클릭하면 해당 종목 AI요약이 뜹니다.")
-                    else:
-                        st.caption("박스 크기는 테마 합산 외국인+기관 순매수 규모. 테마 이름을 클릭하면 바로 테마 AI 요약이, 박스를 클릭하면 해당 종목 AI요약이 뜹니다.")
-                        # 🏷️ [신규 2026-09-01] "장마감" 모드는 daily_whale_top200(진짜 외국인+기관)과
-                        # whale_log 보완(대형 단일체결 추정)이 화면상 구분 없이 섞여 있었다는 사용자
-                        # 지적 반영 — [추정] 배지가 붙는 종목의 의미를 미리 안내하는 범례 캡션 추가.
-                        if _eod_estimated_stock_names:
-                            st.caption("🟠 [추정] 표시 종목은 그날 외국인+기관 순매수 TOP권에 들지 못해 공식 수치가 없는 종목으로, 3천만원 이상 대형 단일체결(투자자 구분 없음) 합산치로 대신 표시한 값입니다.")
-
                     # 🌟 [신규 2026-07-31] 사용자 피드백: "AI 반도체"처럼 압도적으로 큰 테마 하나가
                     # 트리맵 전체 면적을 거의 다 차지해버려서(예: 72,829억 vs 나머지 800억대)
                     # 나머지 테마들이 화면 구석에 찌그러져 안 보이는 문제 발생 → "값이 아무리 커도
@@ -7259,13 +7382,15 @@ if choice == "🏠 홈화면":
                     # 직접 검증하지 못했음 — 위 "되돌림 2026-08-01" 이력처럼 미검증 상태로 배포했다가
                     # 렌더링이 깨진 전례가 있으니, 반드시 사용자가 실제 화면에서 확인해줘야 함(문제
                     # 생기면 배포 직전 백업 파일로 즉시 되돌릴 것).
-                    _treemap_ids = ["전체 테마"]
-                    _treemap_labels = ["전체 테마"]
-                    _treemap_parents = [""]
-                    _treemap_values = [0]
-                    _treemap_colors = ["rgba(0,0,0,0)"]
-                    _treemap_hover = [""]
-                    _treemap_amt_text = [""]
+
+
+                    _treemap_ids = []
+                    _treemap_labels = []
+                    _treemap_parents = []
+                    _treemap_values = []
+                    _treemap_colors = []
+                    _treemap_hover = []
+                    _treemap_amt_text = []
 
                     for _, row_tm in df_treemap.iterrows():
                         _theme_name_tm = row_tm["테마명"]
@@ -7274,7 +7399,7 @@ if choice == "🏠 홈화면":
 
                         _treemap_ids.append(_theme_id_tm)
                         _treemap_labels.append(_theme_name_tm)
-                        _treemap_parents.append("전체 테마")
+                        _treemap_parents.append("")
                         _treemap_values.append(0)  # 자식(종목) 서브박스 값의 합으로 자동 계산되도록 0으로 둠
                         _treemap_colors.append(_treemap_color_map[_theme_name_tm])
                         _treemap_hover.append(
